@@ -72,7 +72,7 @@ uv run playwright install firefox
 **Browser selection logic:**
 1. If `PLAYWRIGHT_BROWSER` env var is set, use that browser
 2. If only one browser is installed, use it
-3. If multiple browsers available, prefer WebKit (specialized) over Chromium (ubiquitous)
+3. If multiple browsers available, prefer the engine with the lightest footprint: webkit (smallest) > firefox > chromium (largest)
 
 **Override example:**
 ```bash
