@@ -522,7 +522,7 @@ async def web_fetch_js(
     timeout: int = 30000,
     include_interactive: bool = True,
     max_elements: int = 25,
-    max_tokens: Optional[int] = None
+    max_tokens: int = 5000
 ) -> str:
     """Fetch web content with full JavaScript rendering and optional interactions.
 
@@ -535,7 +535,7 @@ async def web_fetch_js(
         timeout: Max wait time in milliseconds (default 30000)
         include_interactive: If True, annotate interactive elements in output (default True)
         max_elements: Maximum number of interactive elements to extract (default 25)
-        max_tokens: Optional limit on output length (approximate token count)
+        max_tokens: Limit on output length in approximate token count (default 5000)
     """
     detected_app = None  # Track if we detected a live app framework
 
@@ -669,24 +669,34 @@ async def web_fetch_js(
     markdown_content = md(str(main), heading_style="ATX")
     markdown_content = re.sub(r'\n{3,}', '\n\n', markdown_content).strip()
 
-    # Apply token limit if specified
-    if max_tokens:
-        char_limit = max_tokens * 4
-        if len(markdown_content) > char_limit:
-            markdown_content = markdown_content[:char_limit] + "\n\n[content truncated]"
+    # Apply token limit and generate truncation hint
+    truncation_hint = None
+    total_chars = len(markdown_content)
+    char_limit = max_tokens * 4
+    if total_chars > char_limit:
+        total_kb = total_chars / 1024
+        total_tokens_est = total_chars // 4
+        markdown_content = markdown_content[:char_limit] + "\n\n[content truncated]"
+        truncation_hint = (
+            f"Full page is {total_kb:.1f} KB (~{total_tokens_est:,} tokens), "
+            f"showing first ~{max_tokens:,} tokens. "
+            f"Use max_tokens to adjust, or kagi_summarize for a summary of large pages."
+        )
 
-    # Build output with interactive elements section
-    output_parts = [f"# {title}", f"\nSource: {url}"]
-
-    # Add detection hints
-    hints = [f"Browser: {browser_name}"]
+    # Build output with YAML frontmatter hints
+    output_parts = ["---"]
+    output_parts.append(f"title: {title}")
+    output_parts.append(f"source: {url}")
+    output_parts.append(f"browser: {browser_name}")
     if detected_app:
-        hints.append(f"{detected_app} app detected - accelerated loading")
+        output_parts.append(f"detected_app: {detected_app}")
     if iframe_source:
-        hints.append(f"Content from iframe: {iframe_source}")
-    output_parts.append(f"[{' | '.join(hints)}]")
+        output_parts.append(f"iframe_source: {iframe_source}")
+    if truncation_hint:
+        output_parts.append(f"truncated: {truncation_hint}")
+    output_parts.append("---")
 
-    output_parts.extend(["\n", "---\n", markdown_content])
+    output_parts.extend(["\n", markdown_content])
 
     if interactive_elements:
         output_parts.append("\n---\n")
@@ -711,16 +721,17 @@ async def web_fetch_js(
 
 
 # Desktop-only tool - registered conditionally in main()
-async def web_fetch_direct(url: str, max_tokens: Optional[int] = None) -> str:
-    """Fetch raw HTML content from a URL without summarization.
+async def web_fetch_direct(url: str, max_tokens: int = 5000) -> str:
+    """Fetch raw content from a URL without summarization.
 
+    Supports HTML, plain text, JSON, and XML content types.
     Use this as an alternative to web_fetch when web_fetch fails due to
-    agent blacklisting or access restrictions. Returns full page content
+    agent blacklisting or access restrictions. Returns content
     in XML document format with span indices for citation.
 
     Args:
         url: The URL to fetch
-        max_tokens: Optional limit on content length (approximate token count)
+        max_tokens: Limit on content length in approximate token count (default 5000)
     """
     try:
         async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
@@ -735,41 +746,76 @@ async def web_fetch_direct(url: str, max_tokens: Optional[int] = None) -> str:
 
     # Check content type
     content_type = response.headers.get("content-type", "")
-    if "text/html" not in content_type and "application/xhtml" not in content_type:
-        return f"Error: Unsupported content type '{content_type}'. Only HTML is supported."
+    is_html = "text/html" in content_type or "application/xhtml" in content_type
+    is_plain = "text/plain" in content_type
+    is_json = "application/json" in content_type or "text/json" in content_type
+    is_xml = (
+        "application/xml" in content_type or "text/xml" in content_type
+    ) and not is_html
 
-    # Parse HTML
-    try:
-        soup = BeautifulSoup(response.text, "html.parser")
-    except Exception as e:
-        return f"Error: Failed to parse HTML - {e}"
+    if not any([is_html, is_plain, is_json, is_xml]):
+        return (
+            f"Error: Unsupported content type '{content_type}'. "
+            f"Supported: text/html, text/plain, application/json, application/xml."
+        )
 
-    # Extract title (prefer <title>, fallback to <h1>)
-    title_tag = soup.find("title") or soup.find("h1")
-    title = title_tag.get_text(strip=True) if title_tag else "Untitled"
+    if is_plain or is_json or is_xml:
+        # Return structured/plain content as single-span document
+        text = response.text.strip()
+        if not text:
+            return f"Error: No content extracted from {url}"
+        title = url.rsplit("/", 1)[-1] or "Untitled"
+        if is_plain:
+            spans = [p.strip() for p in re.split(r'\n\s*\n', text) if p.strip()]
+        else:
+            # JSON and XML: preserve as a single span to keep structure intact
+            spans = [text]
+    else:
+        # Parse HTML
+        try:
+            soup = BeautifulSoup(response.text, "html.parser")
+        except Exception as e:
+            return f"Error: Failed to parse HTML - {e}"
 
-    # Extract spans
-    spans = _extract_text_spans(soup)
+        # Extract title (prefer <title>, fallback to <h1>)
+        title_tag = soup.find("title") or soup.find("h1")
+        title = title_tag.get_text(strip=True) if title_tag else "Untitled"
+
+        # Extract spans
+        spans = _extract_text_spans(soup)
 
     if not spans:
         return f"Error: No content extracted from {url}"
 
-    # Apply token limit if specified (approximate: ~4 chars per token)
-    if max_tokens:
-        char_limit = max_tokens * 4
-        total_chars = 0
+    # Apply token limit (approximate: ~4 chars per token)
+    total_chars = sum(len(s) for s in spans)
+    char_limit = max_tokens * 4
+    truncation_hint = None
+    if total_chars > char_limit:
+        total_kb = total_chars / 1024
+        total_tokens_est = total_chars // 4
+        truncation_hint = (
+            f"Full page is {total_kb:.1f} KB (~{total_tokens_est:,} tokens), "
+            f"showing first ~{max_tokens:,} tokens. "
+            f"Use max_tokens to adjust, or kagi_summarize for a summary of large pages."
+        )
+        char_count = 0
         truncated_spans = []
         for span in spans:
-            if total_chars + len(span) > char_limit:
+            if char_count + len(span) > char_limit:
                 truncated_spans.append("[content truncated]")
                 break
             truncated_spans.append(span)
-            total_chars += len(span)
+            char_count += len(span)
         spans = truncated_spans
 
     # Build XML output
     mime_type = content_type.split(";")[0].strip() if content_type else "text/html"
-    return _build_document_xml(title, spans, str(response.url), mime_type)
+    xml_output = _build_document_xml(title, spans, str(response.url), mime_type)
+
+    if truncation_hint:
+        return f"<!-- truncated: {truncation_hint} -->\n{xml_output}"
+    return xml_output
 
 
 # NOTE: search_and_summarize is commented out to reduce API costs.
