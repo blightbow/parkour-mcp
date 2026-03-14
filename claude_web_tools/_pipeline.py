@@ -60,7 +60,7 @@ async def _mediawiki_fast_path(
         # Section-specific: the MW API already returned only requested sections,
         # but we still need to extract metadata for frontmatter ancestry paths.
         all_sections = _extract_sections_from_markdown(markdown_content)
-        filtered, matched_meta = _filter_markdown_by_sections(
+        filtered, matched_meta, unmatched = _filter_markdown_by_sections(
             markdown_content, section_names, all_sections
         )
         filtered, truncation_hint = _apply_truncation(
@@ -69,7 +69,11 @@ async def _mediawiki_fast_path(
             hint_suffix="",
         )
         frontmatter_entries["truncated"] = truncation_hint
-        fm = _build_frontmatter(frontmatter_entries, sections_requested=matched_meta)
+        fm = _build_frontmatter(
+            frontmatter_entries,
+            sections_requested=matched_meta,
+            sections_not_found=unmatched or None,
+        )
         return fm + "\n\n" + filtered
     else:
         all_sections = _extract_sections_from_markdown(markdown_content)
@@ -99,10 +103,13 @@ def _process_markdown_sections(
     sections_requested_meta = None
     sections_available = None
 
+    sections_not_found = None
+
     if section_names and all_sections:
-        markdown_content, sections_requested_meta = _filter_markdown_by_sections(
+        markdown_content, sections_requested_meta, unmatched = _filter_markdown_by_sections(
             markdown_content, section_names, all_sections
         )
+        sections_not_found = unmatched or None
 
     markdown_content, truncation_hint = _apply_truncation(markdown_content, max_tokens)
     if truncation_hint and all_sections and not section_names:
@@ -112,6 +119,7 @@ def _process_markdown_sections(
     fm = _build_frontmatter(
         frontmatter_entries,
         sections_requested=sections_requested_meta,
+        sections_not_found=sections_not_found,
         sections_available=sections_available,
     )
     return fm + "\n\n" + markdown_content

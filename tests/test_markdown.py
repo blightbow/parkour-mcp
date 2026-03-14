@@ -4,6 +4,7 @@ import pytest
 
 from claude_web_tools.markdown import (
     md,
+    html_to_markdown,
     _extract_sections_from_markdown,
     _build_section_list,
     _filter_markdown_by_sections,
@@ -75,38 +76,70 @@ class TestExtractSections:
             # The heading text should appear at start_pos
             assert SAMPLE_MARKDOWN[sec["start_pos"]:].startswith("#")
 
-    def test_strips_bold_markers(self):
-        md_text = "## **Bold Heading**\n\nContent."
-        sections = _extract_sections_from_markdown(md_text)
-        assert sections[0]["name"] == "Bold Heading"
-
-    def test_strips_edit_links(self):
-        md_text = "## Section Name [edit]\n\nContent."
-        sections = _extract_sections_from_markdown(md_text)
-        assert sections[0]["name"] == "Section Name"
-
-    def test_strips_edit_links_case_insensitive(self):
-        md_text = "## Section Name [Edit]\n\nContent."
-        sections = _extract_sections_from_markdown(md_text)
-        assert sections[0]["name"] == "Section Name"
-
     def test_empty_markdown(self):
         assert _extract_sections_from_markdown("") == []
 
     def test_no_headings(self):
         assert _extract_sections_from_markdown("Just some plain text\nwith no headings.") == []
 
-    def test_heading_only_bold_markers_skipped(self):
-        """A heading that becomes empty after stripping should be excluded."""
-        md_text = "## ***\n\nContent."
-        sections = _extract_sections_from_markdown(md_text)
-        assert sections == []
-
     def test_all_six_levels(self):
         md_text = "\n".join(f"{'#' * i} Level {i}" for i in range(1, 7))
         sections = _extract_sections_from_markdown(md_text)
         assert len(sections) == 6
         assert [s["level"] for s in sections] == [1, 2, 3, 4, 5, 6]
+
+    def test_nbsp_normalized_to_space(self):
+        """Non-breaking spaces in headings should become regular spaces."""
+        md_text = "## Vol.\u00a0II\n\nContent."
+        sections = _extract_sections_from_markdown(md_text)
+        assert sections[0]["name"] == "Vol. II"
+
+    def test_exotic_whitespace_normalized(self):
+        """Em spaces, thin spaces, etc. should become regular spaces."""
+        md_text = "## Section\u2003Name\n\nContent."  # \u2003 = em space
+        sections = _extract_sections_from_markdown(md_text)
+        assert sections[0]["name"] == "Section Name"
+
+
+class TestCleanHeadings:
+    """Test heading cleanup via html_to_markdown (which calls _clean_headings)."""
+
+    def test_strips_bold_from_heading(self):
+        html = "<html><body><h2><strong>Bold Section</strong></h2><p>Content.</p></body></html>"
+        _, markdown = html_to_markdown(html)
+        sections = _extract_sections_from_markdown(markdown)
+        assert sections[0]["name"] == "Bold Section"
+
+    def test_strips_italic_from_heading(self):
+        html = "<html><body><h2><i>Italic Title</i></h2><p>Content.</p></body></html>"
+        _, markdown = html_to_markdown(html)
+        sections = _extract_sections_from_markdown(markdown)
+        assert sections[0]["name"] == "Italic Title"
+
+    def test_strips_link_from_heading(self):
+        html = '<html><body><h2><a href="https://example.com">Linked Title</a></h2><p>Content.</p></body></html>'
+        _, markdown = html_to_markdown(html)
+        sections = _extract_sections_from_markdown(markdown)
+        assert sections[0]["name"] == "Linked Title"
+
+    def test_strips_mixed_inline_from_heading(self):
+        """Heading with link + text should produce clean combined text."""
+        html = '<html><body><h2>Leave a Reply <a href="/cancel">Cancel reply</a></h2><p>Content.</p></body></html>'
+        _, markdown = html_to_markdown(html)
+        sections = _extract_sections_from_markdown(markdown)
+        assert sections[0]["name"] == "Leave a Reply Cancel reply"
+
+    def test_removes_mw_editsection(self):
+        html = '<html><body><h2>Section Name<span class="mw-editsection">[edit]</span></h2><p>Content.</p></body></html>'
+        _, markdown = html_to_markdown(html)
+        sections = _extract_sections_from_markdown(markdown)
+        assert sections[0]["name"] == "Section Name"
+
+    def test_preserves_body_links(self):
+        """Links in body content should not be stripped."""
+        html = '<html><body><h2>Title</h2><p>See <a href="https://example.com">this link</a>.</p></body></html>'
+        _, markdown = html_to_markdown(html)
+        assert "https://example.com" in markdown
 
 
 # --- _build_section_list ---
@@ -148,7 +181,7 @@ class TestBuildSectionList:
 class TestFilterMarkdownBySections:
     def test_single_section_extraction(self):
         sections = _extract_sections_from_markdown(SAMPLE_MARKDOWN)
-        filtered, meta = _filter_markdown_by_sections(SAMPLE_MARKDOWN, ["Section Two"], sections)
+        filtered, meta, unmatched = _filter_markdown_by_sections(SAMPLE_MARKDOWN, ["Section Two"], sections)
         assert "Content of section two" in filtered
         # Each section is its own entry — subsections are separate entries
         assert "Section One" not in filtered
@@ -156,7 +189,7 @@ class TestFilterMarkdownBySections:
 
     def test_multiple_section_extraction(self):
         sections = _extract_sections_from_markdown(SAMPLE_MARKDOWN)
-        filtered, meta = _filter_markdown_by_sections(
+        filtered, meta, unmatched = _filter_markdown_by_sections(
             SAMPLE_MARKDOWN, ["Section One", "Section Three"], sections
         )
         assert "Content of section one" in filtered
@@ -165,40 +198,54 @@ class TestFilterMarkdownBySections:
 
     def test_ancestry_path_toplevel(self):
         sections = _extract_sections_from_markdown(SAMPLE_MARKDOWN)
-        _, meta = _filter_markdown_by_sections(SAMPLE_MARKDOWN, ["Section One"], sections)
+        _, meta, _ = _filter_markdown_by_sections(SAMPLE_MARKDOWN, ["Section One"], sections)
         assert meta[0]["ancestry_path"] == "Main Title > Section One"
 
     def test_ancestry_path_nested(self):
         sections = _extract_sections_from_markdown(SAMPLE_MARKDOWN)
-        _, meta = _filter_markdown_by_sections(SAMPLE_MARKDOWN, ["Subsection A"], sections)
+        _, meta, _ = _filter_markdown_by_sections(SAMPLE_MARKDOWN, ["Subsection A"], sections)
         assert meta[0]["ancestry_path"] == "Main Title > Section Two > Subsection A"
 
-    def test_unmatched_section_comment(self):
+    def test_unmatched_section_returned(self):
         sections = _extract_sections_from_markdown(SAMPLE_MARKDOWN)
-        filtered, meta = _filter_markdown_by_sections(SAMPLE_MARKDOWN, ["Nonexistent"], sections)
-        assert "<!-- sections not found: Nonexistent -->" in filtered
+        filtered, meta, unmatched = _filter_markdown_by_sections(SAMPLE_MARKDOWN, ["Nonexistent"], sections)
+        assert unmatched == ["Nonexistent"]
         assert meta == []
+        assert filtered == ""
 
     def test_mixed_matched_and_unmatched(self):
         sections = _extract_sections_from_markdown(SAMPLE_MARKDOWN)
-        filtered, meta = _filter_markdown_by_sections(
+        filtered, meta, unmatched = _filter_markdown_by_sections(
             SAMPLE_MARKDOWN, ["Section One", "Nonexistent"], sections
         )
         assert "Content of section one" in filtered
-        assert "<!-- sections not found: Nonexistent -->" in filtered
+        assert unmatched == ["Nonexistent"]
         assert len(meta) == 1
 
     def test_disambiguated_name_match(self):
         sections = _extract_sections_from_markdown(SAMPLE_MARKDOWN_WITH_DUPLICATES)
-        filtered, meta = _filter_markdown_by_sections(
+        filtered, meta, unmatched = _filter_markdown_by_sections(
             SAMPLE_MARKDOWN_WITH_DUPLICATES, ["Details (Overview)"], sections
         )
         assert "First details" in filtered
         assert "Second details" not in filtered
+        assert unmatched == []
 
     def test_all_sections_empty(self):
-        filtered, meta = _filter_markdown_by_sections("No headings here.", ["Foo"], [])
-        assert "<!-- sections not found: Foo -->" in filtered
+        filtered, meta, unmatched = _filter_markdown_by_sections("No headings here.", ["Foo"], [])
+        assert unmatched == ["Foo"]
+        assert filtered == ""
+
+    def test_nbsp_in_heading_matches_regular_space_request(self):
+        """Requesting 'Vol. II' (regular space) matches heading with nbsp."""
+        md_text = "## Vol.\u00a0II\n\nNbsp content here.\n\n## Other\n\nOther content."
+        sections = _extract_sections_from_markdown(md_text)
+        filtered, meta, unmatched = _filter_markdown_by_sections(
+            md_text, ["Vol. II"], sections
+        )
+        assert "Nbsp content here" in filtered
+        assert unmatched == []
+        assert meta[0]["name"] == "Vol. II"
 
 
 # --- _build_frontmatter ---
@@ -239,6 +286,22 @@ class TestBuildFrontmatter:
         assert "sections:" in fm
         assert "  - Alpha" in fm
         assert "    - Beta" in fm
+
+    def test_sections_not_found(self):
+        fm = _build_frontmatter({"title": "T"}, sections_not_found=["Missing", "Also Missing"])
+        assert "sections_not_found:" in fm
+        assert "  - Missing" in fm
+        assert "  - Also Missing" in fm
+
+    def test_sections_not_found_with_commas(self):
+        """Names containing commas must not be ambiguous in YAML output."""
+        fm = _build_frontmatter({"title": "T"}, sections_not_found=["Parables, Vol. I", "Parables, Vol. II"])
+        assert "  - Parables, Vol. I" in fm
+        assert "  - Parables, Vol. II" in fm
+
+    def test_sections_not_found_none_omitted(self):
+        fm = _build_frontmatter({"title": "T"}, sections_not_found=None)
+        assert "sections_not_found" not in fm
 
     def test_no_sections(self):
         fm = _build_frontmatter({"title": "T"})

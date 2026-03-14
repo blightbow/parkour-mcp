@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import html as html_mod
 import re
 import urllib.parse
 from typing import Optional
@@ -9,7 +10,7 @@ from typing import Optional
 import httpx
 
 from .common import _FETCH_HEADERS
-from .markdown import md
+from .markdown import md, _normalize_whitespace, _clean_headings
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +84,14 @@ async def _detect_mediawiki(url: str) -> Optional[dict]:
     return None
 
 
+def _clean_display_title(raw: str) -> str:
+    """Clean a MediaWiki displaytitle: strip HTML tags, decode entities, normalize whitespace."""
+    text = re.sub(r'<[^>]+>', '', raw)
+    text = html_mod.unescape(text)
+    text = _normalize_whitespace(text).strip()
+    return text
+
+
 async def _fetch_mediawiki_page(
     api_base: str,
     page_title: str,
@@ -112,19 +121,18 @@ async def _fetch_mediawiki_page(
             section_list = parse.get("sections", [])
 
             # Map requested names to section indices
-            # Strip HTML tags from section names (API returns e.g. "<i>Honor Lost</i>")
+            # Strip HTML tags and normalize whitespace (API returns e.g.
+            # "<i>Honor Lost</i>" and "Vol.&nbsp;II")
             name_to_index = {}
             for sec in section_list:
                 raw_name = sec.get("line", "")
-                clean_name = re.sub(r'<[^>]+>', '', raw_name).strip()
+                clean_name = _clean_display_title(raw_name)
                 name_to_index[clean_name] = sec.get("index", "")
-                # Also store raw name in case caller uses it
-                name_to_index[raw_name] = sec.get("index", "")
 
             # Resolve indices for requested sections
             fetch_tasks = []
             for sec_name in sections:
-                idx = name_to_index.get(sec_name)
+                idx = name_to_index.get(_normalize_whitespace(sec_name))
                 if idx is not None:
                     fetch_tasks.append(_fetch_section(client, api_base, page_title, idx))
 
@@ -132,7 +140,7 @@ async def _fetch_mediawiki_page(
             html_parts = await asyncio.gather(*fetch_tasks)
 
             return {
-                "title": parse.get("displaytitle", page_title),
+                "title": _clean_display_title(parse.get("displaytitle", page_title)),
                 "html": "\n".join(h for h in html_parts if h),
                 "sections_meta": section_list,
             }
@@ -153,7 +161,7 @@ async def _fetch_mediawiki_page(
             parse = data.get("parse", {})
 
             return {
-                "title": parse.get("displaytitle", page_title),
+                "title": _clean_display_title(parse.get("displaytitle", page_title)),
                 "html": parse.get("text", {}).get("*", ""),
                 "sections_meta": parse.get("sections", []),
             }
@@ -185,16 +193,19 @@ async def _fetch_section(
 def _mediawiki_html_to_markdown(html: str) -> str:
     """Convert MediaWiki HTML to clean markdown.
 
-    Removes edit sections, TOC, scripts, and styles before conversion.
+    Removes TOC, scripts, and styles; cleans headings before conversion.
     """
     from bs4 import BeautifulSoup
 
     soup = BeautifulSoup(html, "html.parser")
 
     # Remove MediaWiki noise elements
-    for selector in [".mw-editsection", "#toc", ".toc", "script", "style"]:
+    for selector in ["#toc", ".toc", "script", "style"]:
         for el in soup.select(selector):
             el.decompose()
+
+    # Clean heading markup (removes .mw-editsection, unwraps inline tags)
+    _clean_headings(soup)
 
     markdown = md(str(soup), heading_style="ATX")
     # Collapse triple+ newlines

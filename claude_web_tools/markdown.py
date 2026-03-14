@@ -33,6 +33,24 @@ def md(html, **options):
 _NOISE_TAGS = ["script", "style", "nav", "header", "footer", "aside", "noscript"]
 
 
+_HEADING_TAGS = ["h1", "h2", "h3", "h4", "h5", "h6"]
+
+
+def _clean_headings(soup: BeautifulSoup) -> None:
+    """Simplify heading elements so markdown section names are clean.
+
+    Unwraps inline markup (links, bold, italic) and removes edit-section
+    spans, so markdownify produces plain-text headings.
+    """
+    for heading in soup.find_all(_HEADING_TAGS):
+        # Remove MediaWiki edit-section links
+        for edit in heading.select(".mw-editsection"):
+            edit.decompose()
+        # Unwrap inline markup — replaces tag with its children
+        for tag in heading.find_all(["a", "b", "strong", "i", "em", "span"]):
+            tag.unwrap()
+
+
 def html_to_markdown(html: str) -> tuple[str, str]:
     """Convert HTML to clean markdown, returning (title, markdown).
 
@@ -41,12 +59,24 @@ def html_to_markdown(html: str) -> tuple[str, str]:
     """
     soup = BeautifulSoup(html, "html.parser")
 
-    # Extract title before decomposing elements
-    title_tag = soup.find("title") or soup.find("h1")
-    title = title_tag.get_text(strip=True) if title_tag else "Untitled"
+    # Title priority: h1 (visible article heading) > og:title (clean metadata) >
+    # <title> (often polluted with site name, breadcrumbs, separators)
+    h1 = soup.find("h1")
+    og_title = soup.find("meta", property="og:title")
+    title_tag = soup.find("title")
+    if h1:
+        title = h1.get_text(strip=True)
+    elif og_title and og_title.get("content", "").strip():
+        title = og_title["content"].strip()
+    elif title_tag:
+        title = title_tag.get_text(strip=True)
+    else:
+        title = "Untitled"
 
     for tag in soup(_NOISE_TAGS):
         tag.decompose()
+
+    _clean_headings(soup)
 
     main = soup.find("main") or soup.find("article") or soup.find("body") or soup
     markdown = md(str(main), heading_style="ATX")
@@ -85,6 +115,15 @@ def _apply_truncation(
 
 _HEADING_RE = re.compile(r'^(#{1,6})\s+(.+)$', re.MULTILINE)
 
+# Matches any Unicode whitespace character that isn't a normal ASCII space.
+# Covers &nbsp; (\u00a0), thin/hair/em/en spaces, zero-width spaces, etc.
+_EXOTIC_WHITESPACE_RE = re.compile(r'[\u00a0\u2000-\u200b\u202f\u205f\u3000\ufeff]')
+
+
+def _normalize_whitespace(text: str) -> str:
+    """Collapse exotic Unicode whitespace variants to plain ASCII spaces."""
+    return _EXOTIC_WHITESPACE_RE.sub(' ', text)
+
 
 def _extract_sections_from_markdown(markdown: str) -> list[dict]:
     """Extract section headings from markdown text.
@@ -96,10 +135,9 @@ def _extract_sections_from_markdown(markdown: str) -> list[dict]:
     for match in _HEADING_RE.finditer(markdown):
         level = len(match.group(1))
         name = match.group(2).strip()
-        # Clean heading text: strip bold markers, [edit] links, trailing whitespace
-        name = re.sub(r'\*+', '', name)
-        name = re.sub(r'\[edit\]', '', name, flags=re.IGNORECASE)
-        name = name.strip()
+        # Normalize exotic whitespace (e.g. &nbsp;) — inline markup is
+        # already cleaned by _clean_headings() before markdown conversion
+        name = _normalize_whitespace(name).strip()
         if name:
             sections.append({
                 "name": name,
@@ -167,13 +205,13 @@ def _filter_markdown_by_sections(
     markdown: str,
     section_names: list[str],
     sections: list[dict],
-) -> tuple[str, list[dict]]:
+) -> tuple[str, list[dict], list[str]]:
     """Filter markdown to only include requested sections.
 
     Matches requested names against section list (case-sensitive exact match,
     including disambiguation suffix from _build_section_list).
 
-    Returns (filtered_markdown, [{name, ancestry_path}]).
+    Returns (filtered_markdown, [{name, ancestry_path}], [unmatched_names]).
     """
     counts = _name_counts(sections)
 
@@ -209,6 +247,7 @@ def _filter_markdown_by_sections(
     unmatched = []
 
     for req_name in section_names:
+        req_name = _normalize_whitespace(req_name)
         if req_name in display_to_idx:
             idx = display_to_idx[req_name]
             sec = sections[idx]
@@ -221,15 +260,13 @@ def _filter_markdown_by_sections(
             unmatched.append(req_name)
 
     result = "\n\n".join(matched_parts)
-    if unmatched:
-        result += "\n\n<!-- sections not found: " + ", ".join(unmatched) + " -->"
-
-    return result, matched_meta
+    return result, matched_meta, unmatched
 
 
 def _build_frontmatter(
     entries: dict,
     sections_requested: Optional[list[dict]] = None,
+    sections_not_found: Optional[list[str]] = None,
     sections_available: Optional[list[str]] = None,
 ) -> str:
     """Build YAML frontmatter block.
@@ -238,6 +275,7 @@ def _build_frontmatter(
         entries: Key-value pairs for frontmatter (None values are skipped).
         sections_requested: Matched section metadata from _filter_markdown_by_sections.
             Takes precedence over sections_available if both are provided.
+        sections_not_found: Section names that were requested but not matched.
         sections_available: Formatted section list from _build_section_list (for truncation hints).
     """
     lines = ["---"]
@@ -259,6 +297,11 @@ def _build_frontmatter(
         lines.append("sections:")
         for entry in sections_available:
             lines.append(f"  {entry}")
+
+    if sections_not_found:
+        lines.append("sections_not_found:")
+        for name in sections_not_found:
+            lines.append(f"  - {name}")
 
     lines.append("---")
     return "\n".join(lines)

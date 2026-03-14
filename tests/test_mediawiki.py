@@ -5,6 +5,7 @@ import pytest
 import respx
 
 from claude_web_tools.mediawiki import (
+    _clean_display_title,
     _detect_mediawiki,
     _fetch_mediawiki_page,
     _mediawiki_html_to_markdown,
@@ -121,6 +122,25 @@ class TestDetectMediawiki:
         assert result is None
 
 
+# --- _clean_display_title ---
+
+class TestCleanDisplayTitle:
+    def test_strips_html_tags(self):
+        assert _clean_display_title("<i>Ultima VIII</i> books") == "Ultima VIII books"
+
+    def test_decodes_html_entities(self):
+        assert _clean_display_title("Vol.&#160;II") == "Vol. II"
+
+    def test_normalizes_nbsp(self):
+        assert _clean_display_title("Vol.\u00a0II") == "Vol. II"
+
+    def test_combined_tags_and_entities(self):
+        assert _clean_display_title("<i>Ultima&#160;VIII</i> books") == "Ultima VIII books"
+
+    def test_plain_title_unchanged(self):
+        assert _clean_display_title("Test Page") == "Test Page"
+
+
 # --- _fetch_mediawiki_page ---
 
 class TestFetchMediawikiPage:
@@ -187,6 +207,96 @@ class TestFetchMediawikiPage:
         )
         assert result is not None
         assert "Fancy Name" in result["html"]
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_section_html_entity_nbsp_matches(self):
+        """API section 'Vol.&nbsp;II' (HTML entity) should match request for 'Vol. II'."""
+        sections_resp = {
+            "parse": {
+                "displaytitle": "Test",
+                "sections": [
+                    {"index": "1", "line": "Vol.&nbsp;II", "level": "2"},
+                ],
+            }
+        }
+        section_text_resp = {
+            "parse": {"text": {"*": "<h2>Vol. II</h2><p>Volume two content.</p>"}}
+        }
+
+        route = respx.get("https://wiki.example.com/api.php")
+        route.side_effect = [
+            httpx.Response(200, json=sections_resp),
+            httpx.Response(200, json=section_text_resp),
+        ]
+
+        result = await _fetch_mediawiki_page(
+            "https://wiki.example.com/api.php",
+            "Test_Page",
+            sections=["Vol. II"],
+        )
+        assert result is not None
+        assert "Volume two content" in result["html"]
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_section_combined_html_tags_and_entities(self):
+        """API section '<i>Parables, Vol.&nbsp;I</i>' should match 'Parables, Vol. I'."""
+        sections_resp = {
+            "parse": {
+                "displaytitle": "Test",
+                "sections": [
+                    {"index": "1", "line": "<i>Parables, Vol.&nbsp;I</i>", "level": "2"},
+                ],
+            }
+        }
+        section_text_resp = {
+            "parse": {"text": {"*": "<p>Parable content.</p>"}}
+        }
+
+        route = respx.get("https://wiki.example.com/api.php")
+        route.side_effect = [
+            httpx.Response(200, json=sections_resp),
+            httpx.Response(200, json=section_text_resp),
+        ]
+
+        result = await _fetch_mediawiki_page(
+            "https://wiki.example.com/api.php",
+            "Test_Page",
+            sections=["Parables, Vol. I"],
+        )
+        assert result is not None
+        assert "Parable content" in result["html"]
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_section_unicode_nbsp_matches(self):
+        """API section with Unicode \\u00a0 should also match 'Vol. II'."""
+        sections_resp = {
+            "parse": {
+                "displaytitle": "Test",
+                "sections": [
+                    {"index": "1", "line": "Vol.\u00a0II", "level": "2"},
+                ],
+            }
+        }
+        section_text_resp = {
+            "parse": {"text": {"*": "<h2>Vol. II</h2><p>Volume two content.</p>"}}
+        }
+
+        route = respx.get("https://wiki.example.com/api.php")
+        route.side_effect = [
+            httpx.Response(200, json=sections_resp),
+            httpx.Response(200, json=section_text_resp),
+        ]
+
+        result = await _fetch_mediawiki_page(
+            "https://wiki.example.com/api.php",
+            "Test_Page",
+            sections=["Vol. II"],
+        )
+        assert result is not None
+        assert "Volume two content" in result["html"]
 
     @pytest.mark.asyncio
     @respx.mock

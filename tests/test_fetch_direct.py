@@ -160,7 +160,7 @@ class TestWebFetchDirectMarkdown:
 
         result = await web_fetch_direct("https://example.com/page")
         assert result.startswith("---")
-        assert "title: Test Page" in result
+        assert "title: Main Heading" in result
         assert "source:" in result
         assert "Main Heading" in result
         # Should NOT contain XML

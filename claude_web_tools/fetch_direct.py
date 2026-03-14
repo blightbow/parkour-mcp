@@ -147,7 +147,7 @@ async def web_fetch_direct(
             except Exception as e:
                 return f"Error: Failed to parse HTML - {e}"
 
-            title_tag = soup.find("title") or soup.find("h1")
+            title_tag = soup.find("h1") or soup.find("title")
             title = title_tag.get_text(strip=True) if title_tag else "Untitled"
             spans = _extract_text_spans(soup)
 
