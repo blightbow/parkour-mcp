@@ -1,0 +1,246 @@
+"""Tests for claude_web_tools.markdown module."""
+
+import pytest
+
+from claude_web_tools.markdown import (
+    md,
+    _extract_sections_from_markdown,
+    _build_section_list,
+    _filter_markdown_by_sections,
+    _build_frontmatter,
+)
+
+from .conftest import SAMPLE_MARKDOWN, SAMPLE_MARKDOWN_WITH_DUPLICATES
+
+
+# --- md() / TextOnlyConverter ---
+
+class TestMd:
+    def test_basic_html_to_markdown(self):
+        result = md("<h1>Hello</h1><p>World</p>")
+        assert "Hello" in result
+        assert "World" in result
+
+    def test_strips_images_without_alt(self):
+        result = md('<img src="photo.jpg">')
+        assert result.strip() == ""
+
+    def test_preserves_image_alt_text(self):
+        result = md('<img src="photo.jpg" alt="A cat">')
+        assert "[Image: A cat]" in result
+
+    def test_preserves_link_hrefs(self):
+        result = md('<a href="https://example.com">Click here</a>')
+        assert "Click here" in result
+        assert "https://example.com" in result
+
+    def test_drops_image_only_links(self):
+        result = md('<a href="https://example.com"><img src="x.jpg" alt="Logo"></a>')
+        assert "[Image: Logo]" in result
+        assert "https://example.com" not in result
+
+    def test_drops_empty_links(self):
+        result = md('<a href="https://example.com"></a>')
+        assert "https://example.com" not in result
+
+    def test_heading_style_atx(self):
+        result = md("<h2>Heading</h2>", heading_style="ATX")
+        assert "## Heading" in result
+
+
+# --- _extract_sections_from_markdown ---
+
+class TestExtractSections:
+    def test_extracts_all_levels(self):
+        sections = _extract_sections_from_markdown(SAMPLE_MARKDOWN)
+        names = [s["name"] for s in sections]
+        assert names == ["Main Title", "Section One", "Section Two", "Subsection A", "Section Three"]
+
+    def test_correct_levels(self):
+        sections = _extract_sections_from_markdown(SAMPLE_MARKDOWN)
+        levels = [s["level"] for s in sections]
+        assert levels == [1, 2, 2, 3, 2]
+
+    def test_end_pos_chains(self):
+        sections = _extract_sections_from_markdown(SAMPLE_MARKDOWN)
+        # Each section's end_pos should equal next section's start_pos
+        for i in range(len(sections) - 1):
+            assert sections[i]["end_pos"] == sections[i + 1]["start_pos"]
+        # Last section ends at EOF
+        assert sections[-1]["end_pos"] == len(SAMPLE_MARKDOWN)
+
+    def test_start_pos_within_content(self):
+        sections = _extract_sections_from_markdown(SAMPLE_MARKDOWN)
+        for sec in sections:
+            # The heading text should appear at start_pos
+            assert SAMPLE_MARKDOWN[sec["start_pos"]:].startswith("#")
+
+    def test_strips_bold_markers(self):
+        md_text = "## **Bold Heading**\n\nContent."
+        sections = _extract_sections_from_markdown(md_text)
+        assert sections[0]["name"] == "Bold Heading"
+
+    def test_strips_edit_links(self):
+        md_text = "## Section Name [edit]\n\nContent."
+        sections = _extract_sections_from_markdown(md_text)
+        assert sections[0]["name"] == "Section Name"
+
+    def test_strips_edit_links_case_insensitive(self):
+        md_text = "## Section Name [Edit]\n\nContent."
+        sections = _extract_sections_from_markdown(md_text)
+        assert sections[0]["name"] == "Section Name"
+
+    def test_empty_markdown(self):
+        assert _extract_sections_from_markdown("") == []
+
+    def test_no_headings(self):
+        assert _extract_sections_from_markdown("Just some plain text\nwith no headings.") == []
+
+    def test_heading_only_bold_markers_skipped(self):
+        """A heading that becomes empty after stripping should be excluded."""
+        md_text = "## ***\n\nContent."
+        sections = _extract_sections_from_markdown(md_text)
+        assert sections == []
+
+    def test_all_six_levels(self):
+        md_text = "\n".join(f"{'#' * i} Level {i}" for i in range(1, 7))
+        sections = _extract_sections_from_markdown(md_text)
+        assert len(sections) == 6
+        assert [s["level"] for s in sections] == [1, 2, 3, 4, 5, 6]
+
+
+# --- _build_section_list ---
+
+class TestBuildSectionList:
+    def test_basic_indentation(self):
+        sections = _extract_sections_from_markdown(SAMPLE_MARKDOWN)
+        lines = _build_section_list(sections)
+        assert lines[0] == "- Main Title"
+        assert lines[1] == "  - Section One"
+        assert lines[3] == "    - Subsection A"
+
+    def test_duplicate_disambiguation(self):
+        sections = _extract_sections_from_markdown(SAMPLE_MARKDOWN_WITH_DUPLICATES)
+        lines = _build_section_list(sections)
+        # Both "Details" should be disambiguated with parent names
+        details_lines = [l for l in lines if "Details" in l]
+        assert len(details_lines) == 2
+        assert any("(Overview)" in l for l in details_lines)
+        assert any("(History)" in l for l in details_lines)
+
+    def test_max_sections_cap(self):
+        sections = _extract_sections_from_markdown(SAMPLE_MARKDOWN)
+        lines = _build_section_list(sections, max_sections=2)
+        assert len(lines) == 3  # 2 sections + overflow message
+        assert "... and 3 more sections" in lines[-1]
+
+    def test_empty_sections(self):
+        assert _build_section_list([]) == []
+
+    def test_single_section(self):
+        sections = _extract_sections_from_markdown("# Only One\n\nContent.")
+        lines = _build_section_list(sections)
+        assert lines == ["- Only One"]
+
+
+# --- _filter_markdown_by_sections ---
+
+class TestFilterMarkdownBySections:
+    def test_single_section_extraction(self):
+        sections = _extract_sections_from_markdown(SAMPLE_MARKDOWN)
+        filtered, meta = _filter_markdown_by_sections(SAMPLE_MARKDOWN, ["Section Two"], sections)
+        assert "Content of section two" in filtered
+        # Each section is its own entry — subsections are separate entries
+        assert "Section One" not in filtered
+        assert "Section Three" not in filtered
+
+    def test_multiple_section_extraction(self):
+        sections = _extract_sections_from_markdown(SAMPLE_MARKDOWN)
+        filtered, meta = _filter_markdown_by_sections(
+            SAMPLE_MARKDOWN, ["Section One", "Section Three"], sections
+        )
+        assert "Content of section one" in filtered
+        assert "More content here" in filtered
+        assert len(meta) == 2
+
+    def test_ancestry_path_toplevel(self):
+        sections = _extract_sections_from_markdown(SAMPLE_MARKDOWN)
+        _, meta = _filter_markdown_by_sections(SAMPLE_MARKDOWN, ["Section One"], sections)
+        assert meta[0]["ancestry_path"] == "Main Title > Section One"
+
+    def test_ancestry_path_nested(self):
+        sections = _extract_sections_from_markdown(SAMPLE_MARKDOWN)
+        _, meta = _filter_markdown_by_sections(SAMPLE_MARKDOWN, ["Subsection A"], sections)
+        assert meta[0]["ancestry_path"] == "Main Title > Section Two > Subsection A"
+
+    def test_unmatched_section_comment(self):
+        sections = _extract_sections_from_markdown(SAMPLE_MARKDOWN)
+        filtered, meta = _filter_markdown_by_sections(SAMPLE_MARKDOWN, ["Nonexistent"], sections)
+        assert "<!-- sections not found: Nonexistent -->" in filtered
+        assert meta == []
+
+    def test_mixed_matched_and_unmatched(self):
+        sections = _extract_sections_from_markdown(SAMPLE_MARKDOWN)
+        filtered, meta = _filter_markdown_by_sections(
+            SAMPLE_MARKDOWN, ["Section One", "Nonexistent"], sections
+        )
+        assert "Content of section one" in filtered
+        assert "<!-- sections not found: Nonexistent -->" in filtered
+        assert len(meta) == 1
+
+    def test_disambiguated_name_match(self):
+        sections = _extract_sections_from_markdown(SAMPLE_MARKDOWN_WITH_DUPLICATES)
+        filtered, meta = _filter_markdown_by_sections(
+            SAMPLE_MARKDOWN_WITH_DUPLICATES, ["Details (Overview)"], sections
+        )
+        assert "First details" in filtered
+        assert "Second details" not in filtered
+
+    def test_all_sections_empty(self):
+        filtered, meta = _filter_markdown_by_sections("No headings here.", ["Foo"], [])
+        assert "<!-- sections not found: Foo -->" in filtered
+
+
+# --- _build_frontmatter ---
+
+class TestBuildFrontmatter:
+    def test_basic_entries(self):
+        fm = _build_frontmatter({"title": "Test", "source": "http://example.com"})
+        assert fm.startswith("---")
+        assert fm.endswith("---")
+        assert "title: Test" in fm
+        assert "source: http://example.com" in fm
+
+    def test_skips_none_values(self):
+        fm = _build_frontmatter({"title": "Test", "truncated": None})
+        assert "truncated" not in fm
+
+    def test_single_section_requested(self):
+        meta = [{"name": "Intro", "ancestry_path": "Page > Intro"}]
+        fm = _build_frontmatter({"title": "T"}, sections_requested=meta)
+        assert "# Page > Intro" in fm
+        assert "section: Intro" in fm
+
+    def test_multiple_sections_requested(self):
+        meta = [
+            {"name": "A", "ancestry_path": "Root > A"},
+            {"name": "B", "ancestry_path": "Root > B"},
+        ]
+        fm = _build_frontmatter({"title": "T"}, sections_requested=meta)
+        assert "sections:" in fm
+        assert "  # Root > A" in fm
+        assert "  - A" in fm
+        assert "  # Root > B" in fm
+        assert "  - B" in fm
+
+    def test_sections_available(self):
+        section_lines = ["- Alpha", "  - Beta", "  - Gamma"]
+        fm = _build_frontmatter({"title": "T"}, sections_available=section_lines)
+        assert "sections:" in fm
+        assert "  - Alpha" in fm
+        assert "    - Beta" in fm
+
+    def test_no_sections(self):
+        fm = _build_frontmatter({"title": "T"})
+        assert "sections:" not in fm
+        assert "section:" not in fm
