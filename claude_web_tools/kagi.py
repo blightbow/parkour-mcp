@@ -13,6 +13,48 @@ CONFIG_PATH = Path.home() / ".config" / "kagi" / "api_key"
 
 _NO_KEY_MSG = "Error: API key not found. Create ~/.config/kagi/api_key or set KAGI_API_KEY env var."
 
+_LOW_BALANCE_THRESHOLD = 1.00  # dollars
+
+# In-memory state: set True when any Kagi response shows balance < threshold.
+# Locks out summarize (expensive) until a non-summarize call sees balance recovered.
+_summarize_locked = False
+
+
+def _extract_balance(response: dict) -> Optional[float]:
+    """Extract api_balance from a Kagi API response, or None if absent."""
+    meta = response.get("meta", {})
+    balance = meta.get("api_balance")
+    if balance is not None:
+        try:
+            return float(balance)
+        except (TypeError, ValueError):
+            pass
+    return None
+
+
+def _check_balance(response: dict, is_summarize: bool = False) -> Optional[str]:
+    """Check balance from response, update lockout state, return warning or None.
+
+    Non-summarize calls clear the lockout if balance has recovered.
+    """
+    global _summarize_locked
+    balance = _extract_balance(response)
+    if balance is None:
+        return None
+
+    if balance < _LOW_BALANCE_THRESHOLD:
+        _summarize_locked = True
+        return (
+            f"<!-- warning: Kagi API balance low: ${balance:.2f} remaining. "
+            f"Add funds at https://kagi.com/settings?p=billing -->\n"
+        )
+    else:
+        # Balance is healthy — clear lockout (only non-summarize calls reach here
+        # when locked, since summarize is blocked before the API call)
+        if not is_summarize:
+            _summarize_locked = False
+        return None
+
 
 def _handle_kagi_error(e: Exception) -> str:
     """Format a Kagi API exception into a user-facing error string."""
@@ -20,7 +62,7 @@ def _handle_kagi_error(e: Exception) -> str:
     if "401" in error_msg or "Unauthorized" in error_msg:
         return "Error: Invalid API key. Check ~/.config/kagi/api_key or KAGI_API_KEY env var."
     if "402" in error_msg:
-        return "Error: Insufficient API credits. Add funds at https://kagi.com/settings/billing"
+        return "Error: Insufficient API credits. Add funds at https://kagi.com/settings?p=billing"
     return f"Error: {error_msg}"
 
 
@@ -101,7 +143,13 @@ async def search(query: str, limit: int = 5) -> str:
         output_parts.append("")
         output_parts.append(f"Related searches: {', '.join(related_searches)}")
 
-    return "\n".join(output_parts)
+    output = "\n".join(output_parts)
+
+    warning = _check_balance(response, is_summarize=False)
+    if warning:
+        output = warning + output
+
+    return output
 
 
 async def summarize(
@@ -119,6 +167,14 @@ async def summarize(
         text: Raw text to summarize (alternative to url)
         summary_type: Output format - "summary" for prose, "takeaway" for bullet points
     """
+    if _summarize_locked:
+        return (
+            "Error: kagi_summarize is temporarily disabled due to low API balance. "
+            "Summarization requests are expensive and the remaining balance may not "
+            "cover the cost. Use a kagi_search call to recheck the balance, or add "
+            "funds at https://kagi.com/settings?p=billing"
+        )
+
     client = get_client()
     if not client:
         return _NO_KEY_MSG
@@ -146,5 +202,9 @@ async def summarize(
 
     if not output:
         return "Error: No summary returned from API."
+
+    warning = _check_balance(response, is_summarize=True)
+    if warning:
+        output = warning + output
 
     return output
