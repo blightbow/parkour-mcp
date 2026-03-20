@@ -5,6 +5,7 @@ import pytest
 from claude_web_tools.markdown import (
     md,
     html_to_markdown,
+    _slugify,
     _extract_sections_from_markdown,
     _build_section_list,
     _filter_markdown_by_sections,
@@ -99,6 +100,55 @@ class TestExtractSections:
         md_text = "## Section\u2003Name\n\nContent."  # \u2003 = em space
         sections = _extract_sections_from_markdown(md_text)
         assert sections[0]["name"] == "Section Name"
+
+    def test_skips_headings_inside_fenced_code_blocks(self):
+        """Lines starting with # inside ``` blocks are comments, not headings."""
+        md_text = (
+            "## Real Heading\n\n"
+            "Some text.\n\n"
+            "```python\n"
+            "# This is a comment\n"
+            "## This is also a comment\n"
+            "def foo():\n"
+            "    pass\n"
+            "```\n\n"
+            "## Another Real Heading\n\n"
+            "More text."
+        )
+        sections = _extract_sections_from_markdown(md_text)
+        names = [s["name"] for s in sections]
+        assert names == ["Real Heading", "Another Real Heading"]
+
+    def test_skips_headings_inside_tilde_fenced_blocks(self):
+        """~~~ fences should also be recognized."""
+        md_text = "## Before\n\n~~~\n# Not a heading\n~~~\n\n## After\n\nText."
+        sections = _extract_sections_from_markdown(md_text)
+        names = [s["name"] for s in sections]
+        assert names == ["Before", "After"]
+
+
+class TestSlugify:
+    def test_basic_heading(self):
+        assert _slugify("Section One") == "section-one"
+
+    def test_numbered_heading(self):
+        assert _slugify("4. Native INT4 Quantization") == "4-native-int4-quantization"
+
+    def test_special_characters(self):
+        assert _slugify("What's New?") == "what-s-new"
+
+    def test_leading_trailing_hyphens_stripped(self):
+        assert _slugify("...Introduction...") == "introduction"
+
+    def test_consecutive_non_alnum_collapsed(self):
+        assert _slugify("A -- B") == "a-b"
+
+    def test_empty_string(self):
+        assert _slugify("") == ""
+
+    def test_unicode_preserved_as_lowercase(self):
+        # Non-ASCII alphanumerics are stripped by the regex (only a-z0-9 kept)
+        assert _slugify("Café") == "caf"
 
 
 class TestCleanHeadings:
@@ -247,6 +297,62 @@ class TestFilterMarkdownBySections:
         assert unmatched == []
         assert meta[0]["name"] == "Vol. II"
 
+    def test_slug_match_fallback(self):
+        """URL fragment slug should match heading text when exact match fails."""
+        sections = _extract_sections_from_markdown(SAMPLE_MARKDOWN)
+        filtered, meta, unmatched = _filter_markdown_by_sections(
+            SAMPLE_MARKDOWN, ["section-two"], sections
+        )
+        assert "Content of section two" in filtered
+        assert unmatched == []
+        assert meta[0]["name"] == "Section Two"
+        assert meta[0]["matched_fragment"] == "section-two"
+
+    def test_slug_match_numbered_heading(self):
+        """Numbered heading like '4. Native INT4 Quantization' matches its slug."""
+        md_text = "## 4. Native INT4 Quantization\n\nQuantization content.\n\n## Other\n\nOther."
+        sections = _extract_sections_from_markdown(md_text)
+        filtered, meta, unmatched = _filter_markdown_by_sections(
+            md_text, ["4-native-int4-quantization"], sections
+        )
+        assert "Quantization content" in filtered
+        assert unmatched == []
+        assert meta[0]["name"] == "4. Native INT4 Quantization"
+        assert meta[0]["matched_fragment"] == "4-native-int4-quantization"
+
+    def test_exact_match_takes_precedence_over_slug(self):
+        """Exact name match should not produce matched_fragment metadata."""
+        sections = _extract_sections_from_markdown(SAMPLE_MARKDOWN)
+        _, meta, unmatched = _filter_markdown_by_sections(
+            SAMPLE_MARKDOWN, ["Section Two"], sections
+        )
+        assert unmatched == []
+        assert "matched_fragment" not in meta[0]
+
+    def test_slug_no_match_returns_unmatched(self):
+        """A slug that doesn't match any heading should appear in unmatched."""
+        sections = _extract_sections_from_markdown(SAMPLE_MARKDOWN)
+        _, meta, unmatched = _filter_markdown_by_sections(
+            SAMPLE_MARKDOWN, ["nonexistent-section"], sections
+        )
+        assert unmatched == ["nonexistent-section"]
+        assert meta == []
+
+
+# --- _build_section_list with slugs ---
+
+class TestBuildSectionListWithSlugs:
+    def test_include_slugs(self):
+        sections = _extract_sections_from_markdown(SAMPLE_MARKDOWN)
+        lines = _build_section_list(sections, include_slugs=True)
+        assert lines[0] == "- Main Title (#main-title)"
+        assert lines[1] == "  - Section One (#section-one)"
+
+    def test_slugs_off_by_default(self):
+        sections = _extract_sections_from_markdown(SAMPLE_MARKDOWN)
+        lines = _build_section_list(sections)
+        assert "(#" not in lines[0]
+
 
 # --- _build_frontmatter ---
 
@@ -290,14 +396,14 @@ class TestBuildFrontmatter:
     def test_sections_not_found(self):
         fm = _build_frontmatter({"title": "T"}, sections_not_found=["Missing", "Also Missing"])
         assert "sections_not_found:" in fm
-        assert "  - Missing" in fm
-        assert "  - Also Missing" in fm
+        assert '  - "Missing"' in fm
+        assert '  - "Also Missing"' in fm
 
     def test_sections_not_found_with_commas(self):
         """Names containing commas must not be ambiguous in YAML output."""
         fm = _build_frontmatter({"title": "T"}, sections_not_found=["Parables, Vol. I", "Parables, Vol. II"])
-        assert "  - Parables, Vol. I" in fm
-        assert "  - Parables, Vol. II" in fm
+        assert '  - "Parables, Vol. I"' in fm
+        assert '  - "Parables, Vol. II"' in fm
 
     def test_sections_not_found_none_omitted(self):
         fm = _build_frontmatter({"title": "T"}, sections_not_found=None)
@@ -307,3 +413,55 @@ class TestBuildFrontmatter:
         fm = _build_frontmatter({"title": "T"})
         assert "sections:" not in fm
         assert "section:" not in fm
+
+    def test_fragment_match_single_section(self):
+        """Frontmatter for a single section matched via URL fragment slug."""
+        meta = [{"name": "4. Native INT4 Quantization",
+                 "ancestry_path": "Kimi-K2 > 4. Native INT4 Quantization",
+                 "matched_fragment": "4-native-int4-quantization"}]
+        fm = _build_frontmatter({"title": "Kimi-K2", "source": "https://example.com"},
+                                sections_requested=meta)
+        assert fm == "\n".join([
+            "---",
+            "title: Kimi-K2",
+            "source: https://example.com",
+            "# Kimi-K2 > 4. Native INT4 Quantization",
+            "section: 4. Native INT4 Quantization",
+            'matched_fragment: "#4-native-int4-quantization"',
+            "---",
+        ])
+
+    def test_fragment_match_multiple_sections(self):
+        """Frontmatter for multiple sections, one matched via fragment."""
+        meta = [
+            {"name": "Overview", "ancestry_path": "Page > Overview"},
+            {"name": "Details", "ancestry_path": "Page > Details",
+             "matched_fragment": "details"},
+        ]
+        fm = _build_frontmatter({"title": "T"}, sections_requested=meta)
+        assert "  - Overview" in fm
+        assert "  - Details  # matched #details" in fm
+
+    def test_unmatched_fragment_with_slugged_section_list(self):
+        """When fragment doesn't match, sections_available should include slugs."""
+        section_lines = [
+            "- Main Title (#main-title)",
+            "  - Section One (#section-one)",
+            "  - Section Two (#section-two)",
+        ]
+        fm = _build_frontmatter(
+            {"title": "T"},
+            sections_not_found=["nonexistent-fragment"],
+            sections_available=section_lines,
+        )
+        assert fm == "\n".join([
+            "---",
+            "title: T",
+            "sections:",
+            "  - Main Title (#main-title)",
+            "    - Section One (#section-one)",
+            "    - Section Two (#section-two)",
+            "sections_not_found:",
+            '  - "nonexistent-fragment"',
+            "---",
+        ])

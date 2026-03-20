@@ -6,6 +6,7 @@ import respx
 
 from claude_web_tools.fetch_direct import (
     web_fetch_direct,
+    web_fetch_sections,
     _extract_text_spans,
     _build_document_xml,
 )
@@ -417,3 +418,158 @@ class TestWebFetchDirectMediawikiFastPath:
             "https://example.com/page", section=["Second Section", "Subsection"]
         )
         assert "sections:" in result
+
+
+class TestWebFetchDirectFragmentExtraction:
+    """Tests for URL fragment → section extraction."""
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_fragment_extracts_matching_section(self):
+        """URL#second-section should extract 'Second Section'."""
+        respx.get("https://example.com/page").mock(
+            return_value=httpx.Response(
+                200,
+                text=SAMPLE_HTML_PAGE,
+                headers={"content-type": "text/html"},
+            )
+        )
+
+        result = await web_fetch_direct("https://example.com/page#second-section")
+        assert "section: Second Section" in result
+        assert 'matched_fragment: "#second-section"' in result
+        assert "Another paragraph" in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_fragment_strips_from_fetch_url(self):
+        """Fragment should be stripped before HTTP fetch (only example.com/page is fetched)."""
+        route = respx.get("https://example.com/page").mock(
+            return_value=httpx.Response(
+                200,
+                text=SAMPLE_HTML_PAGE,
+                headers={"content-type": "text/html"},
+            )
+        )
+
+        await web_fetch_direct("https://example.com/page#second-section")
+        assert route.called
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_fragment_no_match_shows_sections_with_slugs(self):
+        """Unmatched fragment should show available sections with slug IDs."""
+        respx.get("https://example.com/page").mock(
+            return_value=httpx.Response(
+                200,
+                text=SAMPLE_HTML_PAGE,
+                headers={"content-type": "text/html"},
+            )
+        )
+
+        result = await web_fetch_direct("https://example.com/page#nonexistent")
+        assert "sections_not_found:" in result
+        assert '"nonexistent"' in result
+        assert "(#" in result  # slugs should be present in section list
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_explicit_section_overrides_fragment(self):
+        """Explicit section parameter should take precedence over URL fragment."""
+        respx.get("https://example.com/page").mock(
+            return_value=httpx.Response(
+                200,
+                text=SAMPLE_HTML_PAGE,
+                headers={"content-type": "text/html"},
+            )
+        )
+
+        result = await web_fetch_direct(
+            "https://example.com/page#subsection", section="Second Section"
+        )
+        assert "section: Second Section" in result
+        assert "matched_fragment" not in result
+
+
+class TestWebFetchSections:
+    """Tests for the web_fetch_sections tool."""
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_returns_section_tree_with_slugs(self):
+        respx.get("https://example.com/page").mock(
+            return_value=httpx.Response(
+                200,
+                text=SAMPLE_HTML_PAGE,
+                headers={"content-type": "text/html"},
+            )
+        )
+
+        result = await web_fetch_sections("https://example.com/page")
+        assert "sections:" in result
+        assert "(#main-heading)" in result
+        assert "(#second-section)" in result
+        assert "(#subsection)" in result
+        # Should NOT contain page content
+        assert "paragraph" not in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_fragment_resolves_against_tree(self):
+        respx.get("https://example.com/page").mock(
+            return_value=httpx.Response(
+                200,
+                text=SAMPLE_HTML_PAGE,
+                headers={"content-type": "text/html"},
+            )
+        )
+
+        result = await web_fetch_sections("https://example.com/page#second-section")
+        assert "section: Second Section" in result
+        assert 'matched_fragment: "#second-section"' in result
+        # Full tree should still be shown for context
+        assert "sections:" in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_unmatched_fragment(self):
+        respx.get("https://example.com/page").mock(
+            return_value=httpx.Response(
+                200,
+                text=SAMPLE_HTML_PAGE,
+                headers={"content-type": "text/html"},
+            )
+        )
+
+        result = await web_fetch_sections("https://example.com/page#nonexistent")
+        assert "sections_not_found:" in result
+        assert '"nonexistent"' in result
+        assert "sections:" in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_non_html_returns_error(self):
+        respx.get("https://example.com/data.json").mock(
+            return_value=httpx.Response(
+                200,
+                text='{"key": "value"}',
+                headers={"content-type": "application/json"},
+            )
+        )
+
+        result = await web_fetch_sections("https://example.com/data.json")
+        assert "Error:" in result
+        assert "HTML" in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_no_sections_found(self):
+        html = "<html><body><p>Just a paragraph, no headings.</p></body></html>"
+        respx.get("https://example.com/flat").mock(
+            return_value=httpx.Response(
+                200, text=html, headers={"content-type": "text/html"},
+            )
+        )
+
+        result = await web_fetch_sections("https://example.com/flat")
+        assert "No sections found" in result
