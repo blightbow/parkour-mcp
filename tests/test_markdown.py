@@ -119,6 +119,14 @@ class TestExtractSections:
         names = [s["name"] for s in sections]
         assert names == ["Real Heading", "Another Real Heading"]
 
+    def test_skips_single_char_headings(self):
+        """Single-character 'headings' are noise from LaTeX rendering artifacts."""
+        md_text = "## Real Heading\n\nContent.\n\n#\n(\n\n## Another Real\n\nMore."
+        sections = _extract_sections_from_markdown(md_text)
+        names = [s["name"] for s in sections]
+        assert "(" not in names
+        assert names == ["Real Heading", "Another Real"]
+
     def test_skips_headings_inside_tilde_fenced_blocks(self):
         """~~~ fences should also be recognized."""
         md_text = "## Before\n\n~~~\n# Not a heading\n~~~\n\n## After\n\nText."
@@ -336,6 +344,60 @@ class TestFilterMarkdownBySections:
             SAMPLE_MARKDOWN, ["nonexistent-section"], sections
         )
         assert unmatched == ["nonexistent-section"]
+        assert meta == []
+
+    def test_fuzzy_underscore_to_hyphen(self):
+        """GFM-style fragment with underscores matches Goldmark-style slug."""
+        md_text = "## What is this DQ3_K_M?\n\nContent here.\n\n## Other\n\nOther."
+        sections = _extract_sections_from_markdown(md_text)
+        filtered, meta, unmatched = _filter_markdown_by_sections(
+            md_text, ["what-is-this-dq3_k_m"], sections
+        )
+        assert "Content here" in filtered
+        assert unmatched == []
+        assert meta[0]["name"] == "What is this DQ3_K_M?"
+        assert meta[0]["matched_fragment"] == "what-is-this-dq3_k_m"
+
+    def test_fuzzy_case_folding(self):
+        """Mixed-case Wikipedia fragment resolves via case-folding."""
+        md_text = "## Sparsely-gated MoE layer\n\nMoE content.\n\n## Other\n\nOther."
+        sections = _extract_sections_from_markdown(md_text)
+        filtered, meta, unmatched = _filter_markdown_by_sections(
+            md_text, ["Sparsely-gated_MoE_layer"], sections
+        )
+        assert "MoE content" in filtered
+        assert unmatched == []
+        assert meta[0]["matched_fragment"] == "Sparsely-gated_MoE_layer"
+
+    def test_fuzzy_percent_encoded_apostrophe(self):
+        """Percent-encoded apostrophe in fragment resolves correctly."""
+        md_text = "## The Hitchhiker's Guide\n\nDon't panic.\n\n## Other\n\nOther."
+        sections = _extract_sections_from_markdown(md_text)
+        filtered, meta, unmatched = _filter_markdown_by_sections(
+            md_text, ["The_Hitchhiker%27s_Guide"], sections
+        )
+        assert "Don't panic" in filtered
+        assert unmatched == []
+        assert meta[0]["name"] == "The Hitchhiker's Guide"
+
+    def test_fuzzy_combined_case_underscore_apostrophe(self):
+        """Combined case, underscore, and apostrophe mismatch resolves."""
+        md_text = "## The Author's Notes\n\nNotes content.\n\n## Other\n\nOther."
+        sections = _extract_sections_from_markdown(md_text)
+        filtered, meta, unmatched = _filter_markdown_by_sections(
+            md_text, ["The_Author%27s_Notes"], sections
+        )
+        assert "Notes content" in filtered
+        assert unmatched == []
+
+    def test_fuzzy_no_false_positive(self):
+        """Fuzzy fallback should not match when slugs are genuinely different."""
+        md_text = "## Alpha Beta\n\nContent.\n\n## Other\n\nOther."
+        sections = _extract_sections_from_markdown(md_text)
+        _, meta, unmatched = _filter_markdown_by_sections(
+            md_text, ["gamma-delta"], sections
+        )
+        assert unmatched == ["gamma-delta"]
         assert meta == []
 
 

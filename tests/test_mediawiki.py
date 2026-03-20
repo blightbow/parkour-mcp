@@ -9,6 +9,8 @@ from claude_web_tools.mediawiki import (
     _detect_mediawiki,
     _fetch_mediawiki_page,
     _mediawiki_html_to_markdown,
+    _extract_citations,
+    _format_citations,
 )
 
 from .conftest import (
@@ -196,3 +198,192 @@ class TestMediawikiHtmlToMarkdown:
         html = "<p>A</p><br><br><br><br><p>B</p>"
         result = _mediawiki_html_to_markdown(html)
         assert "\n\n\n" not in result
+
+    def test_converts_inline_citations_to_footnote_markers(self):
+        """sup.reference with numeric text becomes [^N] markdown footnote."""
+        html = (
+            '<p>Some claim.'
+            '<sup class="reference"><a href="#cite_note-1">[1]</a></sup>'
+            ' Another claim.'
+            '<sup class="reference"><a href="#cite_note-2">[2]</a></sup>'
+            '</p>'
+        )
+        result = _mediawiki_html_to_markdown(html)
+        assert "[^1]" in result
+        assert "[^2]" in result
+        assert "[1]" not in result
+
+    def test_strips_non_numeric_ref_markers(self):
+        """Non-numeric refs like [nb 1] should be removed, not converted."""
+        html = (
+            '<p>Text.'
+            '<sup class="reference"><a href="#cite_note-nb-1">[nb 1]</a></sup>'
+            '</p>'
+        )
+        result = _mediawiki_html_to_markdown(html)
+        assert "[nb 1]" not in result
+        assert "Text." in result
+
+    def test_strips_reference_block(self):
+        """The .mw-references-wrap footnote block should be removed."""
+        html = (
+            '<p>Content.</p>'
+            '<div class="mw-references-wrap">'
+            '<ol class="references"><li>Ref 1</li></ol>'
+            '</div>'
+        )
+        result = _mediawiki_html_to_markdown(html)
+        assert "Ref 1" not in result
+        assert "Content." in result
+
+    def test_strips_cite_error_paragraphs(self):
+        """Cite error paragraphs from incomplete reflist templates are removed."""
+        html = (
+            '<p>Content.</p>'
+            '<p>Cite error: There are ref tags but no reflist.</p>'
+        )
+        result = _mediawiki_html_to_markdown(html)
+        assert "Cite error" not in result
+        assert "Content." in result
+
+    def test_strips_editsection_as_heading_sibling(self):
+        """Modern MediaWiki wraps [edit] as sibling of heading, not child."""
+        html = (
+            '<div class="mw-heading mw-heading2">'
+            '<h2>Education</h2>'
+            '<span class="mw-editsection">'
+            '<span class="mw-editsection-bracket">[</span>'
+            '<a href="/edit">edit</a>'
+            '<span class="mw-editsection-bracket">]</span>'
+            '</span>'
+            '</div>'
+            '<p>Section content.</p>'
+        )
+        result = _mediawiki_html_to_markdown(html)
+        assert "Education" in result
+        assert "[edit]" not in result
+        assert "edit" not in result or "Education" in result
+
+
+# --- _extract_citations ---
+
+class TestExtractCitations:
+    def test_extracts_numbered_citations(self):
+        html = (
+            '<ol class="references">'
+            '<li><span class="reference-text">First ref.</span></li>'
+            '<li><span class="reference-text">Second ref.</span></li>'
+            '</ol>'
+        )
+        citations = _extract_citations(html)
+        assert len(citations) == 2
+        assert citations[0]["n"] == 1
+        assert citations[0]["text"] == "First ref."
+        assert citations[1]["n"] == 2
+
+    def test_extracts_external_link(self):
+        html = (
+            '<ol class="references">'
+            '<li><span class="reference-text">'
+            '<a class="external" href="https://example.com">Example Title</a>'
+            '</span></li>'
+            '</ol>'
+        )
+        citations = _extract_citations(html)
+        assert citations[0]["url"] == "https://example.com"
+        assert citations[0]["title"] == "Example Title"
+
+    def test_resolves_citeref_bibliography(self):
+        """Author-date shorthand should resolve via #CITEREF link."""
+        html = (
+            '<ol class="references">'
+            '<li><span class="reference-text">'
+            '<a href="#CITEREFSmith2020">Smith 2020</a>, p. 42.'
+            '</span></li>'
+            '</ol>'
+            '<cite id="CITEREFSmith2020">'
+            'Smith, J. (2020). '
+            '<a class="external" href="https://example.com/book">The Book</a>.'
+            '</cite>'
+        )
+        citations = _extract_citations(html)
+        assert len(citations) == 1
+        assert citations[0]["text"] == "Smith 2020 , p. 42."
+        assert "sources" in citations[0]
+        assert citations[0]["sources"][0]["url"] == "https://example.com/book"
+        assert citations[0]["sources"][0]["title"] == "The Book"
+
+    def test_resolves_multiple_citerefs(self):
+        """Footnote referencing multiple works resolves all of them."""
+        html = (
+            '<ol class="references">'
+            '<li><span class="reference-text">'
+            '<a href="#CITEREFAlpha2020">Alpha 2020</a>, p. 1; '
+            '<a href="#CITEREFBeta2021">Beta 2021</a>, p. 2.'
+            '</span></li>'
+            '</ol>'
+            '<cite id="CITEREFAlpha2020">Alpha, A. (2020). Work One.</cite>'
+            '<cite id="CITEREFBeta2021">Beta, B. (2021). Work Two.</cite>'
+        )
+        citations = _extract_citations(html)
+        assert len(citations[0]["sources"]) == 2
+
+    def test_no_references_returns_empty(self):
+        html = "<p>No references here.</p>"
+        assert _extract_citations(html) == []
+
+    def test_picks_largest_reference_list(self):
+        """Should use the largest ol.references, skipping small note groups."""
+        html = (
+            '<ol class="references"><li><span class="reference-text">Note.</span></li></ol>'
+            '<ol class="references">'
+            '<li><span class="reference-text">Ref 1.</span></li>'
+            '<li><span class="reference-text">Ref 2.</span></li>'
+            '<li><span class="reference-text">Ref 3.</span></li>'
+            '</ol>'
+        )
+        citations = _extract_citations(html)
+        assert len(citations) == 3
+        assert citations[0]["text"] == "Ref 1."
+
+
+# --- _format_citations ---
+
+class TestFormatCitations:
+    def test_formats_url_citation(self):
+        citations = [{"n": 1, "text": "Title", "url": "https://x.com", "title": "Title"}]
+        result = _format_citations(citations)
+        assert result == "[^1]: [Title](https://x.com)"
+
+    def test_formats_plain_text_citation(self):
+        citations = [{"n": 3, "text": "Smith 2020, p. 42."}]
+        result = _format_citations(citations)
+        assert result == "[^3]: Smith 2020, p. 42."
+
+    def test_formats_with_resolved_source_url(self):
+        citations = [{
+            "n": 5, "text": "Smith 2020, p. 42.",
+            "sources": [{"text": "Full entry", "url": "https://x.com/book", "title": "The Book"}],
+        }]
+        result = _format_citations(citations)
+        assert "**[The Book](https://x.com/book)**" in result
+
+    def test_formats_with_resolved_source_no_url(self):
+        citations = [{
+            "n": 7, "text": "Jones 2019, p. 10.",
+            "sources": [{"text": "Jones, A. (2019). Some Work. Publisher."}],
+        }]
+        result = _format_citations(citations)
+        assert "*Jones, A. (2019). Some Work. Publisher.*" in result
+
+    def test_formats_multiple_sources(self):
+        citations = [{
+            "n": 2, "text": "A 2020; B 2021.",
+            "sources": [
+                {"text": "Alpha.", "url": "https://a.com", "title": "A"},
+                {"text": "Beta.", "url": "https://b.com", "title": "B"},
+            ],
+        }]
+        result = _format_citations(citations)
+        assert "**[A](https://a.com)**" in result
+        assert "**[B](https://b.com)**" in result

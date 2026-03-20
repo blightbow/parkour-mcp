@@ -2,6 +2,7 @@
 
 import re
 from typing import Optional
+from urllib.parse import unquote
 
 from bs4 import BeautifulSoup
 from markdownify import MarkdownConverter
@@ -303,12 +304,13 @@ def _filter_markdown_by_sections(
                 "matched_fragment": req_name,
             })
         else:
-            # Fuzzy fallback: case-fold and normalize underscores to hyphens.
-            # Covers GFM↔Goldmark slug mismatch (underscore vs hyphen) and
-            # case-preserving platforms like MediaWiki/Wikipedia whose
-            # fragments retain original case (e.g. #Multi-head_attention).
-            fuzzy = req_name.lower().replace("_", "-")
-            if fuzzy != req_name and fuzzy in slug_to_idx:
+            # Fuzzy fallback: slugify the fragment so it matches the same
+            # canonical form as the heading slugs in slug_to_idx.  Handles
+            # case folding, underscore↔hyphen (GFM vs Goldmark), percent-
+            # encoded characters, apostrophes, and other punctuation that
+            # different platforms preserve or strip in URLs.
+            fuzzy = _slugify(unquote(req_name))
+            if fuzzy and fuzzy in slug_to_idx:
                 idx = slug_to_idx[fuzzy]
                 sec = sections[idx]
                 matched_parts.append(markdown[sec["start_pos"]:sec["end_pos"]].strip())
