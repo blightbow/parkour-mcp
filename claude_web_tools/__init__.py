@@ -70,7 +70,9 @@ Returns markdown with interactive elements annotated for follow-up actions.""",
     "web_fetch_direct": """Fetch a URL directly from the local machine without JavaScript rendering.
 
 Returns markdown. Use the section parameter to extract specific sections by
-heading name. Supports HTML, plain text, JSON, and XML content types.""",
+heading name. For Wikipedia/MediaWiki pages, inline citations appear as [^N]
+markers; use the citation parameter to retrieve specific references by number.
+Supports HTML, plain text, JSON, and XML content types.""",
 
     "web_fetch_sections": """List the section headings of a web page.
 
@@ -88,7 +90,9 @@ TOOL_DESCRIPTION_OVERRIDES = {
 Unlike {fetch}, returns full unsummarized page text as markdown. Use this
 when you need to extract specific data, compare sections, or preserve details
 that summarization would discard. Use the section parameter to extract
-specific sections by heading name.
+specific sections by heading name. For Wikipedia/MediaWiki pages, inline
+citations appear as [^N] markers; use the citation parameter to retrieve
+specific references by number.
 
 Supports HTML, plain text, JSON, and XML content types.""",
         "desktop": """Fetch a URL directly from the local machine without JavaScript rendering.
@@ -99,7 +103,9 @@ errors (target site blocking data-center IPs) or rejects the tool use with
 PERMISSIONS_ERROR (URL not yet present in the conversation context).
 
 Returns markdown. Use the section parameter to extract specific sections by
-heading name. Supports HTML, plain text, JSON, and XML content types.""",
+heading name. For Wikipedia/MediaWiki pages, inline citations appear as [^N]
+markers; use the citation parameter to retrieve specific references by number.
+Supports HTML, plain text, JSON, and XML content types.""",
     },
 }
 
