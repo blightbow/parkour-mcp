@@ -200,7 +200,7 @@ def _name_counts(sections: list[dict]) -> dict[str, int]:
 
 
 def _build_section_list(
-    sections: list[dict], max_sections: int = 50, include_slugs: bool = False,
+    sections: list[dict], max_sections: int = 100, include_slugs: bool = False,
 ) -> list[str]:
     """Build indented section list for display.
 
