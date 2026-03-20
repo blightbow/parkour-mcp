@@ -5,6 +5,7 @@ assembly that is common to both web_fetch_js and web_fetch_direct.
 """
 
 from typing import Optional
+from urllib.parse import urldefrag
 
 from .markdown import (
     _extract_sections_from_markdown,
@@ -14,6 +15,12 @@ from .markdown import (
     _apply_truncation,
 )
 from .mediawiki import _detect_mediawiki, _fetch_mediawiki_page, _mediawiki_html_to_markdown
+
+
+def _extract_fragment(url: str) -> tuple[str, Optional[str]]:
+    """Split a URL fragment and return (clean_url, fragment_or_none)."""
+    clean, fragment = urldefrag(url)
+    return clean, fragment or None
 
 
 def _normalize_sections(section) -> Optional[list[str]]:
@@ -69,10 +76,15 @@ async def _mediawiki_fast_path(
             hint_suffix="",
         )
         frontmatter_entries["truncated"] = truncation_hint
+        # When sections aren't found, show available sections with slugs
+        sections_available = None
+        if unmatched and all_sections:
+            sections_available = _build_section_list(all_sections, include_slugs=True)
         fm = _build_frontmatter(
             frontmatter_entries,
             sections_requested=matched_meta,
             sections_not_found=unmatched or None,
+            sections_available=sections_available,
         )
         return fm + "\n\n" + filtered
     else:
@@ -110,6 +122,9 @@ def _process_markdown_sections(
             markdown_content, section_names, all_sections
         )
         sections_not_found = unmatched or None
+        # When sections aren't found, show available sections with slugs
+        if sections_not_found:
+            sections_available = _build_section_list(all_sections, include_slugs=True)
 
     markdown_content, truncation_hint = _apply_truncation(markdown_content, max_tokens)
     if truncation_hint and all_sections and not section_names:

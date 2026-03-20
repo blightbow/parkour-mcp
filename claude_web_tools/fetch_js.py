@@ -10,7 +10,9 @@ from playwright.async_api import async_playwright
 
 from .common import _FETCH_HEADERS
 from .markdown import html_to_markdown
-from ._pipeline import _normalize_sections, _mediawiki_fast_path, _process_markdown_sections
+from ._pipeline import (
+    _extract_fragment, _normalize_sections, _mediawiki_fast_path, _process_markdown_sections,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -216,7 +218,11 @@ async def web_fetch_js(
         max_tokens: Limit on output length in approximate token count (default 5000)
         section: Section name or list of section names to extract from the page
     """
+    # Extract fragment from URL (e.g. #section-name) as implicit section request
+    url, fragment = _extract_fragment(url)
     section_names = _normalize_sections(section)
+    if fragment and not section_names:
+        section_names = [fragment]
 
     # --- MediaWiki fast path (before launching browser) ---
     try:

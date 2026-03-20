@@ -114,6 +114,7 @@ def _apply_truncation(
 # --- Section helpers ---
 
 _HEADING_RE = re.compile(r'^(#{1,6})\s+(.+)$', re.MULTILINE)
+_FENCED_CODE_RE = re.compile(r'^(`{3,}|~{3,}).*?\n.*?^\1', re.MULTILINE | re.DOTALL)
 
 # Matches any Unicode whitespace character that isn't a normal ASCII space.
 # Covers &nbsp; (\u00a0), thin/hair/em/en spaces, zero-width spaces, etc.
@@ -125,14 +126,37 @@ def _normalize_whitespace(text: str) -> str:
     return _EXOTIC_WHITESPACE_RE.sub(' ', text)
 
 
+_SLUG_NON_ALNUM_RE = re.compile(r'[^a-z0-9]+')
+
+
+def _slugify(text: str) -> str:
+    """Convert heading text to a URL-fragment-style slug.
+
+    Mirrors the GitHub/HuggingFace anchor algorithm: lowercase, collapse
+    non-alphanumeric runs to single hyphens, strip leading/trailing hyphens.
+    """
+    return _SLUG_NON_ALNUM_RE.sub('-', text.lower()).strip('-')
+
+
 def _extract_sections_from_markdown(markdown: str) -> list[dict]:
     """Extract section headings from markdown text.
 
     Returns list of {name, level, start_pos, end_pos} dicts.
+    Skips headings inside fenced code blocks (``` or ~~~).
     """
+    # Build set of character ranges inside fenced code blocks
+    code_ranges = [
+        (m.start(), m.end()) for m in _FENCED_CODE_RE.finditer(markdown)
+    ]
+
+    def _inside_code(pos: int) -> bool:
+        return any(start <= pos < end for start, end in code_ranges)
+
     sections = []
 
     for match in _HEADING_RE.finditer(markdown):
+        if _inside_code(match.start()):
+            continue
         level = len(match.group(1))
         name = match.group(2).strip()
         # Normalize exotic whitespace (e.g. &nbsp;) — inline markup is
@@ -172,11 +196,14 @@ def _name_counts(sections: list[dict]) -> dict[str, int]:
     return counts
 
 
-def _build_section_list(sections: list[dict], max_sections: int = 50) -> list[str]:
+def _build_section_list(
+    sections: list[dict], max_sections: int = 50, include_slugs: bool = False,
+) -> list[str]:
     """Build indented section list for display.
 
     Disambiguates duplicate names by appending (Parent Name).
     Returns list of formatted strings like "  - Section Name".
+    When include_slugs is True, appends the anchor slug: "  - Section Name (#slug)".
     """
     if not sections:
         return []
@@ -196,7 +223,8 @@ def _build_section_list(sections: list[dict], max_sections: int = 50) -> list[st
             parent_idx = _find_parent_idx(sections, i)
             if parent_idx is not None:
                 name = f"{name} ({sections[parent_idx]['name']})"
-        lines.append(" " * indent + f"- {name}")
+        slug_suffix = f" (#{_slugify(sec['name'])})" if include_slugs else ""
+        lines.append(" " * indent + f"- {name}{slug_suffix}")
 
     return lines
 
@@ -235,12 +263,19 @@ def _filter_markdown_by_sections(
             current = parent
         return " > ".join(path)
 
-    # Map display names to section indices
+    # Map display names and raw names to section indices
     display_to_idx: dict[str, int] = {}
     for i in range(len(sections)):
         display_to_idx[_get_display_name(i)] = i
         # Also map raw name for non-ambiguous sections
         display_to_idx[sections[i]["name"]] = i
+
+    # Slug lookup: maps slugified heading text to section index
+    slug_to_idx: dict[str, int] = {}
+    for i in range(len(sections)):
+        slug = _slugify(sections[i]["name"])
+        if slug:
+            slug_to_idx.setdefault(slug, i)
 
     matched_parts = []
     matched_meta = []
@@ -255,6 +290,15 @@ def _filter_markdown_by_sections(
             matched_meta.append({
                 "name": sec["name"],
                 "ancestry_path": _build_ancestry(idx),
+            })
+        elif req_name in slug_to_idx:
+            idx = slug_to_idx[req_name]
+            sec = sections[idx]
+            matched_parts.append(markdown[sec["start_pos"]:sec["end_pos"]].strip())
+            matched_meta.append({
+                "name": sec["name"],
+                "ancestry_path": _build_ancestry(idx),
+                "matched_fragment": req_name,
             })
         else:
             unmatched.append(req_name)
@@ -288,11 +332,16 @@ def _build_frontmatter(
             sec = sections_requested[0]
             lines.append(f"# {sec['ancestry_path']}")
             lines.append(f"section: {sec['name']}")
+            if sec.get("matched_fragment"):
+                lines.append(f"matched_fragment: \"#{sec['matched_fragment']}\"")
         else:
             lines.append("sections:")
             for sec in sections_requested:
                 lines.append(f"  # {sec['ancestry_path']}")
-                lines.append(f"  - {sec['name']}")
+                if sec.get("matched_fragment"):
+                    lines.append(f"  - {sec['name']}  # matched #{sec['matched_fragment']}")
+                else:
+                    lines.append(f"  - {sec['name']}")
     elif sections_available:
         lines.append("sections:")
         for entry in sections_available:
@@ -301,7 +350,7 @@ def _build_frontmatter(
     if sections_not_found:
         lines.append("sections_not_found:")
         for name in sections_not_found:
-            lines.append(f"  - {name}")
+            lines.append(f"  - \"{name}\"")
 
     lines.append("---")
     return "\n".join(lines)

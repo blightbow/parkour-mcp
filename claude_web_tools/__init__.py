@@ -7,7 +7,7 @@ from mcp.server.fastmcp import FastMCP
 
 from .kagi import search, summarize
 from .fetch_js import web_fetch_js
-from .fetch_direct import web_fetch_direct
+from .fetch_direct import web_fetch_direct, web_fetch_sections
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -21,42 +21,38 @@ TOOL_NAMES = {
     "search": {"code": "KagiSearch", "desktop": "kagi_search"},
     "summarize": {"code": "KagiSummarize", "desktop": "kagi_summarize"},
     "web_fetch_js": {"code": "WebFetchJS", "desktop": "web_fetch_js"},
+    "web_fetch_direct": {"code": "WebFetchDirect", "desktop": "web_fetch_direct"},
+    "web_fetch_sections": {"code": "WebFetchSections", "desktop": "web_fetch_sections"},
 }
 
-# Profile-specific tool descriptions for different Claude clients
-TOOL_DESCRIPTIONS = {
-    "search": {
-        "code": """Search the web using Kagi's curated search index.
+# Profile variables for description templates
+# code profile: PascalCase built-in tool names (WebSearch, WebFetch)
+# desktop profile: snake_case built-in tool names (web_search, web_fetch)
+PROFILE_VARS = {
+    "code": {"search": "WebSearch", "fetch": "WebFetch"},
+    "desktop": {"search": "web_search", "fetch": "web_fetch"},
+}
 
-Use this as an alternative to the built-in WebSearch tool when WebSearch
-returns few or poor quality results. Kagi's index is independently curated,
-resistant to SEO spam, and may surface different sources. Returns raw search
-results with snippets and timestamps, plus related search suggestions.""",
-        "desktop": """Search the web using Kagi's curated search index.
+# Tool description templates — {search} and {fetch} are replaced per-profile.
+# Per-profile overrides in TOOL_DESCRIPTION_OVERRIDES replace the whole value.
+TOOL_DESCRIPTION_TEMPLATES = {
+    "search": """Search the web using Kagi's curated search index.
 
-Use this as an alternative to the built-in web_search tool when web_search
-returns few or poor quality results. Kagi's index is independently curated,
-resistant to SEO spam, and may surface different sources. Returns raw search
-results with snippets and timestamps, plus related search suggestions.""",
-    },
-    "summarize": {
-        "code": """Summarize content from a URL or text using Kagi's Universal Summarizer.
+Use this as an alternative to {search} when it returns few or poor quality
+results. Kagi's index is independently curated, resistant to SEO spam, and
+may surface different sources. Returns search results with snippets and
+timestamps, plus related search suggestions.""",
 
-Supports web pages, PDFs, YouTube videos, audio files, and documents.
-Use this when WebFetch fails due to agent blacklisting or access restrictions.""",
-        "desktop": """Summarize content from a URL or text using Kagi's Universal Summarizer.
+    "summarize": """Summarize content from a URL or text using Kagi's Universal Summarizer.
 
 Supports web pages, PDFs, YouTube videos, audio files, and documents.
-Use this when web_fetch fails due to agent blacklisting or access restrictions.""",
-    },
-    "web_fetch_js": {
-        "code": """Fetch and interact with web content using a headless browser.
+Use this when {fetch} fails due to agent blacklisting or access restrictions.""",
 
-Use this when WebFetch returns incomplete content from JavaScript-heavy sites
-(SPAs, React/Vue/Angular apps, dynamically loaded content). For MediaWiki sites
-(URLs containing /wiki/), content is fetched directly via the API without
-launching a browser. Use the section parameter to extract specific sections
-by heading name.
+    "web_fetch_js": """Fetch and interact with web content using a headless browser.
+
+Use this when {fetch} returns incomplete content from JavaScript-heavy sites
+(SPAs, React/Vue/Angular apps, dynamically loaded content). Use the section
+parameter to extract specific sections by heading name.
 
 Supports ReAct-style interaction chains:
 1. First call: Fetch page, observe available interactive elements
@@ -64,58 +60,55 @@ Supports ReAct-style interaction chains:
 3. Extract updated content after interactions
 
 Actions format (JSON array of objects):
-- {"action": "click", "selector": "button#submit"}
-- {"action": "fill", "selector": "input[name=query]", "value": "search term"}
-- {"action": "select", "selector": "select#region", "value": "us-east"}
-- {"action": "wait", "selector": ".results-loaded"}
+- {{"action": "click", "selector": "button#submit"}}
+- {{"action": "fill", "selector": "input[name=query]", "value": "search term"}}
+- {{"action": "select", "selector": "select#region", "value": "us-east"}}
+- {{"action": "wait", "selector": ".results-loaded"}}
 
 Returns markdown with interactive elements annotated for follow-up actions.""",
-        "desktop": """Fetch and interact with web content using a headless browser.
 
-Use this when web_fetch returns incomplete content from JavaScript-heavy sites
-(SPAs, React/Vue/Angular apps, dynamically loaded content). For MediaWiki sites
-(URLs containing /wiki/), content is fetched directly via the API without
-launching a browser. Use the section parameter to extract specific sections
-by heading name.
+    "web_fetch_direct": """Fetch a URL directly from the local machine without JavaScript rendering.
 
-Supports ReAct-style interaction chains:
-1. First call: Fetch page, observe available interactive elements
-2. Subsequent calls: Use 'actions' parameter to interact (click, fill, select)
-3. Extract updated content after interactions
+Returns markdown. Use the section parameter to extract specific sections by
+heading name. Supports HTML, plain text, JSON, and XML content types.""",
 
-Actions format (JSON array of objects):
-- {"action": "click", "selector": "button#submit"}
-- {"action": "fill", "selector": "input[name=query]", "value": "search term"}
-- {"action": "select", "selector": "select#region", "value": "us-east"}
-- {"action": "wait", "selector": ".results-loaded"}
+    "web_fetch_sections": """List the section headings of a web page.
 
-Returns markdown with interactive elements annotated for follow-up actions.""",
-    },
+A lightweight alternative to fetching full page content. Returns a section
+tree with heading names and anchor slugs. Use this to explore document
+structure before fetching specific sections. If the URL contains a fragment
+(e.g. #section-name), resolves it against the heading tree.""",
+}
+
+# Per-profile description overrides (replaces the template entirely)
+TOOL_DESCRIPTION_OVERRIDES = {
     "web_fetch_direct": {
-        "desktop": """Fetch raw content from a URL without JavaScript rendering.
+        "code": """Fetch a URL directly from the local machine without JavaScript rendering.
 
-Returns markdown by default. For MediaWiki sites (URLs containing /wiki/),
-content is fetched directly via the API. Use the section parameter to extract
-specific sections by heading name. Use cite=True for legacy XML format with
-span indices for citation.
+Unlike {fetch}, returns full unsummarized page text as markdown. Use this
+when you need to extract specific data, compare sections, or preserve details
+that summarization would discard. Use the section parameter to extract
+specific sections by heading name.
 
 Supports HTML, plain text, JSON, and XML content types.""",
+        "desktop": """Fetch a URL directly from the local machine without JavaScript rendering.
+
+Unlike {fetch}, fetches from the user's device instead of proxying through
+Anthropic's servers. Use this as a fallback when {fetch} returns HTTP 403
+errors (target site blocking data-center IPs) or rejects the tool use with
+PERMISSIONS_ERROR (URL not yet present in the conversation context).
+
+Returns markdown. Use the section parameter to extract specific sections by
+heading name. Supports HTML, plain text, JSON, and XML content types.""",
     },
 }
 
 
-def apply_profile(profile: str) -> None:
-    """Apply tool descriptions for the specified profile.
-
-    Note: Uses _tool_manager, a private FastMCP API.
-    """
-    for tool_name, descriptions in TOOL_DESCRIPTIONS.items():
-        # Skip tools with profile-specific names (registered separately in main)
-        if tool_name in TOOL_NAMES:
-            continue
-        tool = mcp._tool_manager.get_tool(tool_name)
-        if tool:
-            tool.description = descriptions[profile]
+def _build_description(tool_name: str, profile: str) -> str:
+    """Build a tool description by resolving templates and overrides."""
+    overrides = TOOL_DESCRIPTION_OVERRIDES.get(tool_name, {})
+    template = overrides.get(profile, TOOL_DESCRIPTION_TEMPLATES[tool_name])
+    return template.format(**PROFILE_VARS[profile])
 
 
 def main():
@@ -129,21 +122,18 @@ def main():
     )
     args = parser.parse_args()
 
-    # Register tools with profile-specific names
+    # Register all tools with profile-specific names and descriptions
     tools = [
         ("search", search),
         ("summarize", summarize),
         ("web_fetch_js", web_fetch_js),
+        ("web_fetch_direct", web_fetch_direct),
+        ("web_fetch_sections", web_fetch_sections),
     ]
     for internal_name, func in tools:
         name = TOOL_NAMES[internal_name][args.profile]
-        desc = TOOL_DESCRIPTIONS[internal_name][args.profile]
+        desc = _build_description(internal_name, args.profile)
         mcp.add_tool(func, name=name, description=desc)
-
-    # Register desktop-only tools
-    if args.profile == "desktop":
-        desc = TOOL_DESCRIPTIONS["web_fetch_direct"]["desktop"]
-        mcp.add_tool(web_fetch_direct, description=desc)
 
     mcp.run(transport="stdio")
 

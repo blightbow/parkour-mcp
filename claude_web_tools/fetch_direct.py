@@ -9,8 +9,13 @@ import httpx
 from bs4 import BeautifulSoup
 
 from .common import _FETCH_HEADERS
-from .markdown import html_to_markdown, _build_frontmatter, _apply_truncation
-from ._pipeline import _normalize_sections, _mediawiki_fast_path, _process_markdown_sections
+from .markdown import (
+    html_to_markdown, _extract_sections_from_markdown, _build_section_list,
+    _filter_markdown_by_sections, _build_frontmatter, _apply_truncation,
+)
+from ._pipeline import (
+    _extract_fragment, _normalize_sections, _mediawiki_fast_path, _process_markdown_sections,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -92,7 +97,11 @@ async def web_fetch_direct(
         cite: If True, return XML format with span indices for citation (default False)
         section: Section name or list of section names to extract from the page
     """
+    # Extract fragment from URL (e.g. #section-name) as implicit section request
+    url, fragment = _extract_fragment(url)
     section_names = _normalize_sections(section)
+    if fragment and not section_names:
+        section_names = [fragment]
 
     # --- MediaWiki fast path (before HTTP fetch) ---
     if not cite:
@@ -218,3 +227,95 @@ async def web_fetch_direct(
         {"title": title, "source": str(response.url)},
     )
     return output
+
+
+async def web_fetch_sections(url: str) -> str:
+    """List the section headings of a web page.
+
+    Returns a section tree with heading names and anchor slugs.
+    If the URL contains a fragment, resolves it against the tree.
+
+    Args:
+        url: The URL to inspect (fragments are resolved, not stripped)
+    """
+    url, fragment = _extract_fragment(url)
+    section_names = [fragment] if fragment else None
+
+    # --- MediaWiki fast path ---
+    try:
+        from .mediawiki import _detect_mediawiki, _fetch_mediawiki_page, _mediawiki_html_to_markdown
+
+        wiki_info = await _detect_mediawiki(url)
+        if wiki_info:
+            wiki_page = await _fetch_mediawiki_page(
+                wiki_info["api_base"], wiki_info["page_title"],
+            )
+            if wiki_page:
+                markdown_content = _mediawiki_html_to_markdown(wiki_page["html"])
+                return _sections_response(
+                    wiki_page["title"], url, markdown_content, section_names,
+                )
+    except Exception:
+        pass
+
+    # --- HTTP fetch ---
+    try:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
+            response = await client.get(url, headers=_FETCH_HEADERS)
+            response.raise_for_status()
+    except httpx.TimeoutException:
+        return f"Error: Request timed out for {url}"
+    except httpx.HTTPStatusError as e:
+        return f"Error: HTTP {e.response.status_code} for {url}"
+    except httpx.RequestError as e:
+        return f"Error: Failed to fetch {url} - {type(e).__name__}"
+
+    content_type = response.headers.get("content-type", "")
+    is_html = "text/html" in content_type or "application/xhtml" in content_type
+
+    if not is_html:
+        return f"Error: Section listing requires HTML content (got '{content_type}')."
+
+    title, markdown_content = html_to_markdown(response.text)
+
+    if not markdown_content:
+        return f"Error: No content extracted from {url}"
+
+    return _sections_response(title, str(response.url), markdown_content, section_names)
+
+
+def _sections_response(
+    title: str,
+    url: str,
+    markdown_content: str,
+    section_names: Optional[list[str]],
+) -> str:
+    """Build a sections-only response from markdown content."""
+    all_sections = _extract_sections_from_markdown(markdown_content)
+
+    if not all_sections:
+        fm = _build_frontmatter({"title": title, "source": url})
+        return fm + "\n\nNo sections found."
+
+    entries = {"title": title, "source": url}
+    sections_available = _build_section_list(all_sections, include_slugs=True)
+    sections_not_found = None
+
+    if section_names:
+        _, matched_meta, unmatched = _filter_markdown_by_sections(
+            markdown_content, section_names, all_sections,
+        )
+        sections_not_found = unmatched or None
+        # Surface match info in entries so it doesn't suppress the tree
+        if matched_meta:
+            m = matched_meta[0]
+            entries["section"] = m["name"]
+            if m.get("matched_fragment"):
+                entries["matched_fragment"] = f'"#{m["matched_fragment"]}"'
+
+    fm = _build_frontmatter(
+        entries,
+        sections_not_found=sections_not_found,
+        sections_available=sections_available,
+    )
+    return fm
