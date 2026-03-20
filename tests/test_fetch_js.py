@@ -8,13 +8,21 @@ import pytest
 import respx
 
 from claude_web_tools.fetch_js import web_fetch_js
+from claude_web_tools._pipeline import _wiki_cache
 
 from .conftest import (
     MEDIAWIKI_QUERY_RESPONSE,
     MEDIAWIKI_PARSE_FULL_RESPONSE,
-    MEDIAWIKI_PARSE_SECTIONS_RESPONSE,
-    MEDIAWIKI_PARSE_SECTION_TEXT,
 )
+
+
+@pytest.fixture(autouse=True)
+def clear_wiki_cache():
+    """Ensure each test starts with an empty MediaWiki page cache."""
+    yield
+    _wiki_cache.url = None
+    _wiki_cache.wiki_info = None
+    _wiki_cache.wiki_page = None
 
 
 class TestWebFetchJsMediawikiFastPath:
@@ -54,14 +62,11 @@ class TestWebFetchJsMediawikiFastPath:
     @pytest.mark.asyncio
     @respx.mock
     async def test_wiki_section_fetch(self):
+        """Section filtering now uses full page fetch + local filtering."""
         respx.get("https://wiki.example.com/api.php").mock(
             side_effect=[
-                # Detection probe
                 httpx.Response(200, json=MEDIAWIKI_QUERY_RESPONSE),
-                # Section list
-                httpx.Response(200, json=MEDIAWIKI_PARSE_SECTIONS_RESPONSE),
-                # Section content
-                httpx.Response(200, json=MEDIAWIKI_PARSE_SECTION_TEXT),
+                httpx.Response(200, json=MEDIAWIKI_PARSE_FULL_RESPONSE),
             ]
         )
 
@@ -75,15 +80,10 @@ class TestWebFetchJsMediawikiFastPath:
     @pytest.mark.asyncio
     @respx.mock
     async def test_wiki_section_fetch_list(self):
-        section_one_text = {
-            "parse": {"text": {"*": "<h2>Section One</h2><p>Content one.</p>"}}
-        }
         respx.get("https://wiki.example.com/api.php").mock(
             side_effect=[
                 httpx.Response(200, json=MEDIAWIKI_QUERY_RESPONSE),
-                httpx.Response(200, json=MEDIAWIKI_PARSE_SECTIONS_RESPONSE),
-                httpx.Response(200, json=section_one_text),
-                httpx.Response(200, json=MEDIAWIKI_PARSE_SECTION_TEXT),
+                httpx.Response(200, json=MEDIAWIKI_PARSE_FULL_RESPONSE),
             ]
         )
 
@@ -92,7 +92,7 @@ class TestWebFetchJsMediawikiFastPath:
             section=["Section One", "Section Two"],
         )
         assert "sections:" in result
-        assert "Content one" in result
+        assert "Content of section one" in result
         assert "Content of section two" in result
 
     @pytest.mark.asyncio
@@ -127,8 +127,7 @@ class TestWebFetchJsMediawikiFastPath:
         respx.get("https://wiki.example.com/api.php").mock(
             side_effect=[
                 httpx.Response(200, json=MEDIAWIKI_QUERY_RESPONSE),
-                httpx.Response(200, json=MEDIAWIKI_PARSE_SECTIONS_RESPONSE),
-                httpx.Response(200, json=MEDIAWIKI_PARSE_SECTION_TEXT),
+                httpx.Response(200, json=MEDIAWIKI_PARSE_FULL_RESPONSE),
             ]
         )
 

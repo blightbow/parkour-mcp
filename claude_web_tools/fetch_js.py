@@ -11,7 +11,8 @@ from playwright.async_api import async_playwright
 from .common import _FETCH_HEADERS
 from .markdown import html_to_markdown
 from ._pipeline import (
-    _extract_fragment, _normalize_sections, _mediawiki_fast_path, _process_markdown_sections,
+    _extract_fragment, _normalize_sections, _resolve_fragment_source,
+    _mediawiki_fast_path, _process_markdown_sections,
 )
 
 logger = logging.getLogger(__name__)
@@ -223,19 +224,14 @@ async def web_fetch_js(
     section_names = _normalize_sections(section)
     if fragment and not section_names:
         section_names = [fragment]
-    # Preserve fragment in source URL only when it drove the section resolution
-    source_url = f"{url}#{fragment}" if fragment and not section else url
-    # Warn when explicit section= overrides a URL fragment
-    fragment_warning = (
-        f"URL fragment #{fragment} was ignored; explicit section parameter takes precedence"
-        if fragment and section else None
-    )
+    source_url, fragment_warning = _resolve_fragment_source(url, fragment, section)
 
     # --- MediaWiki fast path (before launching browser) ---
     try:
-        result = await _mediawiki_fast_path(url, section_names, max_tokens,
-                                            source_url=source_url,
-                                            extra_entries={"warning": fragment_warning})
+        result = await _mediawiki_fast_path(
+            url, section_names, max_tokens,
+            extra_entries={"source": source_url, "warning": fragment_warning},
+        )
         if result is not None:
             return result
     except Exception:

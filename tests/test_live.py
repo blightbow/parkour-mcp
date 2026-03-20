@@ -54,29 +54,6 @@ class TestLiveMediawikiPageFetch:
         assert len(page["html"]) > 1000
         assert len(page["sections_meta"]) > 10
 
-    @pytest.mark.asyncio
-    async def test_section_fetch_by_name(self):
-        info = await _detect_mediawiki(WIKI_URL)
-        assert info is not None
-
-        page = await _fetch_mediawiki_page(
-            info["api_base"], info["page_title"], sections=["Honor Lost"]
-        )
-        assert page is not None
-        assert len(page["html"]) > 0
-
-    @pytest.mark.asyncio
-    async def test_multiple_section_fetch(self):
-        info = await _detect_mediawiki(WIKI_URL)
-        assert info is not None
-
-        page = await _fetch_mediawiki_page(
-            info["api_base"],
-            info["page_title"],
-            sections=["Honor Lost", "The Spell of Divination"],
-        )
-        assert page is not None
-        assert len(page["html"]) > 0
 
 
 # --- MediaWiki HTML → markdown ---
@@ -130,12 +107,6 @@ class TestLiveWebFetchDirect:
         assert "The Spell of Divination" in result
 
     @pytest.mark.asyncio
-    async def test_wiki_cite_true_returns_xml(self):
-        result = await web_fetch_direct(WIKI_URL, cite=True, max_tokens=200)
-        assert "<document" in result
-        assert "<span" in result
-
-    @pytest.mark.asyncio
     async def test_json_endpoint(self):
         result = await web_fetch_direct("https://httpbin.org/json")
         assert "content_type: json" in result
@@ -148,12 +119,6 @@ class TestLiveWebFetchDirect:
         assert "title:" in result
         assert "Herman Melville" in result
         assert "<document" not in result  # not XML
-
-    @pytest.mark.asyncio
-    async def test_html_endpoint_cite_true(self):
-        result = await web_fetch_direct("https://httpbin.org/html", cite=True)
-        assert "<document" in result
-        assert "Herman Melville" in result
 
     @pytest.mark.asyncio
     async def test_404_returns_error(self):

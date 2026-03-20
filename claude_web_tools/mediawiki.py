@@ -1,6 +1,5 @@
 """MediaWiki detection and API-based page fetching."""
 
-import asyncio
 import logging
 import html as html_mod
 import re
@@ -9,7 +8,7 @@ from typing import Optional
 
 import httpx
 
-from .common import _FETCH_HEADERS
+from .common import _API_HEADERS
 from .markdown import md, _normalize_whitespace, _clean_headings
 
 logger = logging.getLogger(__name__)
@@ -50,7 +49,7 @@ async def _detect_mediawiki(url: str) -> Optional[dict]:
                         "prop": "info",
                         "format": "json",
                     },
-                    headers=_FETCH_HEADERS,
+                    headers=_API_HEADERS,
                 )
                 resp.raise_for_status()
                 data = resp.json()
@@ -95,99 +94,32 @@ def _clean_display_title(raw: str) -> str:
 async def _fetch_mediawiki_page(
     api_base: str,
     page_title: str,
-    sections: Optional[list[str]] = None,
 ) -> Optional[dict]:
-    """Fetch a MediaWiki page via the API.
+    """Fetch a full MediaWiki page via the API.
 
-    If sections is provided, fetches only those sections by index (concurrently).
+    Always fetches the complete page; section filtering is handled downstream.
     Returns {title, html, sections_meta} or None.
     """
     async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
-        if sections:
-            # First get section list to map names to indices
-            resp = await client.get(
-                api_base,
-                params={
-                    "action": "parse",
-                    "page": page_title,
-                    "format": "json",
-                    "prop": "sections|displaytitle",
-                },
-                headers=_FETCH_HEADERS,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            parse = data.get("parse", {})
-            section_list = parse.get("sections", [])
+        resp = await client.get(
+            api_base,
+            params={
+                "action": "parse",
+                "page": page_title,
+                "format": "json",
+                "prop": "text|displaytitle|sections",
+            },
+            headers=_API_HEADERS,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        parse = data.get("parse", {})
 
-            # Map requested names to section indices
-            # Strip HTML tags and normalize whitespace (API returns e.g.
-            # "<i>Honor Lost</i>" and "Vol.&nbsp;II")
-            name_to_index = {}
-            for sec in section_list:
-                raw_name = sec.get("line", "")
-                clean_name = _clean_display_title(raw_name)
-                name_to_index[clean_name] = sec.get("index", "")
-
-            # Resolve indices for requested sections
-            fetch_tasks = []
-            for sec_name in sections:
-                idx = name_to_index.get(_normalize_whitespace(sec_name))
-                if idx is not None:
-                    fetch_tasks.append(_fetch_section(client, api_base, page_title, idx))
-
-            # Fetch all sections concurrently
-            html_parts = await asyncio.gather(*fetch_tasks)
-
-            return {
-                "title": _clean_display_title(parse.get("displaytitle", page_title)),
-                "html": "\n".join(h for h in html_parts if h),
-                "sections_meta": section_list,
-            }
-        else:
-            # Full page fetch
-            resp = await client.get(
-                api_base,
-                params={
-                    "action": "parse",
-                    "page": page_title,
-                    "format": "json",
-                    "prop": "text|displaytitle|sections",
-                },
-                headers=_FETCH_HEADERS,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            parse = data.get("parse", {})
-
-            return {
-                "title": _clean_display_title(parse.get("displaytitle", page_title)),
-                "html": parse.get("text", {}).get("*", ""),
-                "sections_meta": parse.get("sections", []),
-            }
-
-
-async def _fetch_section(
-    client: httpx.AsyncClient,
-    api_base: str,
-    page_title: str,
-    section_index: str,
-) -> str:
-    """Fetch a single section's HTML from the MediaWiki API."""
-    resp = await client.get(
-        api_base,
-        params={
-            "action": "parse",
-            "page": page_title,
-            "format": "json",
-            "prop": "text",
-            "section": section_index,
-        },
-        headers=_FETCH_HEADERS,
-    )
-    resp.raise_for_status()
-    sec_data = resp.json()
-    return sec_data.get("parse", {}).get("text", {}).get("*", "")
+        return {
+            "title": _clean_display_title(parse.get("displaytitle", page_title)),
+            "html": parse.get("text", {}).get("*", ""),
+            "sections_meta": parse.get("sections", []),
+        }
 
 
 def _mediawiki_html_to_markdown(html: str) -> str:
@@ -203,6 +135,21 @@ def _mediawiki_html_to_markdown(html: str) -> str:
     for selector in ["#toc", ".toc", "script", "style"]:
         for el in soup.select(selector):
             el.decompose()
+
+    # Remove citation/reference noise:
+    #   - sup.reference: inline markers like [1], [2]
+    #   - .mw-references-wrap: the footnote block at the end of sections
+    # These selectors are stable — used by Wikipedia's own Page Content
+    # Service (PCS) to identify reference sections in mobile rendering.
+    for selector in ["sup.reference", ".mw-references-wrap"]:
+        for el in soup.select(selector):
+            el.decompose()
+
+    # Remove Cite error paragraphs (MediaWiki rendering artefact when
+    # <ref group=…> tags lack a matching {{reflist}} in section scope)
+    for p in soup.find_all("p"):
+        if p.get_text(strip=True).startswith("Cite error:"):
+            p.decompose()
 
     # Clean heading markup (removes .mw-editsection, unwraps inline tags)
     _clean_headings(soup)
