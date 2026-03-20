@@ -223,10 +223,19 @@ async def web_fetch_js(
     section_names = _normalize_sections(section)
     if fragment and not section_names:
         section_names = [fragment]
+    # Preserve fragment in source URL only when it drove the section resolution
+    source_url = f"{url}#{fragment}" if fragment and not section else url
+    # Warn when explicit section= overrides a URL fragment
+    fragment_warning = (
+        f"URL fragment #{fragment} was ignored; explicit section parameter takes precedence"
+        if fragment and section else None
+    )
 
     # --- MediaWiki fast path (before launching browser) ---
     try:
-        result = await _mediawiki_fast_path(url, section_names, max_tokens)
+        result = await _mediawiki_fast_path(url, section_names, max_tokens,
+                                            source_url=source_url,
+                                            extra_entries={"warning": fragment_warning})
         if result is not None:
             return result
     except Exception:
@@ -361,7 +370,8 @@ async def web_fetch_js(
     # Section handling, truncation, and frontmatter via shared pipeline
     frontmatter_entries = {
         "title": title,
-        "source": url,
+        "source": source_url,
+        "warning": fragment_warning,
         "browser": browser_name,
         "detected_app": detected_app or None,
         "iframe_source": iframe_source or None,

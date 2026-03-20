@@ -102,11 +102,20 @@ async def web_fetch_direct(
     section_names = _normalize_sections(section)
     if fragment and not section_names:
         section_names = [fragment]
+    # Preserve fragment in source URL only when it drove the section resolution
+    source_url = f"{url}#{fragment}" if fragment and not section else url
+    # Warn when explicit section= overrides a URL fragment
+    fragment_warning = (
+        f"URL fragment #{fragment} was ignored; explicit section parameter takes precedence"
+        if fragment and section else None
+    )
 
     # --- MediaWiki fast path (before HTTP fetch) ---
     if not cite:
         try:
-            result = await _mediawiki_fast_path(url, section_names, max_tokens)
+            result = await _mediawiki_fast_path(url, section_names, max_tokens,
+                                                source_url=source_url,
+                                                extra_entries={"warning": fragment_warning})
             if result is not None:
                 return result
         except Exception:
@@ -210,7 +219,8 @@ async def web_fetch_direct(
 
         fm = _build_frontmatter({
             "title": title,
-            "source": str(response.url),
+            "source": source_url,
+            "warning": fragment_warning,
             "content_type": ct_label,
             "truncated": truncation_hint,
         })
@@ -224,7 +234,7 @@ async def web_fetch_direct(
 
     output = _process_markdown_sections(
         markdown_content, section_names, max_tokens,
-        {"title": title, "source": str(response.url)},
+        {"title": title, "source": source_url, "warning": fragment_warning},
     )
     return output
 
@@ -238,6 +248,7 @@ async def web_fetch_sections(url: str) -> str:
     Args:
         url: The URL to inspect (fragments are resolved, not stripped)
     """
+    original_url = url
     url, fragment = _extract_fragment(url)
     section_names = [fragment] if fragment else None
 
@@ -253,7 +264,7 @@ async def web_fetch_sections(url: str) -> str:
             if wiki_page:
                 markdown_content = _mediawiki_html_to_markdown(wiki_page["html"])
                 return _sections_response(
-                    wiki_page["title"], url, markdown_content, section_names,
+                    wiki_page["title"], original_url, markdown_content, section_names,
                 )
     except Exception:
         pass
@@ -281,7 +292,10 @@ async def web_fetch_sections(url: str) -> str:
     if not markdown_content:
         return f"Error: No content extracted from {url}"
 
-    return _sections_response(title, str(response.url), markdown_content, section_names)
+    source_url = str(response.url)
+    if fragment:
+        source_url += f"#{fragment}"
+    return _sections_response(title, source_url, markdown_content, section_names)
 
 
 def _sections_response(

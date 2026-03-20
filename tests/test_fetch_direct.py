@@ -436,6 +436,7 @@ class TestWebFetchDirectFragmentExtraction:
         )
 
         result = await web_fetch_direct("https://example.com/page#second-section")
+        assert "source: https://example.com/page#second-section" in result
         assert "section: Second Section" in result
         assert 'matched_fragment: "#second-section"' in result
         assert "Another paragraph" in result
@@ -468,6 +469,7 @@ class TestWebFetchDirectFragmentExtraction:
         )
 
         result = await web_fetch_direct("https://example.com/page#nonexistent")
+        assert "source: https://example.com/page#nonexistent" in result
         assert "sections_not_found:" in result
         assert '"nonexistent"' in result
         assert "(#" in result  # slugs should be present in section list
@@ -487,6 +489,9 @@ class TestWebFetchDirectFragmentExtraction:
         result = await web_fetch_direct(
             "https://example.com/page#subsection", section="Second Section"
         )
+        # Fragment dropped from source: explicit section= overrode it
+        assert "source: https://example.com/page\n" in result
+        assert "warning: URL fragment #subsection was ignored; explicit section parameter takes precedence" in result
         assert "section: Second Section" in result
         assert "matched_fragment" not in result
 
@@ -525,6 +530,7 @@ class TestWebFetchSections:
         )
 
         result = await web_fetch_sections("https://example.com/page#second-section")
+        assert "source: https://example.com/page#second-section" in result
         assert "section: Second Section" in result
         assert 'matched_fragment: "#second-section"' in result
         # Full tree should still be shown for context
@@ -542,6 +548,7 @@ class TestWebFetchSections:
         )
 
         result = await web_fetch_sections("https://example.com/page#nonexistent")
+        assert "source: https://example.com/page#nonexistent" in result
         assert "sections_not_found:" in result
         assert '"nonexistent"' in result
         assert "sections:" in result

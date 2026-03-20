@@ -35,6 +35,7 @@ async def _mediawiki_fast_path(
     section_names: Optional[list[str]],
     max_tokens: int,
     extra_entries: Optional[dict] = None,
+    source_url: Optional[str] = None,
 ) -> Optional[str]:
     """Attempt to fetch a MediaWiki page via the API, bypassing browser/httpx.
 
@@ -56,7 +57,7 @@ async def _mediawiki_fast_path(
 
     frontmatter_entries = {
         "title": wiki_page["title"],
-        "source": url,
+        "source": source_url or url,
         "site": wiki_info["sitename"] or None,
         "generator": wiki_info["generator"] or None,
     }
