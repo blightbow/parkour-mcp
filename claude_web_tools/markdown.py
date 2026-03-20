@@ -164,7 +164,7 @@ def _extract_sections_from_markdown(markdown: str) -> list[dict]:
         # Normalize exotic whitespace (e.g. &nbsp;) — inline markup is
         # already cleaned by _clean_headings() before markdown conversion
         name = _normalize_whitespace(name).strip()
-        if name:
+        if name and len(name) > 1:
             sections.append({
                 "name": name,
                 "level": level,
@@ -303,10 +303,11 @@ def _filter_markdown_by_sections(
                 "matched_fragment": req_name,
             })
         else:
-            # Fuzzy fallback: normalize underscores to hyphens and retry.
-            # Covers GFM↔Goldmark slug mismatch (GitHub/GitLab preserve
-            # underscores; Forgejo/HuggingFace convert them to hyphens).
-            fuzzy = req_name.replace("_", "-")
+            # Fuzzy fallback: case-fold and normalize underscores to hyphens.
+            # Covers GFM↔Goldmark slug mismatch (underscore vs hyphen) and
+            # case-preserving platforms like MediaWiki/Wikipedia whose
+            # fragments retain original case (e.g. #Multi-head_attention).
+            fuzzy = req_name.lower().replace("_", "-")
             if fuzzy != req_name and fuzzy in slug_to_idx:
                 idx = slug_to_idx[fuzzy]
                 sec = sections[idx]
