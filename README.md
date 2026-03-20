@@ -60,6 +60,160 @@ Lightweight HTTP fetch without browser overhead:
 - **JSON / XML / plain text** - Returns raw content with YAML frontmatter metadata
 - **Citation retrieval** - `citation=4` or `citation=[1,3,8]` returns specific numbered references from MediaWiki pages, with bibliography resolution for author-date shorthand
 
+### Sample Output
+
+**Section discovery** — lightweight table of contents with anchor slugs:
+
+```
+>>> web_fetch_sections("https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/User-Agent")
+---
+title: User-Agent header
+source: https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/User-Agent
+sections:
+  - User-Agent header (#user-agent-header)
+    - Syntax (#syntax)
+      - Directives (#directives)
+    - Firefox UA string (#firefox-ua-string)
+    - Chrome UA string (#chrome-ua-string)
+    - Crawler and bot UA strings (#crawler-and-bot-ua-strings)
+    - Specifications (#specifications)
+    - See also (#see-also)
+---
+```
+
+**Section extraction** — fetch a specific section by name:
+
+```
+>>> web_fetch_direct("https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/User-Agent", section="Syntax")
+---
+title: User-Agent header
+source: https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/User-Agent
+# User-Agent header > Syntax
+section: Syntax
+---
+
+## Syntax
+
+    User-Agent: <product> / <product-version> <comment>
+
+Common format for web browsers:
+
+    User-Agent: Mozilla/5.0 (<system-information>) <platform> (<platform-details>) <extensions>
+```
+
+**HTML page with truncation** — frontmatter includes a section TOC for follow-up requests:
+
+```
+>>> web_fetch_direct("https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/User-Agent", max_tokens=300)
+---
+title: User-Agent header
+source: https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/User-Agent
+truncated: Full page is 11.0 KB (~2,809 tokens), showing first ~300 tokens. ...
+sections:
+  - User-Agent header
+    - Syntax
+      - Directives
+    - Firefox UA string
+    - Chrome UA string
+    - Specifications
+    - See also
+---
+
+# User-Agent header
+
+The HTTP **User-Agent** request header is a characteristic string
+that lets servers and network peers identify the application,
+operating system, vendor, and/or version of the requesting user agent.
+...
+```
+
+**JSON endpoint** — returns raw content with type metadata:
+
+```
+>>> web_fetch_direct("https://httpbin.org/json")
+---
+title: json
+source: https://httpbin.org/json
+content_type: json
+---
+
+{
+  "slideshow": {
+    "author": "Yours Truly",
+    "title": "Sample Slide Show"
+  }
+}
+```
+
+**Wikipedia full page** — when truncated, frontmatter includes a section table of contents for follow-up requests:
+
+```
+>>> web_fetch_direct("https://en.wikipedia.org/wiki/42_(number)", max_tokens=300)
+---
+title: 42 (number)
+source: https://en.wikipedia.org/wiki/42_(number)
+site: Wikipedia
+truncated: Full page is 27.4 KB (~7,019 tokens), showing first ~300 tokens. ...
+sections:
+  - Mathematics
+  - Wisdom literature, religion, and philosophy
+  - Popular culture
+    - The Hitchhiker's Guide to the Galaxy
+    - Jackie Robinson
+    - Japan
+  - References
+  - External links
+---
+
+For other uses, see 42.
+
+Natural number
+...
+```
+
+**Wikipedia section via URL fragment** — resolves `#fragment` against the heading tree, with inline `[^N]` citation markers:
+
+```
+>>> web_fetch_direct("https://en.wikipedia.org/wiki/42_(number)#The_Hitchhiker%27s_Guide_to_the_Galaxy")
+---
+title: 42 (number)
+source: https://en.wikipedia.org/wiki/42_(number)#The_Hitchhiker%27s_Guide_to_the_Galaxy
+site: Wikipedia
+# Popular culture > The Hitchhiker's Guide to the Galaxy
+section: The Hitchhiker's Guide to the Galaxy
+matched_fragment: "#The_Hitchhiker%27s_Guide_to_the_Galaxy"
+---
+
+### The Hitchhiker's Guide to the Galaxy
+
+The number 42 is, in *The Hitchhiker's Guide to the Galaxy* by Douglas Adams,
+the "Answer to the Ultimate Question of Life, the Universe, and Everything",
+calculated by an enormous supercomputer named Deep Thought over a period of
+7.5 million years. Unfortunately, no one knows what the question is...
+
+The Ultimate Question "What do you get when you multiply six by nine"[^14] is
+found by Arthur Dent and Ford Prefect in the second book of the series,
+*The Restaurant at the End of the Universe*.
+
+Google also has a calculator easter egg when one searches "the answer to the
+ultimate question of life, the universe, and everything." Once typed, the
+calculator answers with the number 42.[^15]
+```
+
+**Citation retrieval** — follow up with specific `[^N]` references:
+
+```
+>>> web_fetch_direct("https://en.wikipedia.org/wiki/42_(number)", citation=[14, 15])
+---
+title: 42 (number)
+source: https://en.wikipedia.org/wiki/42_(number)
+cite_only: True
+---
+
+[^14]: ["Mathematical Fiction: Hitchhiker's Guide to the Galaxy"](http://kasmana.people.cofc.edu/MATHFICT/mfview.php?callnumber=mf458)
+[^15]: ["17 amazing Google Easter eggs"](https://www.cbsnews.com/pictures/17-amazing-google-easter-eggs/2/)
+```
+
 ## Setup
 
 ### Kagi API Key (for search/summarize tools)
