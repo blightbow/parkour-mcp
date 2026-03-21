@@ -17,14 +17,18 @@ All tool names vary by profile (see [Profile Options](#profile-options)).
 - **WebFetchDirect** / **web_fetch_direct** - Fetch raw content without JavaScript rendering (HTML, JSON, XML, plain text)
 - **WebFetchSections** / **web_fetch_sections** - List section headings and anchor slugs for a web page
 
+### Academic Papers
+- **SemanticScholar** / **semantic_scholar** - Search and retrieve academic paper data from Semantic Scholar (search, paper details, references, authors)
+
 ### Shared Features
 
 Both fetch tools share these capabilities:
 
 - **MediaWiki fast path** - Wiki URLs (`/wiki/...`) are detected and fetched via the MediaWiki API with a [Wikimedia-compliant User-Agent](https://meta.wikimedia.org/wiki/User-Agent_policy), bypassing the browser or HTTP entirely. Returns clean markdown with YAML frontmatter including site name and generator metadata. A single-entry page cache avoids redundant API calls when multiple tools access the same page.
+- **Semantic Scholar fast path** - `semanticscholar.org/paper/` URLs are intercepted and served via the S2 Graph API, bypassing CAPTCHA-blocked web pages. Returns structured paper data with YAML frontmatter.
 - **Section extraction** - Use the `section` parameter with a heading name (or list of names) to extract specific sections. Supports disambiguation for duplicate heading names.
 - **Fragment resolution** - URL fragments (e.g. `#section-name`) are resolved against the heading tree. Fuzzy matching handles cross-platform slug differences: case folding, underscore↔hyphen normalization (GFM vs Goldmark), and percent-encoded characters like `%27` (apostrophes).
-- **Citation extraction** (MediaWiki) - Inline citations appear as `[^N]` footnote markers in the markdown output. Use the `citation` parameter to retrieve specific numbered references. Author-date shorthand (e.g. "Simpson 2003, p. 8") is automatically resolved against the article's bibliography via `#CITEREF` links.
+- **Footnote extraction** (MediaWiki) - Inline footnotes appear as `[^N]` markers in the markdown output. Use the `footnotes` parameter to retrieve specific numbered entries. Author-date shorthand (e.g. "Simpson 2003, p. 8") is automatically resolved against the article's bibliography via `#CITEREF` links.
 - **Markdown output with YAML frontmatter** - Returns structured output with title, source URL, and truncation hints. When content is truncated, frontmatter includes a table of contents so the caller can request specific sections.
 - **Whitespace normalization** - Non-breaking spaces, HTML entities (`&nbsp;`), and exotic Unicode whitespace in headings and titles are normalized to plain ASCII spaces for reliable section matching.
 
@@ -58,7 +62,7 @@ Lightweight HTTP fetch without browser overhead:
 
 - **HTML pages** - Converts to markdown with section support
 - **JSON / XML / plain text** - Returns raw content with YAML frontmatter metadata
-- **Citation retrieval** - `citation=4` or `citation=[1,3,8]` returns specific numbered references from MediaWiki pages, with bibliography resolution for author-date shorthand
+- **Footnote retrieval** - `footnotes=4` or `footnotes=[1,3,8]` returns specific numbered entries from MediaWiki pages, with bibliography resolution for author-date shorthand
 
 ### Sample Output
 
@@ -171,7 +175,7 @@ Natural number
 ...
 ```
 
-**Wikipedia section via URL fragment** — resolves `#fragment` against the heading tree, with inline `[^N]` citation markers:
+**Wikipedia section via URL fragment** — resolves `#fragment` against the heading tree, with inline `[^N]` footnote markers:
 
 ```
 >>> web_fetch_direct("https://en.wikipedia.org/wiki/42_(number)#The_Hitchhiker%27s_Guide_to_the_Galaxy")
@@ -200,18 +204,60 @@ ultimate question of life, the universe, and everything." Once typed, the
 calculator answers with the number 42.[^15]
 ```
 
-**Citation retrieval** — follow up with specific `[^N]` references:
+**Footnote retrieval** — follow up with specific `[^N]` entries:
 
 ```
->>> web_fetch_direct("https://en.wikipedia.org/wiki/42_(number)", citation=[14, 15])
+>>> web_fetch_direct("https://en.wikipedia.org/wiki/42_(number)", footnotes=[14, 15])
 ---
 title: 42 (number)
 source: https://en.wikipedia.org/wiki/42_(number)
-cite_only: True
+footnotes_only: True
 ---
 
 [^14]: ["Mathematical Fiction: Hitchhiker's Guide to the Galaxy"](http://kasmana.people.cofc.edu/MATHFICT/mfview.php?callnumber=mf458)
 [^15]: ["17 amazing Google Easter eggs"](https://www.cbsnews.com/pictures/17-amazing-google-easter-eggs/2/)
+```
+
+**Semantic Scholar paper lookup** — structured paper data via API:
+
+```
+>>> semantic_scholar(action="paper", query="204e3073870fae3d05bcbc2f6a8e263d9b72e776")
+
+# Attention is All you Need
+
+**Authors:** Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszkoreit, ...
+
+**Year:** 2017
+**Venue:** Neural Information Processing Systems
+**Published:** 2017-06-12
+
+**Citations:** 169,982 (4,542 influential) | **References:** 41
+
+**ArXiv:** [1706.03762](https://arxiv.org/abs/1706.03762)
+
+## TL;DR
+
+A new simple network architecture, the Transformer, based solely on
+attention mechanisms, dispensing with recurrence and convolutions entirely...
+
+## Abstract
+
+The dominant sequence transduction models are based on complex recurrent
+or convolutional neural networks in an encoder-decoder configuration...
+```
+
+**Semantic Scholar URL interception** — S2 URLs are automatically handled by fetch tools:
+
+```
+>>> web_fetch_direct("https://www.semanticscholar.org/paper/Attention-Is-All-You-Need-Vaswani-Shazeer/204e3073870fae3d05bcbc2f6a8e263d9b72e776")
+---
+title: Attention is All you Need
+source: https://www.semanticscholar.org/paper/204e3073870fae3d05bcbc2f6a8e263d9b72e776
+api: Semantic Scholar
+---
+
+# Attention is All you Need
+...
 ```
 
 ## Setup
@@ -230,6 +276,21 @@ echo "your-api-key" > ~/.config/kagi/api_key
 ```
 
 Get your API key at https://kagi.com/settings?p=api
+
+### Semantic Scholar API Key (optional)
+
+The SemanticScholar tool works without an API key but shares a global rate limit pool. For your own rate limit, get a free key and configure it:
+
+```bash
+# Option 1: Environment variable
+export S2_API_KEY="your-api-key"
+
+# Option 2: Config file
+mkdir -p ~/.config/kagi
+echo "your-api-key" > ~/.config/kagi/s2_api_key
+```
+
+Get your free API key at https://www.semanticscholar.org/product/api#api-key-form
 
 ### Browser Engine (for web_fetch_js)
 
@@ -297,8 +358,8 @@ The `--profile` argument adjusts tool names and descriptions for the target clie
 
 | Profile | Target | Tool Names |
 |---------|--------|------------|
-| `desktop` (default) | Claude Desktop | `kagi_search`, `kagi_summarize`, `web_fetch_js`, `web_fetch_direct`, `web_fetch_sections` |
-| `code` | Claude Code | `KagiSearch`, `KagiSummarize`, `WebFetchJS`, `WebFetchDirect`, `WebFetchSections` |
+| `desktop` (default) | Claude Desktop | `kagi_search`, `kagi_summarize`, `web_fetch_js`, `web_fetch_direct`, `web_fetch_sections`, `semantic_scholar` |
+| `code` | Claude Code | `KagiSearch`, `KagiSummarize`, `WebFetchJS`, `WebFetchDirect`, `WebFetchSections`, `SemanticScholar` |
 
 The `desktop` profile (snake_case) is the default as it aligns with MCP ecosystem conventions. Claude Code's PascalCase naming is the exception, not the norm.
 
