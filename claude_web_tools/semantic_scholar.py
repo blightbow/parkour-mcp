@@ -6,7 +6,9 @@ import os
 import re
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Annotated, Optional
+
+from pydantic import Field
 
 import httpx
 
@@ -363,31 +365,34 @@ def _format_snippets(data: dict, paper_id: Optional[str] = None) -> str:
 
 
 async def semantic_scholar(
-    action: str,
-    query: str,
-    limit: int = 10,
-    offset: int = 0,
-    fields: Optional[str] = None,
-    paper_id: Optional[str] = None,
+    action: Annotated[str, Field(
+        description=(
+            "The operation to perform. "
+            "search: find papers by keywords. "
+            "paper: get details by paper ID, DOI:10.xxx, ARXIV:xxx, or S2 URL. "
+            "references: list papers cited by a paper. "
+            "author_search: find authors by name. "
+            "author: get author details and top papers by author ID. "
+            "snippets: search within paper body text (~500-word excerpts by section)."
+        ),
+    )],
+    query: Annotated[str, Field(
+        description="Search terms (search/snippets), paper ID or DOI/ARXIV/PMID prefix (paper/references), or author ID/name (author/author_search).",
+    )],
+    limit: Annotated[int, Field(
+        description="Maximum results to return (default 10, max 100 for most actions, max 1000 for snippets).",
+    )] = 10,
+    offset: Annotated[int, Field(
+        description="Starting position for pagination.",
+    )] = 0,
+    fields: Annotated[Optional[str], Field(
+        description="Comma-separated S2 API field names to override defaults (advanced, rarely needed).",
+    )] = None,
+    paper_id: Annotated[Optional[str], Field(
+        description="Paper ID to scope snippet search to a single paper. Accepts S2 hash, DOI:10.xxx, ARXIV:xxx, or S2 URL. Only used by snippets action.",
+    )] = None,
 ) -> str:
-    """Search and retrieve academic paper data from Semantic Scholar.
-
-    Actions:
-    - "search": Search papers by keywords. query = search terms.
-    - "paper": Get paper details (includes citation and influential citation counts). query = S2 paper ID, DOI:10.xxx, ARXIV:2301.xxx, PMID:xxx, or S2 URL.
-    - "references": Get papers referenced by a paper. query = paper ID or DOI/ARXIV/PMID prefix.
-    - "author_search": Search authors by name. query = author name.
-    - "author": Get author details and top papers. query = S2 author ID.
-    - "snippets": Search within paper body text. query = search terms. Optionally scope to a single paper with paper_id.
-
-    Args:
-        action: The operation to perform (search, paper, references, author_search, author, snippets)
-        query: Search terms, paper ID, or author ID depending on action
-        limit: Maximum results to return (default 10, max varies by endpoint)
-        offset: Starting position for pagination (default 0)
-        fields: Comma-separated field names to override defaults (advanced)
-        paper_id: Paper ID to scope snippet search (only used by snippets action)
-    """
+    """Search and retrieve academic paper data from Semantic Scholar."""
     # Resolve S2 URLs to paper IDs for paper/references/snippets actions
     if action in ("paper", "references", "snippets"):
         detected_id = _detect_s2_url(query)
