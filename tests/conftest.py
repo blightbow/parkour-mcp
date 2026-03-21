@@ -1,6 +1,17 @@
 """Shared fixtures for claude-web-tools tests."""
 
+import sys
+
 import pytest
+
+import claude_web_tools.semantic_scholar
+_s2_mod = sys.modules["claude_web_tools.semantic_scholar"]
+
+
+@pytest.fixture(autouse=True)
+def _disable_s2_rate_limit(monkeypatch):
+    """Disable the 1s rate limiter in unit tests."""
+    monkeypatch.setattr(_s2_mod, "_S2_MIN_INTERVAL", 0.0)
 
 
 # Sample markdown document used across multiple test modules
