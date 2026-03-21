@@ -1,8 +1,10 @@
 """Semantic Scholar API integration for academic paper lookup."""
 
+import asyncio
 import logging
 import os
 import re
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -12,6 +14,15 @@ from .common import _API_HEADERS
 from .markdown import _build_frontmatter
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Rate limiter — 1 request per second to respect S2 upstream policy.
+# Uses a lock so concurrent MCP calls (parallel tool use) are serialized
+# and the second caller sleeps only for the remaining window.
+# ---------------------------------------------------------------------------
+_s2_rate_lock = asyncio.Lock()
+_s2_last_request: float = 0.0
+_S2_MIN_INTERVAL = 1.0  # seconds
 
 S2_BASE_URL = "https://api.semanticscholar.org/graph/v1"
 S2_CONFIG_PATH = Path.home() / ".config" / "kagi" / "s2_api_key"
@@ -72,8 +83,17 @@ async def _s2_request(path: str, params: Optional[dict] = None) -> dict | str:
     """Core HTTP call to Semantic Scholar API.
 
     Returns parsed JSON dict on success, or an error string on failure.
+    Enforces a 1-second minimum interval between requests.
     """
+    global _s2_last_request
     url = f"{S2_BASE_URL}{path}"
+
+    async with _s2_rate_lock:
+        elapsed = time.monotonic() - _s2_last_request
+        if elapsed < _S2_MIN_INTERVAL:
+            await asyncio.sleep(_S2_MIN_INTERVAL - elapsed)
+        _s2_last_request = time.monotonic()
+
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.get(url, headers=_s2_headers(), params=params)
