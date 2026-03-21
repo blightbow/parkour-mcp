@@ -20,10 +20,10 @@ mcp = FastMCP("claude-web-tools")
 # desktop profile: snake_case (web_search, web_fetch, web_fetch_js)
 TOOL_NAMES = {
     "search": {"code": "KagiSearch", "desktop": "kagi_search"},
-    "summarize": {"code": "KagiSummarize", "desktop": "kagi_summarize"},
-    "web_fetch_js": {"code": "WebFetchJS", "desktop": "web_fetch_js"},
-    "web_fetch_direct": {"code": "WebFetchDirect", "desktop": "web_fetch_direct"},
     "web_fetch_sections": {"code": "WebFetchSections", "desktop": "web_fetch_sections"},
+    "web_fetch_direct": {"code": "WebFetchDirect", "desktop": "web_fetch_direct"},
+    "web_fetch_js": {"code": "WebFetchJS", "desktop": "web_fetch_js"},
+    "summarize": {"code": "KagiSummarize", "desktop": "kagi_summarize"},
     "semantic_scholar": {"code": "SemanticScholar", "desktop": "semantic_scholar"},
 }
 
@@ -31,11 +31,11 @@ TOOL_NAMES = {
 # code profile: PascalCase built-in tool names (WebSearch, WebFetch)
 # desktop profile: snake_case built-in tool names (web_search, web_fetch)
 PROFILE_VARS = {
-    "code": {"search": "WebSearch", "fetch": "WebFetch"},
-    "desktop": {"search": "web_search", "fetch": "web_fetch"},
+    "code": {"search": "WebSearch", "fetch": "WebFetch", "fetch_direct": "WebFetchDirect", "summarize": "KagiSummarize"},
+    "desktop": {"search": "web_search", "fetch": "web_fetch", "fetch_direct": "web_fetch_direct", "summarize": "kagi_summarize"},
 }
 
-# Tool description templates — {search} and {fetch} are replaced per-profile.
+# Tool description templates — profile vars are replaced per-profile.
 # Per-profile overrides in TOOL_DESCRIPTION_OVERRIDES replace the whole value.
 TOOL_DESCRIPTION_TEMPLATES = {
     "search": """Search the web using Kagi's curated search index.
@@ -45,10 +45,25 @@ results. Kagi's index is independently curated, resistant to SEO spam, and
 may surface different sources. Returns search results with snippets and
 timestamps, plus related search suggestions.""",
 
-    "summarize": """Summarize content from a URL or text using Kagi's Universal Summarizer.
+    "web_fetch_sections": """Understand a document's composition by listing its section headings.
 
-Supports web pages, PDFs, YouTube videos, audio files, and documents.
-Use this when {fetch} fails due to agent blacklisting or access restrictions.""",
+A lightweight way to survey what a page covers before committing to a full
+fetch. Returns a section tree with heading names and anchor slugs. Use this
+to plan targeted extractions — identify the sections you need, then fetch
+them individually with {fetch_direct}'s section parameter. If the URL
+contains a fragment (e.g. #section-name), resolves it against the heading
+tree.
+
+For light summarization, prefer this tool over {summarize} — the section
+tree reveals document structure and scope at minimal cost. Reserve
+{summarize} for when you need a prose summary of the content itself.""",
+
+    "web_fetch_direct": """Fetch a URL directly from the local machine without JavaScript rendering.
+
+Returns markdown. Use the section parameter to extract specific sections by
+heading name. For Wikipedia/MediaWiki pages, inline footnotes appear as [^N]
+markers; use the footnotes parameter to retrieve specific entries by number.
+Supports HTML, plain text, JSON, and XML content types.""",
 
     "web_fetch_js": """Fetch and interact with web content using a headless browser.
 
@@ -69,12 +84,10 @@ Actions format (JSON array of objects):
 
 Returns markdown with interactive elements annotated for follow-up actions.""",
 
-    "web_fetch_direct": """Fetch a URL directly from the local machine without JavaScript rendering.
+    "summarize": """Summarize content from a URL or text using Kagi's Universal Summarizer.
 
-Returns markdown. Use the section parameter to extract specific sections by
-heading name. For Wikipedia/MediaWiki pages, inline footnotes appear as [^N]
-markers; use the footnotes parameter to retrieve specific entries by number.
-Supports HTML, plain text, JSON, and XML content types.""",
+Supports web pages, PDFs, YouTube videos, audio files, and documents.
+Use this when {fetch} fails due to agent blacklisting or access restrictions.""",
 
     "semantic_scholar": """Search and retrieve academic paper data from Semantic Scholar.
 
@@ -90,13 +103,6 @@ The snippets action searches within paper body text (~500-word excerpts
 tagged by section). Use paper_id to scope to a single paper, or omit for
 corpus-wide search. Example: action="snippets", query="multi-head attention",
 paper_id="204e3073870fae3d05bcbc2f6a8e263d9b72e776".""",
-
-    "web_fetch_sections": """List the section headings of a web page.
-
-A lightweight alternative to fetching full page content. Returns a section
-tree with heading names and anchor slugs. Use this to explore document
-structure before fetching specific sections. If the URL contains a fragment
-(e.g. #section-name), resolves it against the heading tree.""",
 }
 
 # Per-profile description overrides (replaces the template entirely)
@@ -148,10 +154,10 @@ def main():
     # Register all tools with profile-specific names and descriptions
     tools = [
         ("search", search),
-        ("summarize", summarize),
-        ("web_fetch_js", web_fetch_js),
-        ("web_fetch_direct", web_fetch_direct),
         ("web_fetch_sections", web_fetch_sections),
+        ("web_fetch_direct", web_fetch_direct),
+        ("web_fetch_js", web_fetch_js),
+        ("summarize", summarize),
         ("semantic_scholar", semantic_scholar),
     ]
     for internal_name, func in tools:
