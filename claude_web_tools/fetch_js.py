@@ -12,7 +12,7 @@ from .common import _FETCH_HEADERS
 from .markdown import html_to_markdown
 from ._pipeline import (
     _extract_fragment, _normalize_sections, _resolve_fragment_source,
-    _mediawiki_fast_path, _process_markdown_sections,
+    _mediawiki_fast_path, _s2_fast_path, _process_markdown_sections,
 )
 
 logger = logging.getLogger(__name__)
@@ -171,7 +171,31 @@ async def _extract_interactive_elements(page, max_elements: int = 25) -> tuple[l
                 "label": text.strip()[:50]
             })
 
-    # Extract navigation links (for tab/menu navigation)
+    # Extract TOC / anchor links (in-page navigation to sections)
+    toc_links = await page.query_selector_all(
+        "[class*='toc'] a[href^='#'], nav a[href^='#'], "
+        "[role='navigation'] a[href^='#'], .sidebar a[href^='#']"
+    )
+    seen_toc_hrefs: set[str] = set()
+    for link in toc_links:
+        if not await link.is_visible():
+            continue
+        try:
+            text = await link.inner_text()
+            href = await link.get_attribute("href")
+            if text and text.strip() and href and href not in seen_toc_hrefs:
+                seen_toc_hrefs.add(href)
+                selector = await _get_unique_selector(link)
+                elements.append({
+                    "type": "link",
+                    "selector": selector,
+                    "label": text.strip()[:120],
+                    "href": href
+                })
+        except Exception:
+            pass
+
+    # Extract navigation links (for tab/menu navigation, excluding TOC anchors)
     nav_links = await page.query_selector_all("nav a, [role=navigation] a, .nav a, .tabs a, .menu a")
     for link in nav_links:
         if not await link.is_visible():
@@ -180,6 +204,9 @@ async def _extract_interactive_elements(page, max_elements: int = 25) -> tuple[l
             text = await link.inner_text()
             href = await link.get_attribute("href")
             if text and text.strip() and href:
+                # Skip anchor links already captured as TOC links
+                if href.startswith("#") and href in seen_toc_hrefs:
+                    continue
                 selector = await _get_unique_selector(link)
                 elements.append({
                     "type": "link",
@@ -225,6 +252,14 @@ async def web_fetch_js(
     if fragment and not section_names:
         section_names = [fragment]
     source_url, fragment_warning = _resolve_fragment_source(url, fragment, section)
+
+    # --- Semantic Scholar fast path (before launching browser) ---
+    try:
+        result = await _s2_fast_path(url)
+        if result is not None:
+            return result
+    except Exception:
+        pass
 
     # --- MediaWiki fast path (before launching browser) ---
     try:

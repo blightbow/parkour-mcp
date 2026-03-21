@@ -8,6 +8,7 @@ from mcp.server.fastmcp import FastMCP
 from .kagi import search, summarize
 from .fetch_js import web_fetch_js
 from .fetch_direct import web_fetch_direct, web_fetch_sections
+from .semantic_scholar import semantic_scholar
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -23,6 +24,7 @@ TOOL_NAMES = {
     "web_fetch_js": {"code": "WebFetchJS", "desktop": "web_fetch_js"},
     "web_fetch_direct": {"code": "WebFetchDirect", "desktop": "web_fetch_direct"},
     "web_fetch_sections": {"code": "WebFetchSections", "desktop": "web_fetch_sections"},
+    "semantic_scholar": {"code": "SemanticScholar", "desktop": "semantic_scholar"},
 }
 
 # Profile variables for description templates
@@ -70,9 +72,17 @@ Returns markdown with interactive elements annotated for follow-up actions.""",
     "web_fetch_direct": """Fetch a URL directly from the local machine without JavaScript rendering.
 
 Returns markdown. Use the section parameter to extract specific sections by
-heading name. For Wikipedia/MediaWiki pages, inline citations appear as [^N]
-markers; use the citation parameter to retrieve specific references by number.
+heading name. For Wikipedia/MediaWiki pages, inline footnotes appear as [^N]
+markers; use the footnotes parameter to retrieve specific entries by number.
 Supports HTML, plain text, JSON, and XML content types.""",
+
+    "semantic_scholar": """Search and retrieve academic paper data from Semantic Scholar.
+
+Use this for academic paper lookups: search by keywords, get paper details
+(abstract, authors, citation counts, references), and find authors. Paper
+details include total and influential citation counts. Accepts paper IDs,
+DOI:10.xxx, ARXIV:2301.xxx, or S2 URLs. Semantic Scholar URLs are also
+handled automatically by {fetch} tools.""",
 
     "web_fetch_sections": """List the section headings of a web page.
 
@@ -91,8 +101,8 @@ Unlike {fetch}, returns full unsummarized page text as markdown. Use this
 when you need to extract specific data, compare sections, or preserve details
 that summarization would discard. Use the section parameter to extract
 specific sections by heading name. For Wikipedia/MediaWiki pages, inline
-citations appear as [^N] markers; use the citation parameter to retrieve
-specific references by number.
+footnotes appear as [^N] markers; use the footnotes parameter to retrieve
+specific entries by number.
 
 Supports HTML, plain text, JSON, and XML content types.""",
         "desktop": """Fetch a URL directly from the local machine without JavaScript rendering.
@@ -103,8 +113,8 @@ errors (target site blocking data-center IPs) or rejects the tool use with
 PERMISSIONS_ERROR (URL not yet present in the conversation context).
 
 Returns markdown. Use the section parameter to extract specific sections by
-heading name. For Wikipedia/MediaWiki pages, inline citations appear as [^N]
-markers; use the citation parameter to retrieve specific references by number.
+heading name. For Wikipedia/MediaWiki pages, inline footnotes appear as [^N]
+markers; use the footnotes parameter to retrieve specific entries by number.
 Supports HTML, plain text, JSON, and XML content types.""",
     },
 }
@@ -135,6 +145,7 @@ def main():
         ("web_fetch_js", web_fetch_js),
         ("web_fetch_direct", web_fetch_direct),
         ("web_fetch_sections", web_fetch_sections),
+        ("semantic_scholar", semantic_scholar),
     ]
     for internal_name, func in tools:
         name = TOOL_NAMES[internal_name][args.profile]

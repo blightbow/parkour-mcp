@@ -12,7 +12,7 @@ from .markdown import (
 )
 from ._pipeline import (
     _extract_fragment, _normalize_sections, _resolve_fragment_source,
-    _mediawiki_fast_path, _process_markdown_sections,
+    _mediawiki_fast_path, _s2_fast_path, _process_markdown_sections,
     _cached_mediawiki_fetch,
 )
 from .mediawiki import _mediawiki_html_to_markdown, _extract_citations, _format_citations
@@ -24,7 +24,7 @@ async def web_fetch_direct(
     url: str,
     max_tokens: int = 5000,
     section: Optional[Union[str, list[str]]] = None,
-    citation: Optional[Union[int, list[int]]] = None,
+    footnotes: Optional[Union[int, list[int]]] = None,
 ) -> str:
     """Fetch raw content from a URL without JavaScript rendering.
 
@@ -32,14 +32,15 @@ async def web_fetch_direct(
     and XML content types. For HTML pages, use the section parameter to extract
     specific sections by heading name.
 
-    For MediaWiki pages (Wikipedia, etc.), use the citation parameter to
-    retrieve specific numbered references (e.g. citation=4 or citation=[1,3,8]).
+    For MediaWiki pages (Wikipedia, etc.), inline footnotes appear as [^N]
+    markers; use the footnotes parameter to retrieve specific entries
+    (e.g. footnotes=4 or footnotes=[1,3,8]).
 
     Args:
         url: The URL to fetch
         max_tokens: Limit on content length in approximate token count (default 5000)
         section: Section name or list of section names to extract from the page
-        citation: Citation number or list of numbers to retrieve from the page
+        footnotes: Footnote number or list of numbers to retrieve from the page
     """
     # Extract fragment from URL (e.g. #section-name) as implicit section request
     url, fragment = _extract_fragment(url)
@@ -48,35 +49,43 @@ async def web_fetch_direct(
         section_names = [fragment]
     source_url, fragment_warning = _resolve_fragment_source(url, fragment, section)
 
-    # --- Citation-only path (MediaWiki pages) ---
-    if citation is not None:
-        requested = [citation] if isinstance(citation, int) else list(citation)
+    # --- Footnote-only path (MediaWiki pages) ---
+    if footnotes is not None:
+        requested = [footnotes] if isinstance(footnotes, int) else list(footnotes)
         try:
             wiki_info, wiki_page = await _cached_mediawiki_fetch(url)
             if wiki_info and wiki_page:
-                all_citations = _extract_citations(wiki_page["html"])
-                if not all_citations:
-                    return f"Error: No citations found for {url}"
-                # Filter to requested citation numbers
-                selected = [c for c in all_citations if c["n"] in requested]
+                all_footnotes = _extract_citations(wiki_page["html"])
+                if not all_footnotes:
+                    return f"Error: No footnotes found for {url}"
+                # Filter to requested footnote numbers
+                selected = [c for c in all_footnotes if c["n"] in requested]
                 not_found = sorted(set(requested) - {c["n"] for c in selected})
                 fm_entries = {
                     "title": wiki_page["title"],
                     "source": source_url,
-                    "cite_only": True,
+                    "footnotes_only": True,
                 }
                 if not_found:
-                    available = sorted(c["n"] for c in all_citations)
+                    available = sorted(c["n"] for c in all_footnotes)
                     # Show a compact range hint
-                    fm_entries["citations_not_found"] = not_found
-                    fm_entries["citations_available"] = f"1-{available[-1]}"
+                    fm_entries["footnotes_not_found"] = not_found
+                    fm_entries["footnotes_available"] = f"1-{available[-1]}"
                 fm = _build_frontmatter(fm_entries)
                 if selected:
                     return fm + "\n\n" + _format_citations(selected)
                 return fm
         except Exception:
             pass
-        return f"Error: Citation retrieval requires a MediaWiki page (Wikipedia, etc.)"
+        return f"Error: Footnote retrieval requires a MediaWiki page (Wikipedia, etc.)"
+
+    # --- Semantic Scholar fast path ---
+    try:
+        result = await _s2_fast_path(url)
+        if result is not None:
+            return result
+    except Exception:
+        pass
 
     # --- MediaWiki fast path (before HTTP fetch) ---
     try:
@@ -166,6 +175,18 @@ async def web_fetch_sections(url: str) -> str:
     original_url = url
     url, fragment = _extract_fragment(url)
     section_names = [fragment] if fragment else None
+
+    # --- Semantic Scholar fast path (sections not applicable for API data) ---
+    from .semantic_scholar import _detect_s2_url
+    if _detect_s2_url(url):
+        fm = _build_frontmatter({
+            "title": "Semantic Scholar paper",
+            "source": original_url,
+            "api": "Semantic Scholar",
+            "note": "Section listing is not applicable for API-sourced paper data. "
+                    "Use WebFetchDirect or SemanticScholar tool for full content.",
+        })
+        return fm
 
     # --- MediaWiki fast path (uses single-entry cache) ---
     try:

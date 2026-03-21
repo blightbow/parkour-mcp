@@ -16,6 +16,7 @@ from .markdown import (
     _apply_truncation,
 )
 from .mediawiki import _detect_mediawiki, _fetch_mediawiki_page, _mediawiki_html_to_markdown
+from .semantic_scholar import _detect_s2_url, _fetch_s2_paper
 
 logger = logging.getLogger(__name__)
 
@@ -144,6 +145,26 @@ async def _mediawiki_fast_path(
     return _process_markdown_sections(
         markdown_content, section_names, max_tokens, frontmatter_entries,
     )
+
+
+# ---------------------------------------------------------------------------
+# Semantic Scholar fast path
+# ---------------------------------------------------------------------------
+
+async def _s2_fast_path(url: str) -> Optional[str]:
+    """Attempt to fetch a Semantic Scholar paper via the API.
+
+    Returns formatted paper details on success, or None to signal fallback.
+    """
+    paper_id = _detect_s2_url(url)
+    if not paper_id:
+        return None
+
+    result = await _fetch_s2_paper(paper_id)
+    # _fetch_s2_paper always returns a string; if it starts with "Error:"
+    # the API call failed — still return it to avoid falling through to
+    # an HTTP fetch that would hit CAPTCHA.
+    return result
 
 
 # ---------------------------------------------------------------------------

@@ -136,3 +136,136 @@ Second paragraph of plain text content.
 
 Third paragraph with enough words to pass filters.
 """
+
+# Semantic Scholar API response fixtures
+
+S2_PAPER_SEARCH_RESPONSE = {
+    "total": 1542,
+    "offset": 0,
+    "data": [
+        {
+            "paperId": "204e3073870fae3d05bcbc2f6a8e263d9b72e776",
+            "title": "Attention is All you Need",
+            "year": 2017,
+            "authors": [
+                {"authorId": "1234", "name": "Ashish Vaswani"},
+                {"authorId": "5678", "name": "Noam Shazeer"},
+            ],
+            "citationCount": 120000,
+            "referenceCount": 44,
+            "publicationTypes": ["JournalArticle", "Conference"],
+            "journal": {"name": "Advances in Neural Information Processing Systems"},
+            "openAccessPdf": {"url": "https://arxiv.org/pdf/1706.03762"},
+            "tldr": {"model": "tldr@v2", "text": "A new network architecture based solely on attention mechanisms."},
+        },
+        {
+            "paperId": "abcdef1234567890abcdef1234567890abcdef12",
+            "title": "BERT: Pre-training of Deep Bidirectional Transformers",
+            "year": 2019,
+            "authors": [
+                {"authorId": "9999", "name": "Jacob Devlin"},
+            ],
+            "citationCount": 85000,
+            "referenceCount": 52,
+            "publicationTypes": ["JournalArticle"],
+            "journal": {"name": "NAACL"},
+            "openAccessPdf": None,
+            "tldr": None,
+        },
+    ],
+}
+
+S2_PAPER_DETAIL_RESPONSE = {
+    "paperId": "204e3073870fae3d05bcbc2f6a8e263d9b72e776",
+    "title": "Attention is All you Need",
+    "year": 2017,
+    "authors": [
+        {"authorId": "1234", "name": "Ashish Vaswani"},
+        {"authorId": "5678", "name": "Noam Shazeer"},
+    ],
+    "abstract": "The dominant sequence transduction models are based on complex recurrent or convolutional neural networks.",
+    "venue": "NeurIPS",
+    "citationCount": 120000,
+    "referenceCount": 44,
+    "publicationTypes": ["JournalArticle", "Conference"],
+    "journal": {"name": "Advances in Neural Information Processing Systems"},
+    "externalIds": {
+        "DOI": "10.48550/arXiv.1706.03762",
+        "ArXiv": "1706.03762",
+    },
+    "openAccessPdf": {"url": "https://arxiv.org/pdf/1706.03762"},
+    "tldr": {"model": "tldr@v2", "text": "A new network architecture based solely on attention mechanisms."},
+    "publicationDate": "2017-06-12",
+}
+
+S2_CITATION_RESPONSE = {
+    "total": 120000,
+    "offset": 0,
+    "data": [
+        {
+            "citingPaper": {
+                "paperId": "aaa111aaa111aaa111aaa111aaa111aaa111aaa1",
+                "title": "BERT: Pre-training of Deep Bidirectional Transformers",
+                "year": 2019,
+                "authors": [{"authorId": "9999", "name": "Jacob Devlin"}],
+                "citationCount": 85000,
+                "venue": "NAACL",
+                "contexts": ["Building on the Transformer architecture from [Vaswani et al., 2017]..."],
+            }
+        },
+    ],
+}
+
+S2_REFERENCE_RESPONSE = {
+    "total": 44,
+    "offset": 0,
+    "data": [
+        {
+            "citedPaper": {
+                "paperId": "bbb222bbb222bbb222bbb222bbb222bbb222bbb2",
+                "title": "Neural Machine Translation by Jointly Learning to Align and Translate",
+                "year": 2015,
+                "authors": [{"authorId": "4444", "name": "Dzmitry Bahdanau"}],
+                "citationCount": 25000,
+                "venue": "ICLR",
+                "contexts": [],
+            }
+        },
+    ],
+}
+
+S2_AUTHOR_SEARCH_RESPONSE = {
+    "total": 5,
+    "offset": 0,
+    "data": [
+        {
+            "authorId": "1234",
+            "name": "Ashish Vaswani",
+            "affiliations": ["Google Brain"],
+            "paperCount": 42,
+            "citationCount": 200000,
+            "hIndex": 25,
+        },
+    ],
+}
+
+S2_AUTHOR_DETAIL_RESPONSE = {
+    "authorId": "1234",
+    "name": "Ashish Vaswani",
+    "affiliations": ["Google Brain"],
+    "paperCount": 42,
+    "citationCount": 200000,
+    "hIndex": 25,
+}
+
+S2_AUTHOR_PAPERS_RESPONSE = {
+    "data": [
+        {
+            "paperId": "204e3073870fae3d05bcbc2f6a8e263d9b72e776",
+            "title": "Attention is All you Need",
+            "year": 2017,
+            "citationCount": 120000,
+            "venue": "NeurIPS",
+        },
+    ],
+}
