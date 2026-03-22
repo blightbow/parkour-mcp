@@ -410,3 +410,59 @@ uv run pytest
 # Live integration tests (hits real endpoints)
 uv run pytest -m live
 ```
+
+## FAQ
+
+> Is this project officially maintained by Kagi.com?
+
+No, this is a third-party project.
+
+> Is this project affiliated with Kagi.com?
+
+Only in the sense that they let us use their name if we make it clear that this is a third-party project. The maintainer doesn't receive any form of monetary compensation, direct or indirect. (i.e. no API key kickbacks)
+
+Other than that, we have a shared goal in making the web less enshittified. LLMs hallucinate more when they are forced to draw conclusions from their trained data, and often reach conclusions based on data is already months old. This MCP server is designed to help LLMs investigate the actual research texts and verify sources.
+
+> Will there be support for other search engines?
+
+Kagi is optimized against SEO pollution and a natural fit for research needs. If Kagi isn't your cup of tea, you are encouraged to use this MCP server alongside other servers that expose your preferred search engine(s).
+
+> Do I need to pay for an API key?
+
+**Kagi Tools:** _Yes._ We can't provide prices here because they are subject to change.
+- https://help.kagi.com/kagi/api/summarizer.html
+- https://help.kagi.com/kagi/api/search.html
+
+**Semantic Scholar Tool:** No. The key is optional, and free: https://www.semanticscholar.org/product/api
+
+> Why can't I use Kagi's search API? I have money in my API wallet.
+
+Kagi's search API is currently in closed beta and access is granted on an individual basis. The process is simple, send an e-mail and they will enable your use of the search API. https://help.kagi.com/kagi/api/search.html
+
+> Why is the kagi_summarize tool refusing my request? I have money in my API wallet.
+
+The MCP server automatically locks out the kagi_summarize tool if your balance dips below $1 USD. This is a safeguard against having your search functionality locked out by expensive kagi_summarize calls.
+
+The flag is stored internally and persists until a kagi_search call successfully executes and observes that the balance has gone above $1 again. Restarting the MCP server will also clear the flag.
+
+> My agent developed an addiction to kagi_summarize and drank my entire API balance in one sitting!
+
+You probably shouldn't have auto-approved that tool. Sorry, we can't help.
+
+> Why is the Semantic Scholar tool returning 429 errors about a global rate limit?
+
+Because you are hitting S2's global rate limit. All anonymous API calls for S2 share the same rate limit pool, and the the calls made through this tool are no different.
+
+You can request an API key from S2 [here](https://www.semanticscholar.org/product/api). There is no fee, but approvals are entirely at S2's own discretion.
+
+> Why are batched tool calls against Semantic Scholar so slow?
+
+The S2 API enforces a rate limit of 1s even when your API calls are authenticated. The MCP server queues requests for the SemanticScholar tool and internally throttles them to a 1.25s spacing in order to avoid unnecessary tool retries.
+
+**Do not remove this timeout.** The 1s rate limit is upstream of you and this will make tool calls fail unnecessarily.
+
+> Your MCP server insulted the honor of my family, drained my Kagi API balance to $0, and developed a cult of personality when I connected it to OpenClaw.
+
+We accept no liability, and there is no liability to be accepted. How your prompt stack spends your API balance isn't something we can help with.
+
+Also, why would you connect a tool designed with almost no synthesis of research papers to a MCP server dedicated to research synthesis? 
