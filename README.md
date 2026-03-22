@@ -474,7 +474,7 @@ The S2 API enforces a rate limit of 1s even when your API calls are authenticate
 
 > What about Google Scholar?
 
-Google Scholar does not provide an official API and has comparable coverage of documents that have not been paywalled.
+Google Scholar does not provide an official API. Semantic Scholar has comparable coverage of documents that have not been paywalled.
 
 > Your MCP server insulted the honor of my family, drained my Kagi API balance to $0, and developed a cult of personality when I connected it to OpenClaw.
 
