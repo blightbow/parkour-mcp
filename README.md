@@ -1,38 +1,49 @@
 # Kagi Research MCP
 
-A research synthesis pipeline for MCP. Enables agents to perform targeted content extraction from websites and research papers. Integrates with the APIs for Kagi Search, Kagi Summarize, Semantic Scholar, and MediaWiki. It is primarily designed for Claude Code and Claude Desktops, but should be adaptable to most needs.
+A research synthesis pipeline for MCP. Enables agents to perform targeted content extraction from websites and research papers. Integrates with the APIs for Kagi Search, Kagi Summarize, Semantic Scholar, and MediaWiki. It is primarily designed for Claude Code and Claude Desktop, but should be adaptable to most needs.
 
 Note: This project is a third-party tool unaffiliated with Kagi.com. Usage of their name has been generously allowed with this attribution.
+
+## Goal
+
+Make it easier for LLM's to perform online research. Anthropic's tooling approach leans heavily toward auto-summarization. Our approach is targeted extraction of webpage sections:
+
+- kagi_search to locate the content
+- web_fetch_sections to generate a table of contents for a page (headings and #IDs)
+- web_fetch_direct returns the requested sections (or the entire document without `sections=`)
+  - web_fetch_js is an alternative to web_fetch_direct that deals with JS gated content.
+  - MediaWiki citations are preserved inline as markdown footnotes (`[^1]`, `[^2]`, etc.)
+  - MediaWiki citations can then be extracted with a follow-up fetch call (`footnotes=` parameter)
+- semantic_scholar can be directly search papers indexed by SemanticScholar.org or fetch abstracts
+- kagi_summarize is the option of last resort: summarize the content 
+
+For Claude Code and Claude Desktop, the fetch tools bypass Anthropic's HTTP proxy. This avoids rate limiting issues or IP blocks associated with their IP space.
+
 
 ## Tools
 
 All tool names vary by profile (see [Profile Options](#profile-options)).
 
-### Kagi Integration
-- **KagiSearch** / **kagi_search** - Search the web using Kagi's curated, SEO-resistant index
-- **KagiSummarize** / **kagi_summarize** - Summarize URLs or text (supports PDFs, YouTube, audio)
+Tool Name          | Claude Code Tool Name | Description
+-------------------|-----------------------|------------
+kagi_search        | KagiSearch            | Search the web using Kagi.com's curated, SEO-resistant index
+web_fetch_sections | WebFetchSections      | List section headings and anchor slugs for a web page (for targeted extraction)
+web_fetch_direct   | WebFetchDirect        | Fetch a Markdown rendered version a HTML webpage (also returns raw content for common content types: JSON, XML, plain text)
+web_fetch_js       | WebFetchJS            | Use Playwright to render a headless version of the website in Markdown (extracting documents from a JavaScript cage)
+semantic_scholar   | SemanticScholar       | Search and retrieve academic paper data from Semantic Scholar (search, paper details, references, authors, body text snippets)
+kagi_summarize     | KagiSummarize         | Summarize URLs or text (supports PDFs, YouTube, audio)
 
-### Browser Tools
-- **WebFetchJS** / **web_fetch_js** - Fetch JavaScript-rendered web content with full browser emulation
+### fetch tool capabilities (common)
 
-### Direct Fetch
-- **WebFetchDirect** / **web_fetch_direct** - Fetch raw content without JavaScript rendering (HTML, JSON, XML, plain text)
-- **WebFetchSections** / **web_fetch_sections** - List section headings and anchor slugs for a web page
+The fetch tools share the following features:
 
-### Academic Papers
-- **SemanticScholar** / **semantic_scholar** - Search and retrieve academic paper data from Semantic Scholar (search, paper details, references, authors, body text snippets)
-
-### Shared Features
-
-Both fetch tools share these capabilities:
-
-- **MediaWiki fast path** - Wiki URLs (`/wiki/...`) are detected and fetched via the MediaWiki API with a [Wikimedia-compliant User-Agent](https://meta.wikimedia.org/wiki/User-Agent_policy), bypassing the browser or HTTP entirely. Returns clean markdown with YAML frontmatter including site name and generator metadata. A single-entry page cache avoids redundant API calls when multiple tools access the same page.
-- **Semantic Scholar fast path** - `semanticscholar.org/paper/` URLs are intercepted and served via the S2 Graph API, bypassing CAPTCHA-blocked web pages. Returns structured paper data with YAML frontmatter.
+- **Markdown output with YAML frontmatter** - Returns structured output with title, source URL, and truncation hints. When content is truncated, frontmatter includes a table of contents so the caller can request specific sections.
 - **Section extraction** - Use the `section` parameter with a heading name (or list of names) to extract specific sections. Supports disambiguation for duplicate heading names.
 - **Fragment resolution** - URL fragments (e.g. `#section-name`) are resolved against the heading tree. Fuzzy matching handles cross-platform slug differences: case folding, underscore↔hyphen normalization (GFM vs Goldmark), and percent-encoded characters like `%27` (apostrophes).
-- **Footnote extraction** (MediaWiki) - Inline footnotes appear as `[^N]` markers in the markdown output. Use the `footnotes` parameter to retrieve specific numbered entries. Author-date shorthand (e.g. "Simpson 2003, p. 8") is automatically resolved against the article's bibliography via `#CITEREF` links.
-- **Markdown output with YAML frontmatter** - Returns structured output with title, source URL, and truncation hints. When content is truncated, frontmatter includes a table of contents so the caller can request specific sections.
 - **Whitespace normalization** - Non-breaking spaces, HTML entities (`&nbsp;`), and exotic Unicode whitespace in headings and titles are normalized to plain ASCII spaces for reliable section matching.
+- **Semantic Scholar fast path** - `semanticscholar.org/paper/` URLs are intercepted and served via the S2 Graph API, bypassing CAPTCHA-blocked web pages. Returns structured paper data with YAML frontmatter.
+- **MediaWiki fast path** - Wiki URLs (`/wiki/...`) are detected and fetched via the MediaWiki API with a [Wikimedia-compliant User-Agent](https://meta.wikimedia.org/wiki/User-Agent_policy), bypassing  HTTP entirely. Returns clean markdown with YAML frontmatter including site name and generator metadata. A single-entry page cache avoids redundant API calls when multiple tools access the same page.
+- **Footnote extraction** (MediaWiki) - Inline footnotes appear as `[^N]` markers in the markdown output. The `footnotes` parameter retrieves specific numbered entries. Author-date shorthand (e.g. "Simpson 2003, p. 8") is automatically resolved against the article's bibliography via `#CITEREF` links.
 
 ### web_fetch_js Capabilities
 
@@ -460,6 +471,10 @@ You can request an API key from S2 [here](https://www.semanticscholar.org/produc
 The S2 API enforces a rate limit of 1s even when your API calls are authenticated. The MCP server queues requests for the SemanticScholar tool and internally throttles them to a 1.25s spacing in order to avoid unnecessary tool retries.
 
 **Do not remove this timeout.** The 1s rate limit is upstream of you and this will make tool calls fail unnecessarily.
+
+> What about Google Scholar?
+
+Google Scholar does not provide an official API and has comparable coverage of documents that have not been paywalled.
 
 > Your MCP server insulted the honor of my family, drained my Kagi API balance to $0, and developed a cult of personality when I connected it to OpenClaw.
 
