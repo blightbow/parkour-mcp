@@ -1,7 +1,7 @@
 [project]
-name = "claude-web-tools"
+name = "kagi-research-mcp"
 version = "0.2.0"
-description = "MCP server providing web browsing and content extraction tools for Claude"
+description = "Research synthesis pipeline for MCP enabling targeted content extraction from websites and research papers"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -14,7 +14,7 @@ dependencies = [
 ]
 
 [project.scripts]
-claude-web-tools = "claude_web_tools:main"
+kagi-research-mcp = "kagi_research_mcp:main"
 
 [tool.uv]
 package = true

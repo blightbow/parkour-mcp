@@ -1,4 +1,4 @@
-"""Tests for claude_web_tools.semantic_scholar module."""
+"""Tests for kagi_research_mcp.semantic_scholar module."""
 
 import httpx
 import pytest
@@ -6,11 +6,11 @@ import respx
 
 import sys
 
-import claude_web_tools.semantic_scholar
+import kagi_research_mcp.semantic_scholar
 # Alias the module before importing the same-named function
-_s2_module = sys.modules["claude_web_tools.semantic_scholar"]
+_s2_module = sys.modules["kagi_research_mcp.semantic_scholar"]
 
-from claude_web_tools.semantic_scholar import (
+from kagi_research_mcp.semantic_scholar import (
     S2_BASE_URL,
     S2_CONFIG_PATH,
     _detect_s2_url,
@@ -23,7 +23,7 @@ from claude_web_tools.semantic_scholar import (
     _s2_request,
     semantic_scholar,
 )
-from claude_web_tools._pipeline import _s2_fast_path
+from kagi_research_mcp._pipeline import _s2_fast_path
 
 from .conftest import (
     S2_PAPER_SEARCH_RESPONSE,

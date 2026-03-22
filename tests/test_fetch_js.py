@@ -1,4 +1,4 @@
-"""Tests for claude_web_tools.fetch_js module — MediaWiki fast path only.
+"""Tests for kagi_research_mcp.fetch_js module — MediaWiki fast path only.
 
 Browser-path tests are excluded because they require a real Playwright browser.
 """
@@ -7,8 +7,8 @@ import httpx
 import pytest
 import respx
 
-from claude_web_tools.fetch_js import web_fetch_js
-from claude_web_tools._pipeline import _wiki_cache
+from kagi_research_mcp.fetch_js import web_fetch_js
+from kagi_research_mcp._pipeline import _wiki_cache
 
 from .conftest import (
     MEDIAWIKI_QUERY_RESPONSE,

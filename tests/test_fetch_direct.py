@@ -1,14 +1,14 @@
-"""Tests for claude_web_tools.fetch_direct module."""
+"""Tests for kagi_research_mcp.fetch_direct module."""
 
 import httpx
 import pytest
 import respx
 
-from claude_web_tools.fetch_direct import (
+from kagi_research_mcp.fetch_direct import (
     web_fetch_direct,
     web_fetch_sections,
 )
-from claude_web_tools._pipeline import _wiki_cache
+from kagi_research_mcp._pipeline import _wiki_cache
 
 from .conftest import (
     SAMPLE_HTML_PAGE,

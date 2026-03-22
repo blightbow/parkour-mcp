@@ -1,6 +1,6 @@
-"""Backward-compatible entrypoint — delegates to claude_web_tools package."""
+"""Backward-compatible entrypoint — delegates to kagi_research_mcp package."""
 
-from claude_web_tools import main
+from kagi_research_mcp import main
 
 if __name__ == "__main__":
     main()

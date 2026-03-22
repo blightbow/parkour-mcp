@@ -1,10 +1,10 @@
-"""Tests for claude_web_tools.kagi module — balance checking and lockout logic."""
+"""Tests for kagi_research_mcp.kagi module — balance checking and lockout logic."""
 
 import pytest
 from unittest.mock import patch, MagicMock
 
-import claude_web_tools.kagi as kagi_mod
-from claude_web_tools.kagi import (
+import kagi_research_mcp.kagi as kagi_mod
+from kagi_research_mcp.kagi import (
     _extract_balance,
     _check_balance,
     search,

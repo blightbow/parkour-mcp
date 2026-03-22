@@ -1,8 +1,8 @@
-"""Tests for claude_web_tools.markdown module."""
+"""Tests for kagi_research_mcp.markdown module."""
 
 import pytest
 
-from claude_web_tools.markdown import (
+from kagi_research_mcp.markdown import (
     md,
     html_to_markdown,
     _slugify,
