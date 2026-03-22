@@ -1,6 +1,8 @@
-# Claude Web Tools
+# Kagi Research MCP
 
-MCP server providing web browsing and content extraction tools for Claude.
+A research synthesis pipeline for MCP. Enables agents to perform targeted content extraction from websites and research papers. Integrates with the APIs for Kagi Search, Kagi Summarize, Semantic Scholar, and MediaWiki. It is primarily designed for Claude Code and Claude Desktops, but should be adaptable to most needs.
+
+Note: This project is a third-party tool unaffiliated with Kagi.com. Usage of their name has been generously allowed with this attribution.
 
 ## Tools
 
@@ -350,9 +352,9 @@ Add to your `.mcp.json`:
 ```json
 {
   "mcpServers": {
-    "claude-web-tools": {
+    "kagi-research-mcp": {
       "command": "uv",
-      "args": ["--directory", "/path/to/claude-web-tools", "run", "claude-web-tools", "--profile", "code"]
+      "args": ["--directory", "/path/to/kagi-research-mcp", "run", "kagi-research-mcp", "--profile", "code"]
     }
   }
 }
@@ -365,9 +367,9 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 ```json
 {
   "mcpServers": {
-    "claude-web-tools": {
+    "kagi-research-mcp": {
       "command": "uv",
-      "args": ["--directory", "/path/to/claude-web-tools", "run", "claude-web-tools", "--profile", "desktop"]
+      "args": ["--directory", "/path/to/kagi-research-mcp", "run", "kagi-research-mcp", "--profile", "desktop"]
     }
   }
 }
@@ -388,13 +390,13 @@ The `desktop` profile (snake_case) is the default as it aligns with MCP ecosyste
 
 ```bash
 # Default (desktop profile, snake_case naming)
-uv run claude-web-tools
+uv run kagi-research-mcp
 
 # Claude Code profile (PascalCase naming)
-uv run claude-web-tools --profile code
+uv run kagi-research-mcp --profile code
 
 # Show help
-uv run claude-web-tools --help
+uv run kagi-research-mcp --help
 ```
 
 ## Development
