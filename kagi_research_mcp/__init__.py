@@ -1,4 +1,4 @@
-"""Claude Web Tools MCP Server - Web browsing and content extraction tools for Claude."""
+"""Kagi Research MCP Server - Web browsing and content extraction tools for Claude."""
 
 import argparse
 import logging
@@ -13,7 +13,7 @@ from .semantic_scholar import semantic_scholar
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-mcp = FastMCP("claude-web-tools")
+mcp = FastMCP("kagi-research-mcp")
 
 # Profile-specific tool names to match Claude client conventions
 # code profile: PascalCase (WebSearch, WebFetch, WebFetchJS)
@@ -142,7 +142,7 @@ def _build_description(tool_name: str, profile: str) -> str:
 
 def main():
     """Run the MCP server."""
-    parser = argparse.ArgumentParser(description="Claude Web Tools MCP Server")
+    parser = argparse.ArgumentParser(description="Kagi Research MCP Server")
     parser.add_argument(
         "--profile",
         choices=["code", "desktop"],

@@ -1,4 +1,4 @@
-"""Shared constants for claude-web-tools."""
+"""Shared constants for kagi-research-mcp."""
 
 import platform
 from importlib.metadata import version as _pkg_version
@@ -6,7 +6,7 @@ from importlib.metadata import version as _pkg_version
 # ---------------------------------------------------------------------------
 # Package / runtime versions (used in User-Agent strings)
 # ---------------------------------------------------------------------------
-_VERSION = _pkg_version("claude-web-tools")
+_VERSION = _pkg_version("kagi-research-mcp")
 _HTTPX_VERSION = _pkg_version("httpx")
 _MARKDOWNIFY_VERSION = _pkg_version("markdownify")
 _PYTHON_VERSION = platform.python_version()
@@ -28,8 +28,8 @@ _FETCH_HEADERS = {
 #
 # Format: product/version (comment) http-library/version renderer/version
 _API_USER_AGENT = (
-    f"claude-web-tools/{_VERSION} "
-    f"(MCP content tool; +https://github.com/blightbow/claude-web-tools) "
+    f"kagi-research-mcp/{_VERSION} "
+    f"(MCP content tool; +https://github.com/blightbow/kagi-research-mcp) "
     f"httpx/{_HTTPX_VERSION} markdownify/{_MARKDOWNIFY_VERSION} "
     f"Python/{_PYTHON_VERSION} {_PLATFORM}"
 )

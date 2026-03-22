@@ -7,14 +7,14 @@ Skipped by default. Run with:
 
 import pytest
 
-from claude_web_tools.fetch_direct import web_fetch_direct
-from claude_web_tools.fetch_js import web_fetch_js
-from claude_web_tools.mediawiki import (
+from kagi_research_mcp.fetch_direct import web_fetch_direct
+from kagi_research_mcp.fetch_js import web_fetch_js
+from kagi_research_mcp.mediawiki import (
     _detect_mediawiki,
     _fetch_mediawiki_page,
     _mediawiki_html_to_markdown,
 )
-from claude_web_tools.markdown import _extract_sections_from_markdown
+from kagi_research_mcp.markdown import _extract_sections_from_markdown
 
 pytestmark = pytest.mark.live
 

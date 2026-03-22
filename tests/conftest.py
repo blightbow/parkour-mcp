@@ -1,11 +1,11 @@
-"""Shared fixtures for claude-web-tools tests."""
+"""Shared fixtures for kagi-research-mcp tests."""
 
 import sys
 
 import pytest
 
-import claude_web_tools.semantic_scholar
-_s2_mod = sys.modules["claude_web_tools.semantic_scholar"]
+import kagi_research_mcp.semantic_scholar
+_s2_mod = sys.modules["kagi_research_mcp.semantic_scholar"]
 
 
 @pytest.fixture(autouse=True)
