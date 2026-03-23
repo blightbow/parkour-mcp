@@ -238,45 +238,54 @@ footnotes_only: True
 **BM25 keyword search** — find relevant content in long or poorly-sectioned pages:
 
 ```
->>> web_fetch_direct("https://example.com/long-article", search="attention mechanism")
+>>> web_fetch_direct("https://en.wikipedia.org/wiki/42_(number)", search="Hitchhiker Guide")
 ---
-title: Long Article
-source: https://example.com/long-article
-total_slices: 42
-search: "attention mechanism"
-matched_slices: [3, 7, 15]
+title: 42 (number)
+source: https://en.wikipedia.org/wiki/42_(number)
+total_slices: 23
+search: "Hitchhiker Guide"
+matched_slices: [4, 5]
 hint: Use slices= to retrieve adjacent context by index
 ---
 
---- slice 3 (Background > Historical Context) ---
-...content containing attention and mechanism...
+--- slice 4 (Popular culture > The Hitchhiker's Guide to the Galaxy (1/2)) ---
+### The Hitchhiker's Guide to the Galaxy
 
---- slice 7 (Methodology (1/3)) ---
-...content mentioning attention mechanism...
+The number 42 is, in *The Hitchhiker's Guide to the Galaxy* by Douglas Adams,
+the "Answer to the Ultimate Question of Life, the Universe, and Everything",
+calculated by an enormous supercomputer named Deep Thought over a period of
+7.5 million years. Unfortunately, no one knows what the question is...
 
---- slice 15 (Results > Quantitative (2/2)) ---
-...content about attention mechanism results...
+--- slice 5 (Popular culture > The Hitchhiker's Guide to the Galaxy (2/2)) ---
+The fourth book in the series, the novel *So Long, and Thanks for All the Fish*,
+contains 42 chapters. According to the novel *Mostly Harmless*, 42 is the
+street address of Stavromula Beta.
+
+In 1994, Adams created the *42 Puzzle*, a game based on the number 42.
+Adams says he picked the number simply as a joke, with no deeper meaning...
 ```
 
 **Slice retrieval** — fetch adjacent context by index after a search:
 
 ```
->>> web_fetch_direct("https://example.com/long-article", slices=[7, 8, 9])
+>>> web_fetch_direct("https://en.wikipedia.org/wiki/42_(number)", slices=[3, 4, 5])
 ---
-title: Long Article
-source: https://example.com/long-article
-total_slices: 42
-slices: [7, 8, 9]
+title: 42 (number)
+source: https://en.wikipedia.org/wiki/42_(number)
+total_slices: 23
+slices: [3, 4, 5]
 ---
 
---- slice 7 (Methodology (1/3)) ---
-...first third of the Methodology section...
+--- slice 3 (Popular culture) ---
+## Popular culture
 
---- slice 8 (Methodology (2/3)) ---
-...second third of the Methodology section...
+--- slice 4 (Popular culture > The Hitchhiker's Guide to the Galaxy (1/2)) ---
+### The Hitchhiker's Guide to the Galaxy
+...
 
---- slice 9 (Methodology (3/3)) ---
-...final third of the Methodology section...
+--- slice 5 (Popular culture > The Hitchhiker's Guide to the Galaxy (2/2)) ---
+The fourth book in the series, the novel *So Long, and Thanks for All the Fish*,
+contains 42 chapters...
 ```
 
 **Semantic Scholar paper lookup** — structured paper data via API:
