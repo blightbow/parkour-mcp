@@ -4,84 +4,13 @@ A research synthesis pipeline for MCP. Enables agents to perform targeted conten
 
 Note: This project is a third-party tool unaffiliated with Kagi.com. Usage of their name has been generously allowed with this attribution.
 
-## Goal
+## Purpose
 
-Make it easier for LLM's to perform online research. Anthropic's tooling approach leans heavily toward auto-summarization. Our approach is targeted extraction of webpage sections:
+There is a cavernous difference between good context and bad context. Modern LLM solutions have converged on agentic toolchains that pair cheaper text analysis LLMs (Haiku) with larger models that excel at reasoning (Opus), but sometimes the finer details get lost in this process. In a worst case scenario, sometimes these details get hallucinated during the summarization processs...**including the attributed authors of the papers themselves**.
 
-- kagi_search to locate the content
-- web_fetch_sections to generate a table of contents for a page (headings and #IDs)
-- web_fetch_direct returns the requested sections (or the entire document without `sections=`)
-  - web_fetch_js is an alternative to web_fetch_direct that deals with JS gated content.
-  - MediaWiki citations are preserved inline as markdown footnotes (`[^1]`, `[^2]`, etc.)
-  - MediaWiki citations can then be extracted with a follow-up fetch call (`footnotes=` parameter)
-- semantic_scholar can be directly search papers indexed by SemanticScholar.org or fetch abstracts
-- kagi_summarize is the option of last resort: summarize the content 
+This MCP server implements a different approach that is grounded in targeted text extraction and reasoning chains. By breaking a page down into section headings and presenting it as a table of contents, the LLM can understand the composition of a document before making any further decisions.
 
-For Claude Code and Claude Desktop, the fetch tools bypass Anthropic's HTTP proxy. This avoids rate limiting issues or IP blocks associated with their IP space.
-
-
-## Tools
-
-All tool names vary by profile (see [Profile Options](#profile-options)).
-
-Tool Name          | Claude Code Tool Name | Description
--------------------|-----------------------|------------
-kagi_search        | KagiSearch            | Search the web using Kagi.com's curated, SEO-resistant index
-web_fetch_sections | WebFetchSections      | List section headings and anchor slugs for a web page (for targeted extraction)
-web_fetch_direct   | WebFetchDirect        | Fetch a Markdown rendered version a HTML webpage (also returns raw content for common content types: JSON, XML, plain text)
-web_fetch_js       | WebFetchJS            | Use Playwright to render a headless version of the website in Markdown (extracting documents from a JavaScript cage)
-semantic_scholar   | SemanticScholar       | Search and retrieve academic paper data from Semantic Scholar (search, paper details, references, authors, body text snippets)
-kagi_summarize     | KagiSummarize         | Summarize URLs or text (supports PDFs, YouTube, audio)
-
-### fetch tool capabilities (common)
-
-The fetch tools share the following features:
-
-- **Markdown output with YAML frontmatter** - Returns structured output with title, source URL, and truncation hints. When content is truncated, frontmatter includes a table of contents so the caller can request specific sections.
-- **Section extraction** - Use the `section` parameter with a heading name (or list of names) to extract specific sections. Supports disambiguation for duplicate heading names.
-- **Fragment resolution** - URL fragments (e.g. `#section-name`) are resolved against the heading tree. Fuzzy matching handles cross-platform slug differences: case folding, underscore↔hyphen normalization (GFM vs Goldmark), and percent-encoded characters like `%27` (apostrophes).
-- **Whitespace normalization** - Non-breaking spaces, HTML entities (`&nbsp;`), and exotic Unicode whitespace in headings and titles are normalized to plain ASCII spaces for reliable section matching.
-- **Semantic Scholar fast path** - `semanticscholar.org/paper/` URLs are intercepted and served via the S2 Graph API, bypassing CAPTCHA-blocked web pages. Returns structured paper data with YAML frontmatter.
-- **MediaWiki fast path** - Wiki URLs (`/wiki/...`) are detected and fetched via the MediaWiki API with a [Wikimedia-compliant User-Agent](https://meta.wikimedia.org/wiki/User-Agent_policy), bypassing  HTTP entirely. Returns clean markdown with YAML frontmatter including site name and generator metadata. A single-entry page cache avoids redundant API calls when multiple tools access the same page.
-- **Footnote extraction** (MediaWiki) - Inline footnotes appear as `[^N]` markers in the markdown output. The `footnotes` parameter retrieves specific numbered entries. Author-date shorthand (e.g. "Simpson 2003, p. 8") is automatically resolved against the article's bibliography via `#CITEREF` links.
-
-### web_fetch_js Capabilities
-
-Renders pages using a headless browser, enabling access to content that requires JavaScript execution:
-
-- **JS-heavy sites** - SPAs, React/Vue/Angular apps, dynamically loaded content
-- **Live app frameworks** - Automatic detection of Gradio and Streamlit apps with accelerated loading (avoids networkidle timeouts)
-- **Embedded iframes** - Extracts content from iframes when main page is sparse (e.g., HuggingFace Spaces)
-- **Interactive elements** - Returns annotated selectors for ReAct-style interaction chains
-
-**ReAct interaction example:**
-```python
-# First call: fetch page, observe interactive elements
-result = web_fetch_js(url="https://example.com/app")
-
-# Follow-up: interact with discovered elements
-result = web_fetch_js(
-    url="https://example.com/app",
-    actions=[
-        {"action": "fill", "selector": "input[name=query]", "value": "search term"},
-        {"action": "click", "selector": "button#submit"}
-    ]
-)
-```
-
-### web_fetch_direct Capabilities
-
-Lightweight HTTP fetch without browser overhead:
-
-- **HTML pages** - Converts to markdown with section support
-- **JSON / XML / plain text** - Returns raw content with YAML frontmatter metadata
-- **Footnote retrieval** - `footnotes=4` or `footnotes=[1,3,8]` returns specific numbered entries from MediaWiki pages, with bibliography resolution for author-date shorthand
-- **BM25 keyword search** - `search="terms"` does BM25 keyword search over ~500-token slices of the page. Terms are matched independently and results are ranked by relevance (powered by [tantivy](https://github.com/quickwit-oss/tantivy-py)). Pages are chunked using [semantic-text-splitter](https://github.com/benbrandt/text-splitter)'s `MarkdownSplitter`, which respects heading and paragraph boundaries. Each matching slice is returned with a section ancestry breadcrumb (e.g. `Methodology > Approach A (2/3)`).
-- **Slice retrieval** - `slices=[3, 4, 5]` retrieves specific slices by index from the cached page. Use this to fetch adjacent context after a search, or to page through a large document. The page cache is single-entry and auto-evicts when a new URL is fetched.
-
-The search and slicing workflow mirrors the SemanticScholar `snippets` action — both use BM25 keyword matching over ~500-token chunks tagged by section.
-
-### Sample Output
+### Section Extraction
 
 **Section discovery** — lightweight table of contents with anchor slugs:
 
@@ -100,26 +29,6 @@ sections:
     - Specifications (#specifications)
     - See also (#see-also)
 ---
-```
-
-**Section extraction** — fetch a specific section by name:
-
-```
->>> web_fetch_direct("https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/User-Agent", section="Syntax")
----
-title: User-Agent header
-source: https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/User-Agent
-# User-Agent header > Syntax
-section: Syntax
----
-
-## Syntax
-
-    User-Agent: <product> / <product-version> <comment>
-
-Common format for web browsers:
-
-    User-Agent: Mozilla/5.0 (<system-information>) <platform> (<platform-details>) <extensions>
 ```
 
 **HTML page with truncation** — frontmatter includes a section TOC for follow-up requests:
@@ -148,92 +57,48 @@ operating system, vendor, and/or version of the requesting user agent.
 ...
 ```
 
-**JSON endpoint** — returns raw content with type metadata:
+**Section extraction** — fetch a specific section by name:
 
 ```
->>> web_fetch_direct("https://httpbin.org/json")
+>>> web_fetch_direct("https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/User-Agent", section="Syntax")
 ---
-title: json
-source: https://httpbin.org/json
-content_type: json
+title: User-Agent header
+source: https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/User-Agent
+# User-Agent header > Syntax
+section: Syntax
 ---
 
-{
-  "slideshow": {
-    "author": "Yours Truly",
-    "title": "Sample Slide Show"
-  }
-}
+## Syntax
+
+    User-Agent: <product> / <product-version> <comment>
+
+Common format for web browsers:
+
+    User-Agent: Mozilla/5.0 (<system-information>) <platform> (<platform-details>) <extensions>
 ```
 
-**Wikipedia full page** — when truncated, frontmatter includes a section table of contents for follow-up requests:
+Sometimes this is enough to decide that the document is of no relevence whatsoever. At this point the LLM can fetch specific sections of interest to either further evaluate relevence, or move on from the document entirely.
 
-```
->>> web_fetch_direct("https://en.wikipedia.org/wiki/42_(number)", max_tokens=300)
----
-title: 42 (number)
-source: https://en.wikipedia.org/wiki/42_(number)
-site: Wikipedia
-truncated: Full page is 27.4 KB (~7,019 tokens), showing first ~300 tokens. ...
-sections:
-  - Mathematics
-  - Wisdom literature, religion, and philosophy
-  - Popular culture
-    - The Hitchhiker's Guide to the Galaxy
-    - Jackie Robinson
-    - Japan
-  - References
-  - External links
----
+For documentation trapped in a JavaScript cage, the MCP server provides a Playwright enabled fetch tool that supports the same content extraction workflow. Tool chaining can also be used for limited interaction with webpage elements:
 
-For other uses, see 42.
+**ReAct interaction example:**
+```python
+# First call: fetch page, observe interactive elements
+result = web_fetch_js(url="https://example.com/app")
 
-Natural number
-...
+# Follow-up: interact with discovered elements
+result = web_fetch_js(
+    url="https://example.com/app",
+    actions=[
+        {"action": "fill", "selector": "input[name=query]", "value": "search term"},
+        {"action": "click", "selector": "button#submit"}
+    ]
+)
 ```
 
-**Wikipedia section via URL fragment** — resolves `#fragment` against the heading tree, with inline `[^N]` footnote markers:
+### BM25 searching + content slicing
 
-```
->>> web_fetch_direct("https://en.wikipedia.org/wiki/42_(number)#The_Hitchhiker%27s_Guide_to_the_Galaxy")
----
-title: 42 (number)
-source: https://en.wikipedia.org/wiki/42_(number)#The_Hitchhiker%27s_Guide_to_the_Galaxy
-site: Wikipedia
-# Popular culture > The Hitchhiker's Guide to the Galaxy
-section: The Hitchhiker's Guide to the Galaxy
-matched_fragment: "#The_Hitchhiker%27s_Guide_to_the_Galaxy"
----
-
-### The Hitchhiker's Guide to the Galaxy
-
-The number 42 is, in *The Hitchhiker's Guide to the Galaxy* by Douglas Adams,
-the "Answer to the Ultimate Question of Life, the Universe, and Everything",
-calculated by an enormous supercomputer named Deep Thought over a period of
-7.5 million years. Unfortunately, no one knows what the question is...
-
-The Ultimate Question "What do you get when you multiply six by nine"[^14] is
-found by Arthur Dent and Ford Prefect in the second book of the series,
-*The Restaurant at the End of the Universe*.
-
-Google also has a calculator easter egg when one searches "the answer to the
-ultimate question of life, the universe, and everything." Once typed, the
-calculator answers with the number 42.[^15]
-```
-
-**Footnote retrieval** — follow up with specific `[^N]` entries:
-
-```
->>> web_fetch_direct("https://en.wikipedia.org/wiki/42_(number)", footnotes=[14, 15])
----
-title: 42 (number)
-source: https://en.wikipedia.org/wiki/42_(number)
-footnotes_only: True
----
-
-[^14]: ["Mathematical Fiction: Hitchhiker's Guide to the Galaxy"](http://kasmana.people.cofc.edu/MATHFICT/mfview.php?callnumber=mf458)
-[^15]: ["17 amazing Google Easter eggs"](https://www.cbsnews.com/pictures/17-amazing-google-easter-eggs/2/)
-```
+Not all websites are easily broken up into sections. For these, we need to be able to find text of interest and walk our way through the surrounding context.
 
 **BM25 keyword search** — find relevant content in long or poorly-sectioned pages:
 
@@ -242,7 +107,7 @@ footnotes_only: True
 ---
 title: 42 (number)
 source: https://en.wikipedia.org/wiki/42_(number)
-total_slices: 7
+total_slices: 23
 search: "Hitchhiker Guide"
 matched_slices: [4, 5]
 hint: Use slices= to retrieve adjacent context by index
@@ -286,6 +151,85 @@ slices: [3, 4, 5]
 --- slice 5 (Popular culture > The Hitchhiker's Guide to the Galaxy (2/2)) ---
 The fourth book in the series, the novel *So Long, and Thanks for All the Fish*,
 contains 42 chapters...
+```
+
+This approach plays to the strength of LLMs:
+
+- document exploration serves chain of thought; each step of the document walking process is procedural and informs the next step
+- maintain high signal to noise ratio on the body text we **do** put into context
+- expose the real citations so they can be followed into the next document
+- place real contributors into context so they can be credited without hallucination
+
+We can also save ourselves a tool invocation by treating a URL fragment #ID in the URL as a section.
+
+**Wikipedia section via URL fragment** — resolves `#fragment` against the heading tree, with inline `[^N]` footnote markers:
+
+```
+>>> web_fetch_direct("https://en.wikipedia.org/wiki/42_(number)#The_Hitchhiker%27s_Guide_to_the_Galaxy")
+---
+title: 42 (number)
+source: https://en.wikipedia.org/wiki/42_(number)#The_Hitchhiker%27s_Guide_to_the_Galaxy
+site: Wikipedia
+# Popular culture > The Hitchhiker's Guide to the Galaxy
+section: The Hitchhiker's Guide to the Galaxy
+matched_fragment: "#The_Hitchhiker%27s_Guide_to_the_Galaxy"
+---
+
+### The Hitchhiker's Guide to the Galaxy
+
+The number 42 is, in *The Hitchhiker's Guide to the Galaxy* by Douglas Adams,
+the "Answer to the Ultimate Question of Life, the Universe, and Everything",
+calculated by an enormous supercomputer named Deep Thought over a period of
+7.5 million years. Unfortunately, no one knows what the question is...
+
+The Ultimate Question "What do you get when you multiply six by nine"[^14] is
+found by Arthur Dent and Ford Prefect in the second book of the series,
+*The Restaurant at the End of the Universe*.
+
+Google also has a calculator easter egg when one searches "the answer to the
+ultimate question of life, the universe, and everything." Once typed, the
+calculator answers with the number 42.[^15]
+```
+
+### Special MediaWiki Handling
+
+MediaWiki sites also get special handling. When one of the well-known MediaWiki URI schemas are detected, the tool automatically switches fetching the artcile using the MediaWiki API and strips out the navigation boxes. This makes the Markdown conversion process less noisy (no extra HTML), and also plays nicely with Wikipedia
+
+It also makes it easy to convert citation links into Markdown footnotes (seen above), which can then be obtained with another tool call. This surfaces additional content that can then be pulled into the research process.
+
+**Footnote retrieval** — follow up with specific `[^N]` entries:
+
+```
+>>> web_fetch_direct("https://en.wikipedia.org/wiki/42_(number)", footnotes=[14, 15])
+---
+title: 42 (number)
+source: https://en.wikipedia.org/wiki/42_(number)
+footnotes_only: True
+---
+
+[^14]: ["Mathematical Fiction: Hitchhiker's Guide to the Galaxy"](http://kasmana.people.cofc.edu/MATHFICT/mfview.php?callnumber=mf458)
+[^15]: ["17 amazing Google Easter eggs"](https://www.cbsnews.com/pictures/17-amazing-google-easter-eggs/2/)
+```
+
+### Special SemanticScholar.org handling
+
+SemanticScholar.org bears its own special mention for research paper synthesis. S2 has emerged as an alternative to Google Scholar that is much more accessible to tool automation. The main limitation is that it cannot be crawled with standard HTTP tooling, but that's where the Semantic Scholar API comes into play. We expose this in two ways:
+
+1. A dedicated SemanticScholar tool that exposes broader functionality than the standard page fetching tools.
+2. Attempts to run the fetch tools against SemanticScholar are automatically converted into an equivalent SemanticScholar tool call, with a hint in the YAML frontmatter to use that tool for subsequent tool calls.
+
+**Semantic Scholar URL interception** — S2 URLs are automatically handled by fetch tools:
+
+```
+>>> web_fetch_direct("https://www.semanticscholar.org/paper/Attention-Is-All-You-Need-Vaswani-Shazeer/204e3073870fae3d05bcbc2f6a8e263d9b72e776")
+---
+title: Attention is All you Need
+source: https://www.semanticscholar.org/paper/204e3073870fae3d05bcbc2f6a8e263d9b72e776
+api: Semantic Scholar
+---
+
+# Attention is All you Need
+...
 ```
 
 **Semantic Scholar paper lookup** — structured paper data via API:
@@ -337,19 +281,91 @@ dimension d_v...
 
 Corpus-wide search (no `paper_id`) returns results grouped by paper then section. A pre-flight check gates scoped searches on full-text availability; papers without it get an informative message suggesting the `paper` action for abstract/TL;DR.
 
-**Semantic Scholar URL interception** — S2 URLs are automatically handled by fetch tools:
+### Everything Else
+
+While the intended use of these tools is to assist with long form content, the fetch tools will handle attempts for text/plain, application/json, and application/xml without throwing an error. The tools do not enrich these contents in any way, but surfacing simple content is preferable to throwing an avoidable error.
+
+**JSON endpoint** — returns raw content with type metadata:
 
 ```
->>> web_fetch_direct("https://www.semanticscholar.org/paper/Attention-Is-All-You-Need-Vaswani-Shazeer/204e3073870fae3d05bcbc2f6a8e263d9b72e776")
+>>> web_fetch_direct("https://httpbin.org/json")
 ---
-title: Attention is All you Need
-source: https://www.semanticscholar.org/paper/204e3073870fae3d05bcbc2f6a8e263d9b72e776
-api: Semantic Scholar
+title: json
+source: https://httpbin.org/json
+content_type: json
 ---
 
-# Attention is All you Need
-...
+{
+  "slideshow": {
+    "author": "Yours Truly",
+    "title": "Sample Slide Show"
+  }
+}
 ```
+
+## Tools
+
+All tool names vary by profile (see [Profile Options](#profile-options)).
+
+Tool Name          | Claude Code Tool Name | Description
+-------------------|-----------------------|------------
+kagi_search        | KagiSearch            | Search the web using Kagi.com's curated, SEO-resistant index
+web_fetch_sections | WebFetchSections      | List section headings and anchor slugs for a web page (for targeted extraction)
+web_fetch_direct   | WebFetchDirect        | Fetch a Markdown rendered version a HTML webpage (also returns raw content for common content types: JSON, XML, plain text)
+web_fetch_js       | WebFetchJS            | Use Playwright to render a headless version of the website in Markdown (extracting documents from a JavaScript cage)
+semantic_scholar   | SemanticScholar       | Search and retrieve academic paper data from Semantic Scholar (search, paper details, references, authors, body text snippets)
+kagi_summarize     | KagiSummarize         | Summarize URLs or text (supports PDFs, YouTube, audio)
+
+### fetch tool capabilities (common)
+
+The fetch tools share the following features:
+
+- **Markdown output with YAML frontmatter** - Returns structured output with title, source URL, and truncation hints. When content is truncated, frontmatter includes a table of contents so the caller can request specific sections.
+- **Section extraction** - Use the `section` parameter with a heading name (or list of names) to extract specific sections. Supports disambiguation for duplicate heading names.
+- **Fragment resolution** - URL fragments (e.g. `#section-name`) are resolved against the heading tree. Fuzzy matching handles cross-platform slug differences: case folding, underscore↔hyphen normalization (GFM vs Goldmark), and percent-encoded characters like `%27` (apostrophes).
+- **Whitespace normalization** - Non-breaking spaces, HTML entities (`&nbsp;`), and exotic Unicode whitespace in headings and titles are normalized to plain ASCII spaces for reliable section matching.
+- **Semantic Scholar fast path** - `semanticscholar.org/paper/` URLs are intercepted and served via the S2 Graph API, bypassing CAPTCHA-blocked web pages. Returns structured paper data with YAML frontmatter.
+- **MediaWiki fast path** - Wiki URLs (`/wiki/...`) are detected and fetched via the MediaWiki API with a [Wikimedia-compliant User-Agent](https://meta.wikimedia.org/wiki/User-Agent_policy), bypassing  HTTP entirely. Returns clean markdown with YAML frontmatter including site name and generator metadata. A single-entry page cache avoids redundant API calls when multiple tools access the same page.
+- **Footnote extraction** (MediaWiki) - Inline footnotes appear as `[^N]` markers in the markdown output. The `footnotes` parameter retrieves specific numbered entries. Author-date shorthand (e.g. "Simpson 2003, p. 8") is automatically resolved against the article's bibliography via `#CITEREF` links.
+
+### web_fetch_js Capabilities
+
+Renders pages using a headless browser, enabling access to content that requires JavaScript execution:
+
+- **JS-heavy sites** - SPAs, React/Vue/Angular apps, dynamically loaded content
+- **Live app frameworks** - Automatic detection of Gradio and Streamlit apps with accelerated loading (avoids networkidle timeouts)
+- **Embedded iframes** - Extracts content from iframes when main page is sparse (e.g., HuggingFace Spaces)
+- **Interactive elements** - Returns annotated selectors for ReAct-style interaction chains
+
+### web_fetch_direct Capabilities
+
+Lightweight HTTP fetch without browser overhead:
+
+- **HTML pages** - Converts to markdown with section support
+- **JSON / XML / plain text** - Returns raw content with YAML frontmatter metadata
+- **Footnote retrieval** - `footnotes=4` or `footnotes=[1,3,8]` returns specific numbered entries from MediaWiki pages, with bibliography resolution for author-date shorthand
+- **BM25 keyword search** - `search="terms"` does BM25 keyword search over ~500-token slices of the page. Terms are matched independently and results are ranked by relevance (powered by [tantivy](https://github.com/quickwit-oss/tantivy-py)). Pages are chunked using [semantic-text-splitter](https://github.com/benbrandt/text-splitter)'s `MarkdownSplitter`, which respects heading and paragraph boundaries. Each matching slice is returned with a section ancestry breadcrumb (e.g. `Methodology > Approach A (2/3)`).
+- **Slice retrieval** - `slices=[3, 4, 5]` retrieves specific slices by index from the cached page. Use this to fetch adjacent context after a search, or to page through a large document. The page cache is single-entry and auto-evicts when a new URL is fetched.
+
+The search and slicing workflow mirrors the SemanticScholar `snippets` action — both use BM25 keyword matching over ~500-token chunks tagged by section.
+
+### Sample Output
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 ## Setup
 
