@@ -200,7 +200,7 @@ calculator answers with the number 42.[^15]
 
 ### Special MediaWiki Handling
 
-When one of the well-known MediaWiki URI schemas are detected, the tool automatically switches fetching the article using the MediaWiki API and strips out the navigation boxes. This makes the Markdown conversion process less noisy (no extra HTML), and also plays nicely with Wikipedia
+When one of the well-known MediaWiki URI schemas are detected, the tool automatically switches fetching the article using the MediaWiki API and strips out the navigation boxes. This makes the Markdown conversion process less noisy (no extra HTML), and also plays nicely with Wikipedia's bot usage policy.
 
 It also makes it easy to convert citation links into Markdown footnotes (seen above), which can then be obtained with another tool call. This surfaces additional content that can then be pulled into the research process.
 
@@ -289,6 +289,29 @@ dimension d_v...
 ```
 
 Corpus-wide search (no `paper_id`) returns results grouped by paper then section. A pre-flight check gates scoped searches on full-text availability; papers without it get an informative message suggesting the `paper` action for abstract/TL;DR.
+
+### Kagi Tooling
+
+
+#### Kagi Search
+We also found the built-in search tooling of major LLM providers to be somewhat lacking for our research purposes.
+
+1. They tend to incorporate LLM based summarizations of page content. These are verbose on tokens and work against our toolchain's goal of reduced dependence on summarization.
+2. We have observed censored search results for legitimate research topics for reasons that are not explained by the LLM provider's usage policies.
+
+Our solution was to integrate the Kagi search engine as a more neutral third party in the research process. Kagi's SEO resistant search results were already a good fit for research purposes, but their business model is much less likely to produce the conflict of interests in search result manipulation that led us to implementing a dedicated search engine tool.
+
+As for the practical difference between the tooling, I'll let Claude Desktop have the floor for a moment:
+
+> The practical implication is that the two tools slot into different phases of a research workflow. The built-in search is optimized for "search and immediately synthesize" — the deep snippets and citation indexing mean I can often compose a cited answer from search results alone without any follow-up fetches. Kagi is optimized for "search and triage" — the compact snippets let you quickly scan which sources are worth a deeper pull via `web_fetch_direct` or `kagi_summarize`. It's a scout vs. a quartermaster.
+> There's a context budget trade-off hiding in there too. Ten built-in search results with their deep snippets consume substantially more context window than five Kagi results with compact snippets. For a single-query task that's fine — you want the depth. But in a multi-source research workflow where you might run 5-10 searches, Kagi's lighter footprint per query leaves more room for the actual synthesis work.
+
+#### Kagi Summarize
+
+We've integrated access to the Kagi Universal Summarizer API for similar reasons. If a LLM provider's default search tool is censoring the search results, it only stands to reason that contamination of summaries may also be occurring. The tool descriptions gently steer the LLM away from the Kagi Summarize tool in favor of the standard workflows, because:
+
+- it's cheaper for the user (no API cost)
+- our original use case is to avoid summarization regardless
 
 ### Everything Else
 
