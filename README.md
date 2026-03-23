@@ -4,6 +4,13 @@ A research synthesis pipeline for MCP. Enables agents to perform targeted conten
 
 Note: This project is a third-party tool unaffiliated with Kagi.com. Usage of their name has been generously allowed with this attribution.
 
+## Attribution
+
+This tool accesses the [Semantic Scholar](https://www.semanticscholar.org/) API. Per the [S2 API license](https://www.semanticscholar.org/product/api/license), contributions to your work through the use of S2's API requires attribution to Semantic Scholar.
+
+- If you are using this MCP server for purposes adjacent to research papers, _you should preemptively assume that this license applies to your outputs_.
+- It goes without saying that any research you incorporate should also be credited as appropriate. Please be a responsible netizen.
+
 ## Purpose
 
 There is a cavernous difference between good context and bad context. Modern LLM solutions have converged on agentic toolchains that pair cheaper text analysis LLMs (Haiku) with larger models that excel at reasoning (Opus), but sometimes the finer details get lost in this process. In a worst case scenario, sometimes these details get hallucinated during the summarization processs...**including the attributed authors of the papers themselves**.
@@ -107,7 +114,7 @@ Not all websites are easily broken up into sections. For these, we need to be ab
 ---
 title: 42 (number)
 source: https://en.wikipedia.org/wiki/42_(number)
-total_slices: 23
+total_slices: 7
 search: "Hitchhiker Guide"
 matched_slices: [4, 5]
 hint: Use slices= to retrieve adjacent context by index
@@ -193,7 +200,7 @@ calculator answers with the number 42.[^15]
 
 ### Special MediaWiki Handling
 
-MediaWiki sites also get special handling. When one of the well-known MediaWiki URI schemas are detected, the tool automatically switches fetching the artcile using the MediaWiki API and strips out the navigation boxes. This makes the Markdown conversion process less noisy (no extra HTML), and also plays nicely with Wikipedia
+When one of the well-known MediaWiki URI schemas are detected, the tool automatically switches fetching the artcile using the MediaWiki API and strips out the navigation boxes. This makes the Markdown conversion process less noisy (no extra HTML), and also plays nicely with Wikipedia
 
 It also makes it easy to convert citation links into Markdown footnotes (seen above), which can then be obtained with another tool call. This surfaces additional content that can then be pulled into the research process.
 
@@ -217,6 +224,8 @@ SemanticScholar.org bears its own special mention for research paper synthesis. 
 
 1. A dedicated SemanticScholar tool that exposes broader functionality than the standard page fetching tools.
 2. Attempts to run the fetch tools against SemanticScholar are automatically converted into an equivalent SemanticScholar tool call, with a hint in the YAML frontmatter to use that tool for subsequent tool calls.
+
+Our decision to use BM25 searching with the text tools was informed by SemanticScholar's own usage of it. By keeping the search mechanism uniform across tools, the LLM won't make mistakes that would otherwise emerge from pivoting between searching methodologies.
 
 **Semantic Scholar URL interception** — S2 URLs are automatically handled by fetch tools:
 
@@ -348,24 +357,6 @@ Lightweight HTTP fetch without browser overhead:
 - **Slice retrieval** - `slices=[3, 4, 5]` retrieves specific slices by index from the cached page. Use this to fetch adjacent context after a search, or to page through a large document. The page cache is single-entry and auto-evicts when a new URL is fetched.
 
 The search and slicing workflow mirrors the SemanticScholar `snippets` action — both use BM25 keyword matching over ~500-token chunks tagged by section.
-
-### Sample Output
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 ## Setup
 
@@ -554,3 +545,10 @@ Google Scholar does not provide an official API. Semantic Scholar has comparable
 We accept no liability, and there is no liability to be accepted. How your prompt stack spends your API balance isn't something we can help with.
 
 Also, why would you connect a tool designed with almost no synthesis of research papers to a MCP server dedicated to research synthesis? 
+
+## Credits
+
+- Kagi.com for permission to use the Kagi name, and providing tools that were a natural fit for our needs.
+- SemanticScholar.org for providing a much more accessible alternative to Google Scholar, and a fast turnaround on the API key for our internal testing.
+- Wikipedia.com for allowing this tool to leverage the MediaWiki API at the easy cost of a user-agent header.
+- The authors of the Python dependencies used by this MCP server. There are too many of you to list individually, but we appreciate your work greatly.
