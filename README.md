@@ -167,7 +167,7 @@ This approach plays to the strength of LLMs:
 - expose the real citations so they can be followed into the next document
 - place real contributors into context so they can be credited without hallucination
 
-We can also save ourselves a tool invocation by treating a URL fragment #ID in the URL as a section.
+We can also save ourselves a tool invocation by treating a URL #fragment as a section.
 
 **Wikipedia section via URL fragment** — resolves `#fragment` against the heading tree, with inline `[^N]` footnote markers:
 
@@ -200,7 +200,7 @@ calculator answers with the number 42.[^15]
 
 ### Special MediaWiki Handling
 
-When one of the well-known MediaWiki URI schemas are detected, the tool automatically switches fetching the article using the MediaWiki API and strips out the navigation boxes. This makes the Markdown conversion process less noisy (no extra HTML), and also plays nicely with Wikipedia's bot usage policy.
+When one of the well-known MediaWiki URI schemas are detected, the tool automatically switches to fetching the article using the MediaWiki API and strips out the navigation boxes. This makes the Markdown conversion process less noisy (no extra HTML), and also plays nicely with Wikipedia's bot usage policy.
 
 It also makes it easy to convert citation links into Markdown footnotes (seen above), which can then be obtained with another tool call. This surfaces additional content that can then be pulled into the research process.
 
@@ -225,7 +225,7 @@ SemanticScholar.org bears its own special mention for research paper synthesis. 
 1. A dedicated SemanticScholar tool that exposes broader functionality than the standard page fetching tools.
 2. Attempts to run the fetch tools against SemanticScholar are automatically converted into an equivalent SemanticScholar tool call, with a hint in the YAML frontmatter to use that tool for subsequent tool calls.
 
-Our decision to use BM25 searching with the text tools was informed by SemanticScholar's own usage of it. By keeping the search mechanism uniform across tools, the LLM won't make mistakes that would otherwise emerge from pivoting between searching methodologies.
+Our decision to use BM25 searching with the fetch tools was informed by SemanticScholar's own usage of it. By keeping the search mechanism uniform across tools, the LLM won't make mistakes that would otherwise emerge from pivoting between two search methodologies.
 
 **Semantic Scholar URL interception** — S2 URLs are automatically handled by fetch tools:
 
@@ -299,7 +299,7 @@ We also found the built-in search tooling of major LLM providers to be somewhat 
 1. They tend to incorporate LLM based summarizations of page content. These are verbose on tokens and work against our toolchain's goal of reduced dependence on summarization.
 2. We have observed censored search results for legitimate research topics for reasons that are not explained by the LLM provider's usage policies.
 
-Our solution was to integrate the Kagi search engine as a more neutral third party in the research process. Kagi's SEO resistant search results were already a good fit for research purposes, but their business model is much less likely to produce the conflict of interests in search result manipulation that led us to implementing a dedicated search engine tool.
+Our solution was to integrate the Kagi search engine as a more neutral third party in the research process. Kagi's SEO resistant search results were already a good fit for research purposes, but their business model is much less likely to produce the conflict of interests that led us to implementing a dedicated search engine tool.
 
 As for the practical difference between the tooling, I'll let Claude Desktop have the floor for a moment:
 
@@ -557,7 +557,7 @@ You can request an API key from S2 [here](https://www.semanticscholar.org/produc
 
 The S2 API enforces a rate limit of 1s even when your API calls are authenticated. The MCP server queues requests for the SemanticScholar tool and internally throttles them to a 1.25s spacing in order to avoid unnecessary tool retries.
 
-**Do not remove this timeout.** The 1s rate limit is upstream of you and this will make tool calls fail unnecessarily.
+**Do not remove this throttling.** The 1s rate limit is upstream of you and this will make tool calls fail unnecessarily.
 
 > What about Google Scholar?
 
@@ -574,4 +574,4 @@ Also, why would you connect a tool designed with almost no synthesis of research
 - Kagi.com for permission to use the Kagi name, and providing tools that were a natural fit for our needs.
 - SemanticScholar.org for providing a much more accessible alternative to Google Scholar, and a fast turnaround on the API key for our internal testing.
 - Wikipedia.org for allowing this tool to leverage the MediaWiki API at the easy cost of a user-agent header.
-- The authors of the Python dependencies used by this MCP server. There are too many of you to list individually, but we appreciate your work greatly.
+- The authors of the dependencies used by this MCP server. There are too many of you to list individually, but we appreciate your work greatly.
