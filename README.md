@@ -242,7 +242,7 @@ footnotes_only: True
 ---
 title: 42 (number)
 source: https://en.wikipedia.org/wiki/42_(number)
-total_slices: 23
+total_slices: 7
 search: "Hitchhiker Guide"
 matched_slices: [4, 5]
 hint: Use slices= to retrieve adjacent context by index
@@ -272,7 +272,7 @@ Adams says he picked the number simply as a joke, with no deeper meaning...
 ---
 title: 42 (number)
 source: https://en.wikipedia.org/wiki/42_(number)
-total_slices: 23
+total_slices: 7
 slices: [3, 4, 5]
 ---
 
