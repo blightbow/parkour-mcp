@@ -232,6 +232,15 @@ def _mediawiki_html_to_markdown(html: str) -> str:
         for el in soup.select(selector):
             el.decompose()
 
+    # Remove navigation templates and sister-project boxes — these are
+    # link-farm grids (e.g. {{Integers}}, {{WWII}}) that produce massive
+    # walls of links with no prose content.  navbox alone can be 10-37%
+    # of the total HTML.  Sister-project boxes ("Wikiquote has...",
+    # "Look up ... in Wiktionary") add minor noise to search results.
+    for selector in [".navbox", ".navbox-styles", ".sistersitebox"]:
+        for el in soup.select(selector):
+            el.decompose()
+
     # Convert inline citation markers [1], [2] → [^1], [^2] (markdown footnotes).
     # Skip non-numeric refs like [nb 1] (nota bene / notes group).
     for sup in soup.select("sup.reference"):
