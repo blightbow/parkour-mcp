@@ -387,6 +387,7 @@ dependencies = [
     { name = "markdownify" },
     { name = "mcp", extra = ["cli"] },
     { name = "playwright" },
+    { name = "semantic-text-splitter" },
     { name = "tantivy" },
 ]
 
@@ -395,8 +396,6 @@ dev = [
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "respx" },
-    { name = "semantic-text-splitter" },
-    { name = "tantivy" },
 ]
 
 [package.metadata]
@@ -407,6 +406,7 @@ requires-dist = [
     { name = "markdownify" },
     { name = "mcp", extras = ["cli"] },
     { name = "playwright" },
+    { name = "semantic-text-splitter", specifier = ">=0.29.0" },
     { name = "tantivy", specifier = ">=0.25.1" },
 ]
 
@@ -415,8 +415,6 @@ dev = [
     { name = "pytest", specifier = ">=9.0.2" },
     { name = "pytest-asyncio", specifier = ">=1.3.0" },
     { name = "respx", specifier = ">=0.22.0" },
-    { name = "semantic-text-splitter", specifier = ">=0.29.0" },
-    { name = "tantivy", specifier = ">=0.25.1" },
 ]
 
 [[package]]

@@ -3,7 +3,11 @@ name = "kagi-research-mcp"
 version = "0.2.0"
 description = "Research synthesis pipeline for MCP enabling targeted content extraction from websites and research papers"
 readme = "README.md"
+license = "MIT"
 requires-python = ">=3.12"
+authors = [
+  { name = "blightbow" }
+]
 dependencies = [
     "mcp[cli]",
     "kagiapi",
@@ -11,8 +15,20 @@ dependencies = [
     "httpx",
     "playwright",
     "markdownify",
+    "semantic-text-splitter>=0.29.0",
     "tantivy>=0.25.1",
 ]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Internet :: WWW/HTTP",
+]
+
+[project.urls]
+Homepage = "https://github.com/blightbow/kagi-research-mcp"
+Repository = "https://github.com/blightbow/kagi-research-mcp"
+Issues = "https://github.com/blightbow/kagi-research-mcp/issues"
 
 [project.scripts]
 kagi-research-mcp = "kagi_research_mcp:main"
@@ -32,6 +48,4 @@ dev = [
     "pytest>=9.0.2",
     "pytest-asyncio>=1.3.0",
     "respx>=0.22.0",
-    "semantic-text-splitter>=0.29.0",
-    "tantivy>=0.25.1",
 ]
