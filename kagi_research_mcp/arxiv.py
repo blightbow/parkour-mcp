@@ -266,7 +266,10 @@ def _format_arxiv_paper(data: dict) -> str:
     return "\n".join(parts)
 
 
-def _format_arxiv_list(papers: list[dict], total: int | None, offset: int) -> str:
+def _format_arxiv_list(
+    papers: list[dict], total: int | None, offset: int,
+    include_hint: bool = True,
+) -> str:
     """Format a compact numbered list for search results."""
     if not papers:
         return "No papers found."
@@ -286,11 +289,12 @@ def _format_arxiv_list(papers: list[dict], total: int | None, offset: int) -> st
         if arxiv_id:
             lines.append(f"   arXiv:{arxiv_id}")
 
-    hint = (
-        "\n*Use `paper` action or SemanticScholar with `ARXIV:<id>` "
-        "for full details and citation data.*"
-    )
-    lines.append(hint)
+    if include_hint:
+        hint = (
+            "\n*Use `paper` action or SemanticScholar with `ARXIV:<id>` "
+            "for full details and citation data.*"
+        )
+        lines.append(hint)
 
     if total is not None and total > offset + len(papers):
         lines.append(
@@ -393,8 +397,13 @@ async def arxiv(
         if not result:
             return f"No papers found for: {query}"
 
-        # arXiv doesn't return total in the same way; try to parse opensearch:totalResults
-        return _format_arxiv_list(result, total=None, offset=offset)
+        fm = _build_frontmatter({
+            "api": "arXiv",
+            "action": "search",
+            "query": query,
+            "hint": "Use paper action for full details, or SemanticScholar with ARXIV:<id> for citation data",
+        })
+        return fm + "\n\n" + _format_arxiv_list(result, total=None, offset=offset, include_hint=False)
 
     elif action == "paper":
         # Accept arXiv URLs — auto-detect and extract ID
@@ -417,7 +426,13 @@ async def arxiv(
         if not result:
             return f"No papers found in category: {query}"
 
-        return _format_arxiv_list(result, total=None, offset=offset)
+        fm = _build_frontmatter({
+            "api": "arXiv",
+            "action": "category",
+            "category": query,
+            "hint": "Use paper action for full details, or SemanticScholar with ARXIV:<id> for citation data",
+        })
+        return fm + "\n\n" + _format_arxiv_list(result, total=None, offset=offset, include_hint=False)
 
     else:
         return (

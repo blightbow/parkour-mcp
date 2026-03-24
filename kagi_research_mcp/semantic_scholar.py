@@ -297,11 +297,14 @@ async def _fetch_s2_paper(paper_id: str) -> str:
     title = result.get("title", "Untitled")
     s2_id = result.get("paperId", paper_id)
     source_url = f"https://www.semanticscholar.org/paper/{s2_id}"
+    ext_ids = result.get("externalIds") or {}
+    arxiv_id = ext_ids.get("ArXiv")
 
     fm = _build_frontmatter({
         "title": title,
         "source": source_url,
         "api": "Semantic Scholar",
+        "see_also": f"ARXIV:{arxiv_id} with ArXiv for categories and affiliations" if arxiv_id else None,
     })
     return fm + "\n\n" + _format_paper_detail(result)
 
@@ -417,14 +420,32 @@ async def semantic_scholar(
         total = result.get("total")
         if not papers:
             return f"No papers found for: {query}"
-        return _format_paper_list(papers, total=total, offset=offset)
+        fm = _build_frontmatter({
+            "api": "Semantic Scholar",
+            "action": "search",
+            "query": query,
+            "total": total,
+            "hint": "Use paper action with a paper ID for full details, or snippets action for body text search",
+        })
+        return fm + "\n\n" + _format_paper_list(papers, total=total, offset=offset)
 
     elif action == "paper":
         params = {"fields": fields or _DETAIL_FIELDS}
         result = await _s2_request(f"/paper/{query}", params)
         if isinstance(result, str):
             return result
-        return _format_paper_detail(result)
+        title = result.get("title", "Untitled")
+        s2_id = result.get("paperId", query)
+        source_url = f"https://www.semanticscholar.org/paper/{s2_id}"
+        ext_ids = result.get("externalIds") or {}
+        arxiv_id = ext_ids.get("ArXiv")
+        fm = _build_frontmatter({
+            "title": title,
+            "source": source_url,
+            "api": "Semantic Scholar",
+            "see_also": f"ARXIV:{arxiv_id} with ArXiv for categories and affiliations" if arxiv_id else None,
+        })
+        return fm + "\n\n" + _format_paper_detail(result)
 
     elif action == "references":
         params = {
@@ -441,7 +462,13 @@ async def semantic_scholar(
         total = result.get("total")
         if not papers:
             return f"No references found for paper: {query}"
-        return _format_paper_list(papers, total=total, offset=offset)
+        fm = _build_frontmatter({
+            "api": "Semantic Scholar",
+            "action": "references",
+            "paper": query,
+            "total": total,
+        })
+        return fm + "\n\n" + _format_paper_list(papers, total=total, offset=offset)
 
     elif action == "author_search":
         params = {
@@ -477,7 +504,13 @@ async def semantic_scholar(
                 f"\nShowing {offset + 1}-{offset + len(authors)} of {total:,} results. "
                 "Use offset/limit to paginate."
             )
-        return "\n".join(lines)
+        fm = _build_frontmatter({
+            "api": "Semantic Scholar",
+            "action": "author_search",
+            "query": query,
+            "total": total,
+        })
+        return fm + "\n\n" + "\n".join(lines)
 
     elif action == "author":
         params = {"fields": fields or _AUTHOR_FIELDS}
@@ -496,7 +529,13 @@ async def semantic_scholar(
         if isinstance(papers_result, dict):
             papers = papers_result.get("data") or []
 
-        return _format_author(result, papers=papers)
+        author_id = result.get("authorId", query)
+        fm = _build_frontmatter({
+            "api": "Semantic Scholar",
+            "action": "author",
+            "source": f"https://www.semanticscholar.org/author/{author_id}",
+        })
+        return fm + "\n\n" + _format_author(result, papers=papers)
 
     elif action == "snippets":
         # Pre-flight: check text availability when scoped to a single paper
@@ -521,7 +560,14 @@ async def semantic_scholar(
         result = await _s2_request("/snippet/search", params)
         if isinstance(result, str):
             return result
-        return _format_snippets(result, paper_id=paper_id)
+        fm = _build_frontmatter({
+            "api": "Semantic Scholar",
+            "action": "snippets",
+            "query": query,
+            "paper": paper_id,
+            "hint": "Use paper action for abstract, TL;DR, and citation data",
+        })
+        return fm + "\n\n" + _format_snippets(result, paper_id=paper_id)
 
     else:
         return (

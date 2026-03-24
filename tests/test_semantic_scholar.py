@@ -199,6 +199,10 @@ class TestSemanticScholarSearch:
             return_value=httpx.Response(200, json=S2_PAPER_SEARCH_RESPONSE)
         )
         result = await semantic_scholar("search", "attention mechanism transformers")
+        assert result.startswith("---\n")
+        assert "api: Semantic Scholar" in result
+        assert "action: search" in result
+        assert "hint:" in result
         assert "Attention is All you Need" in result
         assert "Vaswani" in result
         assert "1,542" in result  # total in pagination hint
@@ -281,6 +285,8 @@ class TestSemanticScholarPaper:
         assert "---" in result
         assert "api: Semantic Scholar" in result
         assert "source:" in result
+        assert "see_also:" in result
+        assert "ARXIV:1706.03762" in result
 
 
 # ---------------------------------------------------------------------------
@@ -301,6 +307,35 @@ class TestSemanticScholarPaperCitationCounts:
         assert "120,000" in result
         assert "4,542 influential" in result
 
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_paper_action_includes_frontmatter(self):
+        """The paper action should include YAML frontmatter like the URL interception path."""
+        paper_id = "204e3073870fae3d05bcbc2f6a8e263d9b72e776"
+        respx.get(f"{S2_BASE_URL}/paper/{paper_id}").mock(
+            return_value=httpx.Response(200, json=S2_PAPER_DETAIL_RESPONSE)
+        )
+        result = await semantic_scholar("paper", paper_id)
+        assert result.startswith("---\n")
+        assert "api: Semantic Scholar" in result
+        assert f"source: https://www.semanticscholar.org/paper/{paper_id}" in result
+        assert "see_also:" in result
+        assert "ARXIV:1706.03762" in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_paper_without_arxiv_id(self):
+        """Paper without arXiv ID should not include see_also."""
+        paper_id = "204e3073870fae3d05bcbc2f6a8e263d9b72e776"
+        detail = dict(S2_PAPER_DETAIL_RESPONSE)
+        detail["externalIds"] = {"DOI": "10.1234/test"}
+        respx.get(f"{S2_BASE_URL}/paper/{paper_id}").mock(
+            return_value=httpx.Response(200, json=detail)
+        )
+        result = await semantic_scholar("paper", paper_id)
+        assert result.startswith("---\n")
+        assert "see_also" not in result
+
 
 # ---------------------------------------------------------------------------
 # semantic_scholar — references
@@ -315,6 +350,9 @@ class TestSemanticScholarReferences:
             return_value=httpx.Response(200, json=S2_REFERENCE_RESPONSE)
         )
         result = await semantic_scholar("references", paper_id)
+        assert result.startswith("---\n")
+        assert "api: Semantic Scholar" in result
+        assert "action: references" in result
         assert "Bahdanau" in result
         assert "Neural Machine Translation" in result
 
@@ -331,6 +369,9 @@ class TestSemanticScholarAuthor:
             return_value=httpx.Response(200, json=S2_AUTHOR_SEARCH_RESPONSE)
         )
         result = await semantic_scholar("author_search", "Ashish Vaswani")
+        assert result.startswith("---\n")
+        assert "api: Semantic Scholar" in result
+        assert "action: author_search" in result
         assert "Ashish Vaswani" in result
         assert "Google Brain" in result
         assert "1234" in result
@@ -345,6 +386,10 @@ class TestSemanticScholarAuthor:
             return_value=httpx.Response(200, json=S2_AUTHOR_PAPERS_RESPONSE)
         )
         result = await semantic_scholar("author", "1234")
+        assert result.startswith("---\n")
+        assert "api: Semantic Scholar" in result
+        assert "action: author" in result
+        assert "source: https://www.semanticscholar.org/author/1234" in result
         assert "Ashish Vaswani" in result
         assert "h-index:** 25" in result
         assert "Attention is All you Need" in result
@@ -391,6 +436,11 @@ class TestSemanticScholarSnippets:
         result = await semantic_scholar(
             "snippets", "multi-head attention", paper_id=paper_id
         )
+        assert result.startswith("---\n")
+        assert "api: Semantic Scholar" in result
+        assert "action: snippets" in result
+        assert "hint:" in result
+        assert f"paper: {paper_id}" in result
         assert "### Multi-Head Attention" in result
         assert "jointly attend" in result
         assert "### Scaled Dot-Product Attention" in result
@@ -402,6 +452,9 @@ class TestSemanticScholarSnippets:
             return_value=httpx.Response(200, json=S2_SNIPPET_CORPUS_RESPONSE)
         )
         result = await semantic_scholar("snippets", "multi-head attention")
+        assert result.startswith("---\n")
+        assert "api: Semantic Scholar" in result
+        assert "action: snippets" in result
         assert "## Attention is All you Need" in result
         assert "## BERT" in result
         assert "### Multi-Head Attention" in result

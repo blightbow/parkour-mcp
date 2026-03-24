@@ -324,6 +324,13 @@ class TestFormatArxivList:
         output = _format_arxiv_list(papers, total=50, offset=0)
         assert "Showing 1-1 of 50 results" in output
 
+    def test_hint_suppressed(self):
+        """include_hint=False should omit the embedded markdown hint."""
+        papers = [{"id": "1", "title": "T", "authors": [], "primary_category": "cs.AI"}]
+        output = _format_arxiv_list(papers, total=None, offset=0, include_hint=False)
+        assert "paper action" not in output.lower()
+        assert "SemanticScholar" not in output
+
 
 # ---------------------------------------------------------------------------
 # _fetch_arxiv_paper
@@ -376,6 +383,10 @@ class TestArxivTool:
             return_value=httpx.Response(200, text=ARXIV_MULTI_ENTRY_XML)
         )
         result = await arxiv(action="search", query="ti:attention AND cat:cs.CL")
+        assert result.startswith("---\n")
+        assert "api: arXiv" in result
+        assert "action: search" in result
+        assert "hint:" in result
         assert "Attention Is All You Need" in result
         assert "BERT" in result
 
@@ -414,6 +425,11 @@ class TestArxivTool:
             return_value=httpx.Response(200, text=ARXIV_MULTI_ENTRY_XML)
         )
         result = await arxiv(action="category", query="cs.CL")
+        assert result.startswith("---\n")
+        assert "api: arXiv" in result
+        assert "action: category" in result
+        assert "category: cs.CL" in result
+        assert "hint:" in result
         assert "Attention Is All You Need" in result
 
     @pytest.mark.asyncio

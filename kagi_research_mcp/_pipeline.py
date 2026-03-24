@@ -350,6 +350,7 @@ def _slice_output(
         fm_entries["hint"] = "Use slices= to retrieve adjacent context by index"
     else:
         fm_entries["slices"] = indices
+        fm_entries["hint"] = "Use search= for BM25 keyword search, or slices= with adjacent indices for more context"
 
     fm = _build_frontmatter(fm_entries)
 

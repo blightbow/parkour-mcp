@@ -325,6 +325,7 @@ class TestWebFetchDirectSlices:
         )
         result = await web_fetch_direct("https://example.com/page", slices=[0, 1])
         assert "total_slices:" in result
+        assert "hint:" in result
         assert "--- slice 0" in result
         assert "--- slice 1" in result
 

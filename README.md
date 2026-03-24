@@ -32,7 +32,8 @@ sections:
       - Directives (#directives)
     - Firefox UA string (#firefox-ua-string)
     - Chrome UA string (#chrome-ua-string)
-    - Crawler and bot UA strings (#crawler-and-bot-ua-strings)
+    - Crawler and bot UA strings (#crawler-and-bot-ua-strings) [header only]
+      - Examples (Crawler and bot UA strings) (#examples)
     - Specifications (#specifications)
     - See also (#see-also)
 ---
@@ -52,6 +53,8 @@ sections:
       - Directives
     - Firefox UA string
     - Chrome UA string
+    - Crawler and bot UA strings [header only]
+      - Examples (Crawler and bot UA strings)
     - Specifications
     - See also
 ---
@@ -88,19 +91,30 @@ Sometimes this is enough to decide that the document is of no relevence whatsoev
 
 For documentation trapped in a JavaScript cage, the MCP server provides a Playwright enabled fetch tool that supports the same content extraction workflow. Tool chaining can also be used for limited interaction with webpage elements:
 
-**ReAct interaction example:**
-```python
-# First call: fetch page, observe interactive elements
-result = web_fetch_js(url="https://example.com/app")
+**ReAct interaction** — fetch a page, then interact with discovered elements:
 
-# Follow-up: interact with discovered elements
-result = web_fetch_js(
-    url="https://example.com/app",
-    actions=[
-        {"action": "fill", "selector": "input[name=query]", "value": "search term"},
-        {"action": "click", "selector": "button#submit"}
-    ]
-)
+```
+>>> web_fetch_js(url="https://example.com/app")
+---
+title: Example App
+source: https://example.com/app
+browser: WebKit
+---
+
+# Example App
+...
+
+>>> web_fetch_js(url="https://example.com/app",
+...              actions=[{"action": "fill", "selector": "input[name=query]", "value": "search term"},
+...                       {"action": "click", "selector": "button#submit"}])
+---
+title: Example App — Search Results
+source: https://example.com/app
+browser: WebKit
+---
+
+# Search Results
+...
 ```
 
 ### BM25 searching + content slicing
@@ -146,6 +160,7 @@ title: 42 (number)
 source: https://en.wikipedia.org/wiki/42_(number)
 total_slices: 7
 slices: [3, 4, 5]
+hint: Use search= for BM25 keyword search, or slices= with adjacent indices for more context
 ---
 
 --- slice 3 (Popular culture) ---
@@ -214,7 +229,7 @@ source: https://en.wikipedia.org/wiki/42_(number)
 footnotes_only: True
 ---
 
-[^14]: ["Mathematical Fiction: Hitchhiker's Guide to the Galaxy"](http://kasmana.people.cofc.edu/MATHFICT/mfview.php?callnumber=mf458)
+[^14]: ["Mathematical Fiction: Hitchhiker's Guide to the Galaxy (1979)"](http://kasmana.people.cofc.edu/MATHFICT/mfview.php?callnumber=mf458)
 [^15]: ["17 amazing Google Easter eggs"](https://www.cbsnews.com/pictures/17-amazing-google-easter-eggs/2/)
 ```
 
@@ -248,6 +263,10 @@ see_also: ARXIV:1706.03762v7 with SemanticScholar for citations
 
 **Comment:** 15 pages, 5 figures
 
+**Abstract:** https://arxiv.org/abs/1706.03762v7
+**PDF:** https://arxiv.org/pdf/1706.03762v7
+**HTML:** https://arxiv.org/html/1706.03762v7
+
 *For citation data, use SemanticScholar with `ARXIV:1706.03762v7`*
 
 ## Abstract
@@ -260,6 +279,12 @@ or convolutional neural networks in an encoder-decoder configuration...
 
 ```
 >>> arxiv(action="search", query="ti:attention AND cat:cs.CL", limit=3)
+---
+api: arXiv
+action: search
+query: ti:attention AND cat:cs.CL
+hint: Use paper action for full details, or SemanticScholar with ARXIV:<id> for citation data
+---
 
 1. **Attention Is All You Need** [cs.CL]
    Ashish Vaswani et al.
@@ -268,14 +293,18 @@ or convolutional neural networks in an encoder-decoder configuration...
    Shuangfei Zhai et al.
    arXiv:2105.14103v2
 ...
-
-*Use `paper` action or SemanticScholar with `ARXIV:<id>` for full details and citation data.*
 ```
 
 **Category browsing** — recent papers in an arXiv category:
 
 ```
 >>> arxiv(action="category", query="cs.AI", limit=3)
+---
+api: arXiv
+action: category
+category: cs.AI
+hint: Use paper action for full details, or SemanticScholar with ARXIV:<id> for citation data
+---
 
 1. **DMMRL: Disentangled Multi-Modal Representation Learning...** [cs.LG]
    Long Xu et al.
@@ -302,6 +331,7 @@ Our decision to use BM25 searching with the fetch tools was informed by Semantic
 title: Attention is All you Need
 source: https://www.semanticscholar.org/paper/204e3073870fae3d05bcbc2f6a8e263d9b72e776
 api: Semantic Scholar
+see_also: ARXIV:1706.03762 with ArXiv for categories and affiliations
 ---
 
 # Attention is All you Need
@@ -312,6 +342,12 @@ api: Semantic Scholar
 
 ```
 >>> semantic_scholar(action="paper", query="204e3073870fae3d05bcbc2f6a8e263d9b72e776")
+---
+title: Attention is All you Need
+source: https://www.semanticscholar.org/paper/204e3073870fae3d05bcbc2f6a8e263d9b72e776
+api: Semantic Scholar
+see_also: ARXIV:1706.03762 with ArXiv for categories and affiliations
+---
 
 # Attention is All you Need
 
@@ -321,7 +357,7 @@ api: Semantic Scholar
 **Venue:** Neural Information Processing Systems
 **Published:** 2017-06-12
 
-**Citations:** 169,982 (4,542 influential) | **References:** 41
+**Citations:** 170,259 (19,464 influential) | **References:** 41
 
 **ArXiv:** [1706.03762](https://arxiv.org/abs/1706.03762)
 
@@ -341,6 +377,13 @@ or convolutional neural networks in an encoder-decoder configuration...
 ```
 >>> semantic_scholar(action="snippets", query="multi-head attention",
 ...                  paper_id="204e3073870fae3d05bcbc2f6a8e263d9b72e776")
+---
+api: Semantic Scholar
+action: snippets
+query: multi-head attention
+paper: 204e3073870fae3d05bcbc2f6a8e263d9b72e776
+hint: Use paper action for abstract, TL;DR, and citation data
+---
 
 ### Multi-Head Attention
 
