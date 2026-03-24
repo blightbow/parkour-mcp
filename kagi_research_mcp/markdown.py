@@ -12,6 +12,7 @@ class TextOnlyConverter(MarkdownConverter):
     """Custom converter that preserves link hrefs but strips non-text content like images."""
 
     def convert_img(self, el, text, parent_tags):
+        del text, parent_tags  # required by override signature
         # Images can't render as text - return alt text only if meaningful
         alt = el.get('alt', '').strip()
         return f'[Image: {alt}]' if alt else ''
@@ -180,6 +181,16 @@ def _extract_sections_from_markdown(markdown: str) -> list[dict]:
         else:
             sec["end_pos"] = len(markdown)
 
+    # Tag sections whose body is empty (heading only, content lives in
+    # child subsections).  The body is the text after the heading line
+    # up to end_pos; if it is pure whitespace the section is header-only.
+    for sec in sections:
+        heading_line_end = markdown.find('\n', sec["start_pos"])
+        if heading_line_end == -1:
+            heading_line_end = len(markdown)
+        body = markdown[heading_line_end:sec["end_pos"]]
+        sec["header_only"] = not body.strip()
+
     return sections
 
 
@@ -228,7 +239,8 @@ def _build_section_list(
             if parent_idx is not None:
                 name = f"{name} ({sections[parent_idx]['name']})"
         slug_suffix = f" (#{_slugify(sec['name'])})" if include_slugs else ""
-        lines.append(" " * indent + f"- {name}{slug_suffix}")
+        ho_suffix = " [header only]" if sec.get("header_only") else ""
+        lines.append(" " * indent + f"- {name}{slug_suffix}{ho_suffix}")
 
     return lines
 

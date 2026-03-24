@@ -134,6 +134,33 @@ class TestExtractSections:
         names = [s["name"] for s in sections]
         assert names == ["Before", "After"]
 
+    def test_header_only_false_when_body_present(self):
+        """Sections with body text should not be marked header-only."""
+        sections = _extract_sections_from_markdown(SAMPLE_MARKDOWN)
+        for sec in sections:
+            assert sec["header_only"] is False, f"{sec['name']} should not be header-only"
+
+    def test_header_only_true_when_no_body(self):
+        """A heading followed immediately by a child heading is header-only."""
+        md_text = "# Parent\n\n## Child\n\nChild content."
+        sections = _extract_sections_from_markdown(md_text)
+        assert sections[0]["header_only"] is True
+        assert sections[1]["header_only"] is False
+
+    def test_header_only_whitespace_only_body(self):
+        """A heading followed by only blank lines before the next heading is header-only."""
+        md_text = "## Alpha\n\n\n\n## Beta\n\nReal content."
+        sections = _extract_sections_from_markdown(md_text)
+        assert sections[0]["header_only"] is True
+        assert sections[1]["header_only"] is False
+
+    def test_header_only_last_section_at_eof(self):
+        """A final heading with no trailing content is header-only."""
+        md_text = "## First\n\nContent.\n\n## Last\n"
+        sections = _extract_sections_from_markdown(md_text)
+        assert sections[0]["header_only"] is False
+        assert sections[1]["header_only"] is True
+
 
 class TestSlugify:
     def test_basic_heading(self):
@@ -233,13 +260,29 @@ class TestBuildSectionList:
         lines = _build_section_list(sections)
         assert lines == ["- Only One"]
 
+    def test_header_only_annotation(self):
+        """Header-only sections should be annotated in the section list."""
+        md_text = "# Parent\n\n## Child One\n\nContent.\n\n## Child Two\n\nMore."
+        sections = _extract_sections_from_markdown(md_text)
+        lines = _build_section_list(sections)
+        assert lines[0] == "- Parent [header only]"
+        assert "[header only]" not in lines[1]
+        assert "[header only]" not in lines[2]
+
+    def test_header_only_annotation_with_slugs(self):
+        """Header-only annotation should appear after the slug."""
+        md_text = "# Parent\n\n## Child\n\nContent."
+        sections = _extract_sections_from_markdown(md_text)
+        lines = _build_section_list(sections, include_slugs=True)
+        assert lines[0] == "- Parent (#parent) [header only]"
+
 
 # --- _filter_markdown_by_sections ---
 
 class TestFilterMarkdownBySections:
     def test_single_section_extraction(self):
         sections = _extract_sections_from_markdown(SAMPLE_MARKDOWN)
-        filtered, meta, unmatched = _filter_markdown_by_sections(SAMPLE_MARKDOWN, ["Section Two"], sections)
+        filtered, _meta, _unmatched = _filter_markdown_by_sections(SAMPLE_MARKDOWN, ["Section Two"], sections)
         assert "Content of section two" in filtered
         # Each section is its own entry — subsections are separate entries
         assert "Section One" not in filtered
@@ -247,7 +290,7 @@ class TestFilterMarkdownBySections:
 
     def test_multiple_section_extraction(self):
         sections = _extract_sections_from_markdown(SAMPLE_MARKDOWN)
-        filtered, meta, unmatched = _filter_markdown_by_sections(
+        filtered, meta, _unmatched = _filter_markdown_by_sections(
             SAMPLE_MARKDOWN, ["Section One", "Section Three"], sections
         )
         assert "Content of section one" in filtered
@@ -282,7 +325,7 @@ class TestFilterMarkdownBySections:
 
     def test_disambiguated_name_match(self):
         sections = _extract_sections_from_markdown(SAMPLE_MARKDOWN_WITH_DUPLICATES)
-        filtered, meta, unmatched = _filter_markdown_by_sections(
+        filtered, _meta, unmatched = _filter_markdown_by_sections(
             SAMPLE_MARKDOWN_WITH_DUPLICATES, ["Details (Overview)"], sections
         )
         assert "First details" in filtered
@@ -290,7 +333,7 @@ class TestFilterMarkdownBySections:
         assert unmatched == []
 
     def test_all_sections_empty(self):
-        filtered, meta, unmatched = _filter_markdown_by_sections("No headings here.", ["Foo"], [])
+        filtered, _meta, unmatched = _filter_markdown_by_sections("No headings here.", ["Foo"], [])
         assert unmatched == ["Foo"]
         assert filtered == ""
 
@@ -384,7 +427,7 @@ class TestFilterMarkdownBySections:
         """Combined case, underscore, and apostrophe mismatch resolves."""
         md_text = "## The Author's Notes\n\nNotes content.\n\n## Other\n\nOther."
         sections = _extract_sections_from_markdown(md_text)
-        filtered, meta, unmatched = _filter_markdown_by_sections(
+        filtered, _meta, unmatched = _filter_markdown_by_sections(
             md_text, ["The_Author%27s_Notes"], sections
         )
         assert "Notes content" in filtered

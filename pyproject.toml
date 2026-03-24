@@ -43,6 +43,10 @@ markers = [
 ]
 addopts = "-m 'not live'"
 
+[tool.pyright]
+venvPath = "."
+venv = ".venv"
+
 [dependency-groups]
 dev = [
     "pytest>=9.0.2",
