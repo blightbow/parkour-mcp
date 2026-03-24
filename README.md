@@ -15,7 +15,7 @@ This tool accesses the [Semantic Scholar](https://www.semanticscholar.org/) API.
 
 There is a cavernous difference between good context and bad context. Modern LLM solutions have converged on agentic toolchains that pair cheaper text analysis LLMs (Haiku) with larger models that excel at reasoning (Opus), but sometimes the finer details get lost in this process. In a worst case scenario, sometimes these details get hallucinated during the summarization process...**including the attributed authors of the papers themselves**.
 
-This MCP server implements a different approach that is grounded in targeted text extraction and reasoning chains. By breaking a page down into section headings and presenting it as a table of contents, the LLM can understand the composition of a document before making any further decisions.
+This MCP server implements a different approach that is grounded in targeted text extraction and reasoning chains. By breaking a page down into section headings and presenting it as a table of contents, the LLM can understand the composition of a document before making any further decisions. YAML frontmatter is leveraged across content fetching tools to steer the LLM toward useful next steps and away from dead ends. (see: [our frontmatter standard](https://github.com/blightbow/kagi-research-mcp/blob/main/docs/frontmatter-standard.md))
 
 ### Section Extraction
 
@@ -214,7 +214,7 @@ ultimate question of life, the universe, and everything." Once typed, the
 calculator answers with the number 42.[^15]
 ```
 
-### Special MediaWiki Handling
+### Special MediaWiki handling
 
 When one of the well-known MediaWiki URI schemas are detected, the tool automatically switches to fetching the article using the MediaWiki API and strips out the navigation boxes. This makes the Markdown conversion process less noisy (no extra HTML), and also plays nicely with Wikipedia's bot usage policy.
 
