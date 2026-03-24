@@ -12,7 +12,8 @@ from .markdown import (
 )
 from ._pipeline import (
     _extract_fragment, _normalize_sections, _resolve_fragment_source,
-    _mediawiki_fast_path, _s2_fast_path, _process_markdown_sections,
+    _mediawiki_fast_path, _arxiv_fast_path, _s2_fast_path,
+    _process_markdown_sections,
     _cached_mediawiki_fetch,
     _page_cache, _search_slices, _get_slices,
 )
@@ -119,6 +120,21 @@ async def web_fetch_direct(
         except Exception:
             pass
         return f"Error: Footnote retrieval requires a MediaWiki page (Wikipedia, etc.)"
+
+    # --- arXiv fast path (before S2 — arXiv URLs get arXiv-native metadata) ---
+    try:
+        from .arxiv import _detect_arxiv_url
+        if _detect_arxiv_url(url):
+            if want_slicing:
+                return (
+                    "Error: search/slices not supported for arXiv abstract/PDF URLs. "
+                    "Use the /html/ URL for full text with search/slices support."
+                )
+            result = await _arxiv_fast_path(url)
+            if result is not None:
+                return result
+    except Exception:
+        pass
 
     # --- Semantic Scholar fast path ---
     try:
@@ -256,6 +272,20 @@ async def web_fetch_sections(url: str) -> str:
     original_url = url
     url, fragment = _extract_fragment(url)
     section_names = [fragment] if fragment else None
+
+    # --- arXiv fast path (sections not applicable for API data) ---
+    from .arxiv import _detect_arxiv_url
+    if _detect_arxiv_url(url):
+        arxiv_id = _detect_arxiv_url(url)
+        fm = _build_frontmatter({
+            "title": "arXiv paper",
+            "source": original_url,
+            "api": "arXiv",
+            "note": "Section listing is not applicable for API-sourced paper data. "
+                    f"Use WebFetchDirect with https://arxiv.org/html/{arxiv_id} "
+                    "for full paper text with section-aware browsing.",
+        })
+        return fm
 
     # --- Semantic Scholar fast path (sections not applicable for API data) ---
     from .semantic_scholar import _detect_s2_url

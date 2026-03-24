@@ -12,7 +12,8 @@ from .common import _FETCH_HEADERS
 from .markdown import html_to_markdown
 from ._pipeline import (
     _extract_fragment, _normalize_sections, _resolve_fragment_source,
-    _mediawiki_fast_path, _s2_fast_path, _process_markdown_sections,
+    _mediawiki_fast_path, _arxiv_fast_path, _s2_fast_path,
+    _process_markdown_sections,
 )
 
 logger = logging.getLogger(__name__)
@@ -252,6 +253,14 @@ async def web_fetch_js(
     if fragment and not section_names:
         section_names = [fragment]
     source_url, fragment_warning = _resolve_fragment_source(url, fragment, section)
+
+    # --- arXiv fast path (before launching browser) ---
+    try:
+        result = await _arxiv_fast_path(url)
+        if result is not None:
+            return result
+    except Exception:
+        pass
 
     # --- Semantic Scholar fast path (before launching browser) ---
     try:

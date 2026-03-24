@@ -1,6 +1,6 @@
 # Kagi Research MCP
 
-A research synthesis pipeline for MCP. Enables agents to perform targeted content extraction from websites and research papers. Integrates with the APIs for Kagi Search, Kagi Summarize, Semantic Scholar, and MediaWiki. It is primarily designed for Claude Code and Claude Desktop, but should be adaptable to most needs.
+A research synthesis pipeline for MCP. Enables agents to perform targeted content extraction from websites and research papers. Integrates with the APIs for Kagi Search, Kagi Summarize, Semantic Scholar, arXiv, and MediaWiki. It is primarily designed for Claude Code and Claude Desktop, but should be adaptable to most needs.
 
 ## Attribution
 
@@ -218,6 +218,73 @@ footnotes_only: True
 [^15]: ["17 amazing Google Easter eggs"](https://www.cbsnews.com/pictures/17-amazing-google-easter-eggs/2/)
 ```
 
+### Special arXiv handling
+
+arXiv `/abs/` and `/pdf/` URLs are intercepted by the fetch tools and served via the arXiv Atom API, returning structured metadata instead of scraped HTML. This gives you author affiliations, categories, version history, DOI crosslinks, and journal refs — data that would otherwise require manual extraction from the landing page. `/pdf/` URLs get a frontmatter hint noting that the original URL was a PDF link.
+
+`/html/` URLs are deliberately **not** intercepted. arXiv's HTML endpoint serves the full rendered paper, which is more useful as full text with BM25 slicing support than as metadata-only.
+
+**arXiv URL interception** — `/abs/` URLs return structured metadata via API:
+
+```
+>>> web_fetch_direct("https://arxiv.org/abs/1706.03762")
+---
+title: Attention Is All You Need
+source: https://arxiv.org/abs/1706.03762v7
+api: arXiv
+full_text: Use WebFetchDirect with https://arxiv.org/html/1706.03762v7 for full paper text with search/slices
+see_also: ARXIV:1706.03762v7 with SemanticScholar for citations
+---
+
+# Attention Is All You Need
+
+**Authors:** Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszkoreit, ...
+
+**Published:** 2017-06-12T17:57:34Z
+**Updated:** 2023-08-02T00:41:18Z
+
+**Primary category:** cs.CL
+**Categories:** cs.LG
+
+**Comment:** 15 pages, 5 figures
+
+*For citation data, use SemanticScholar with `ARXIV:1706.03762v7`*
+
+## Abstract
+
+The dominant sequence transduction models are based on complex recurrent
+or convolutional neural networks in an encoder-decoder configuration...
+```
+
+**arXiv search** — uses arXiv query syntax with field prefixes and boolean operators:
+
+```
+>>> arxiv(action="search", query="ti:attention AND cat:cs.CL", limit=3)
+
+1. **Attention Is All You Need** [cs.CL]
+   Ashish Vaswani et al.
+   arXiv:1706.03762v7
+2. **An Attention Free Transformer** [cs.LG]
+   Shuangfei Zhai et al.
+   arXiv:2105.14103v2
+...
+
+*Use `paper` action or SemanticScholar with `ARXIV:<id>` for full details and citation data.*
+```
+
+**Category browsing** — recent papers in an arXiv category:
+
+```
+>>> arxiv(action="category", query="cs.AI", limit=3)
+
+1. **DMMRL: Disentangled Multi-Modal Representation Learning...** [cs.LG]
+   Long Xu et al.
+   arXiv:2603.21108v1
+...
+```
+
+The arXiv tool is designed to complement SemanticScholar. arXiv provides the canonical metadata (affiliations, categories, version history), while SemanticScholar provides citation counts, influential citation tracking, and body text snippet search. Frontmatter hints guide the LLM to cross-reference between the two.
+
 ### Special SemanticScholar.org handling
 
 SemanticScholar.org bears its own special mention for research paper synthesis. S2 has emerged as an alternative to Google Scholar that is much more accessible to tool automation. The main limitation is that it cannot be crawled with standard HTTP tooling, but that's where the Semantic Scholar API comes into play. We expose this in two ways:
@@ -353,8 +420,8 @@ The `--profile` argument adjusts tool names and descriptions for the target clie
 
 | Profile | Target | Tool Names |
 |---------|--------|------------|
-| `desktop` (default) | Claude Desktop | `kagi_search`, `kagi_summarize`, `web_fetch_js`, `web_fetch_direct`, `web_fetch_sections`, `semantic_scholar` |
-| `code` | Claude Code | `KagiSearch`, `KagiSummarize`, `WebFetchJS`, `WebFetchDirect`, `WebFetchSections`, `SemanticScholar` |
+| `desktop` (default) | Claude Desktop | `kagi_search`, `kagi_summarize`, `web_fetch_js`, `web_fetch_direct`, `web_fetch_sections`, `semantic_scholar`, `arxiv` |
+| `code` | Claude Code | `KagiSearch`, `KagiSummarize`, `WebFetchJS`, `WebFetchDirect`, `WebFetchSections`, `SemanticScholar`, `ArXiv` |
 
 The `desktop` profile (snake_case) is the default as it aligns with MCP ecosystem conventions. Claude Code's PascalCase naming is the exception, not the norm.
 
@@ -369,6 +436,7 @@ web_fetch_sections | WebFetchSections      | List section headings and anchor sl
 web_fetch_direct   | WebFetchDirect        | Fetch a Markdown rendered version a HTML webpage (also returns raw content for common content types: JSON, XML, plain text)
 web_fetch_js       | WebFetchJS            | Use Playwright to render a headless version of the website in Markdown (extracting documents from a JavaScript cage)
 semantic_scholar   | SemanticScholar       | Search and retrieve academic paper data from Semantic Scholar (search, paper details, references, authors, body text snippets)
+arxiv              | ArXiv                 | Search and retrieve academic papers from arXiv (search with field-prefix syntax, paper details, category browsing)
 kagi_summarize     | KagiSummarize         | Summarize URLs or text (supports PDFs, YouTube, audio)
 
 ### fetch tool capabilities (common)
@@ -379,6 +447,7 @@ The fetch tools share the following features:
 - **Section extraction** - Use the `section` parameter with a heading name (or list of names) to extract specific sections. Supports disambiguation for duplicate heading names.
 - **Fragment resolution** - URL fragments (e.g. `#section-name`) are resolved against the heading tree. Fuzzy matching handles cross-platform slug differences: case folding, underscore↔hyphen normalization (GFM vs Goldmark), and percent-encoded characters like `%27` (apostrophes).
 - **Whitespace normalization** - Non-breaking spaces, HTML entities (`&nbsp;`), and exotic Unicode whitespace in headings and titles are normalized to plain ASCII spaces for reliable section matching.
+- **arXiv fast path** - `arxiv.org/abs/` and `arxiv.org/pdf/` URLs are intercepted and served via the arXiv Atom API, returning structured metadata (authors with affiliations, categories, DOI, journal refs, version history). `/html/` URLs are deliberately excluded so they fall through to HTTP fetch for full paper text with BM25 slicing support. Frontmatter includes hints to the `/html/` URL and SemanticScholar cross-reference.
 - **Semantic Scholar fast path** - `semanticscholar.org/paper/` URLs are intercepted and served via the S2 Graph API, bypassing CAPTCHA-blocked web pages. Returns structured paper data with YAML frontmatter.
 - **MediaWiki fast path** - Wiki URLs (`/wiki/...`) are detected and fetched via the MediaWiki API with a [Wikimedia-compliant User-Agent](https://meta.wikimedia.org/wiki/User-Agent_policy), bypassing  HTTP entirely. Returns clean markdown with YAML frontmatter including site name and generator metadata. A single-entry page cache avoids redundant API calls when multiple tools access the same page.
 - **Footnote extraction** (MediaWiki) - Inline footnotes appear as `[^N]` markers in the markdown output. The `footnotes` parameter retrieves specific numbered entries. Author-date shorthand (e.g. "Simpson 2003, p. 8") is automatically resolved against the article's bibliography via `#CITEREF` links.
@@ -533,6 +602,8 @@ Kagi is optimized against SEO pollution and a natural fit for research needs. If
 
 **Semantic Scholar Tool:** No. The key is optional, and free: https://www.semanticscholar.org/product/api
 
+**arXiv Tool:** No. The arXiv API is free and requires no authentication.
+
 > Why can't I use Kagi's search API? I have money in my API wallet.
 
 Kagi's search API is currently in closed beta and access is granted on an individual basis. The process is simple, send an e-mail and they will enable your use of the search API. https://help.kagi.com/kagi/api/search.html
@@ -552,6 +623,10 @@ You probably shouldn't have auto-approved that tool. Sorry, we can't help.
 Because you are hitting S2's global rate limit. All anonymous API calls for S2 share the same rate limit pool, and the the calls made through this tool are no different.
 
 You can request an API key from S2 [here](https://www.semanticscholar.org/product/api). There is no fee, but approvals are entirely at S2's own discretion.
+
+> Why are arXiv API calls so slow?
+
+The arXiv API requires a minimum 3-second interval between requests. This is enforced by the MCP server's rate limiter to comply with arXiv's [API terms of use](https://info.arxiv.org/help/api/tou.html). Parallel tool calls are serialized and the second caller sleeps for the remaining window.
 
 > Why are batched tool calls against Semantic Scholar so slow?
 
@@ -573,5 +648,6 @@ Also, why would you connect a tool designed with almost no synthesis of research
 
 - Kagi.com for permission to use the Kagi name, and providing tools that were a natural fit for our needs.
 - SemanticScholar.org for providing a much more accessible alternative to Google Scholar, and a fast turnaround on the API key for our internal testing.
+- arXiv.org for providing a free, well-documented Atom API that made this integration straightforward.
 - Wikipedia.org for allowing this tool to leverage the MediaWiki API at the easy cost of a user-agent header.
 - The authors of the dependencies used by this MCP server. There are too many of you to list individually, but we appreciate your work greatly.

@@ -9,6 +9,7 @@ from .kagi import search, summarize
 from .fetch_js import web_fetch_js
 from .fetch_direct import web_fetch_direct, web_fetch_sections
 from .semantic_scholar import semantic_scholar
+from .arxiv import arxiv
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -25,6 +26,7 @@ TOOL_NAMES = {
     "web_fetch_js": {"code": "WebFetchJS", "desktop": "web_fetch_js"},
     "summarize": {"code": "KagiSummarize", "desktop": "kagi_summarize"},
     "semantic_scholar": {"code": "SemanticScholar", "desktop": "semantic_scholar"},
+    "arxiv": {"code": "ArXiv", "desktop": "arxiv"},
 }
 
 # Profile variables for description templates
@@ -92,6 +94,24 @@ Returns markdown with interactive elements annotated for follow-up actions.""",
 
 Supports web pages, PDFs, YouTube videos, audio files, and documents.
 Use this when {fetch} fails due to agent blacklisting or access restrictions.""",
+
+    "arxiv": """Search and retrieve academic papers from arXiv.
+
+Use this for arXiv paper lookups: search by query, get paper details
+(abstract, authors, categories, affiliations, DOI, journal refs), or
+browse recent papers by category. arXiv abstract and PDF URLs are also
+handled automatically by {fetch_direct} tools.
+
+IMPORTANT: Search uses arXiv query syntax, NOT natural language:
+- Field prefixes: ti: (title), au: (author), abs: (abstract),
+  cat: (category), all: (all fields), co: (comment), jr: (journal ref)
+- Boolean operators: AND, OR, ANDNOT
+- Examples: "ti:attention AND cat:cs.CL", "au:vaswani AND ti:transformer"
+
+Actions: search, paper, category.
+
+For citation counts and cross-references, use SemanticScholar with
+ARXIV:<id> after retrieving the arXiv ID.""",
 
     "semantic_scholar": """Search and retrieve academic paper data from Semantic Scholar.
 
@@ -173,6 +193,7 @@ def main():
         ("web_fetch_js", web_fetch_js),
         ("summarize", summarize),
         ("semantic_scholar", semantic_scholar),
+        ("arxiv", arxiv),
     ]
     for internal_name, func in tools:
         name = TOOL_NAMES[internal_name][args.profile]

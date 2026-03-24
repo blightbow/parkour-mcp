@@ -21,6 +21,7 @@ from .markdown import (
 )
 from .mediawiki import _detect_mediawiki, _fetch_mediawiki_page, _mediawiki_html_to_markdown
 from .semantic_scholar import _detect_s2_url, _fetch_s2_paper
+from .arxiv import _detect_arxiv_url, _fetch_arxiv_paper
 
 logger = logging.getLogger(__name__)
 
@@ -230,6 +231,29 @@ async def _mediawiki_fast_path(
 # ---------------------------------------------------------------------------
 # Semantic Scholar fast path
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# arXiv fast path
+# ---------------------------------------------------------------------------
+
+async def _arxiv_fast_path(url: str) -> Optional[str]:
+    """Attempt to fetch an arXiv paper via the API.
+
+    Returns formatted paper details on success, or None if the URL is not
+    an arXiv /abs/ or /pdf/ link. /html/ URLs are deliberately not matched
+    so they fall through to HTTP fetch for full paper text.
+    """
+    arxiv_id = _detect_arxiv_url(url)
+    if not arxiv_id:
+        return None
+
+    # Detect if original URL was a PDF link
+    is_pdf = "/pdf/" in url
+
+    result = await _fetch_arxiv_paper(arxiv_id, _pdf_url=is_pdf)
+    # Always return the result to avoid falling through to HTTP fetch
+    return result
+
 
 async def _s2_fast_path(url: str) -> Optional[str]:
     """Attempt to fetch a Semantic Scholar paper via the API.
