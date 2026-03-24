@@ -166,7 +166,7 @@ def _extract_citations(html: str) -> list[dict]:
 
         # Resolve author-date shorthand via #CITEREF links
         citeref_links = ref_text_el.find_all(
-            "a", href=lambda h: h and h.startswith("#CITEREF")
+            "a", href=lambda h: h and h.startswith("#CITEREF")  # type: ignore[reportArgumentType]
         )
         sources = []
         for citeref_link in citeref_links:
@@ -175,6 +175,8 @@ def _extract_citations(html: str) -> list[dict]:
             if not target_el:
                 continue
             bib_el = target_el.parent
+            if not bib_el:
+                continue
             bib_text = re.sub(
                 r"\s+", " ", bib_el.get_text(separator=" ", strip=True)
             )

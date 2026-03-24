@@ -22,7 +22,7 @@ class TextOnlyConverter(MarkdownConverter):
         if stripped.startswith('[Image:') or not stripped:
             return stripped
         # Otherwise use default link conversion
-        return super().convert_a(el, text, parent_tags)
+        return super().convert_a(el, text, parent_tags)  # type: ignore[reportAttributeAccessIssue]
 
 
 def md(html, **options):
@@ -65,10 +65,11 @@ def html_to_markdown(html: str) -> tuple[str, str]:
     h1 = soup.find("h1")
     og_title = soup.find("meta", property="og:title")
     title_tag = soup.find("title")
+    og_content = str(og_title.get("content", "")) if og_title else ""
     if h1:
         title = h1.get_text(strip=True)
-    elif og_title and og_title.get("content", "").strip():
-        title = og_title["content"].strip()
+    elif og_content.strip():
+        title = og_content.strip()
     elif title_tag:
         title = title_tag.get_text(strip=True)
     else:

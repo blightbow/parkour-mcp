@@ -183,6 +183,8 @@ class TestPageCache:
         md = "# Title\n\nParagraph one.\n\n## Section\n\nParagraph two."
         _page_cache.store("https://example.com", "Title", md)
         cached = _page_cache.get("https://example.com")
+        assert cached is not None
+        assert cached.slices is not None
         # All content should appear in at least one slice
         combined = " ".join(cached.slices)
         assert "Paragraph one" in combined
@@ -197,9 +199,11 @@ class TestPageCache:
         )
         _page_cache.store("https://example.com", "Doc", md)
         cached = _page_cache.get("https://example.com")
+        assert cached is not None
         results = cached.search("frobnicate")
         assert len(results) >= 1
         # Results should be slice indices within range
+        assert cached.slices is not None
         for idx in results:
             assert 0 <= idx < len(cached.slices)
 
@@ -217,6 +221,7 @@ class TestPageCache:
         )
         _page_cache.store("https://example.com", "Doc", md)
         cached = _page_cache.get("https://example.com")
+        assert cached is not None
         results = cached.search("training results")
         # Both "training" and "results" sections should match
         assert len(results) >= 2
@@ -227,6 +232,7 @@ class TestPageCache:
         md = "# Doc\n\nThis has `code` with backticks and **bold** text.\n\n"
         _page_cache.store("https://example.com", "Doc", md)
         cached = _page_cache.get("https://example.com")
+        assert cached is not None
         results = cached.search("code")
         assert len(results) >= 1
 
@@ -435,6 +441,7 @@ class TestSliceAncestryInOutput:
         # Request all slices to check ancestry
         cached = _page_cache.get("https://example.com/page")
         assert cached is not None
+        assert cached.slices is not None
         all_indices = list(range(len(cached.slices)))
         result = await web_fetch_direct(
             "https://example.com/page", slices=all_indices
