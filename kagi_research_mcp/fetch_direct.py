@@ -82,7 +82,7 @@ async def web_fetch_direct(
         fm_base = {"source": source_url}
         cached = _page_cache.get(url)
         if cached:
-            fm_base["title"] = cached.title
+            fm_base["title"] = cached.title or "Untitled"
             if search is not None:
                 return _search_slices(url, search, max_tokens, fm_base) or \
                     "Error: Page cache unavailable."

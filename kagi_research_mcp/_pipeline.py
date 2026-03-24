@@ -341,6 +341,7 @@ def _slice_output(
     Respects max_tokens budget — stops emitting slices when exhausted.
     """
     assert cache.slices is not None
+    assert cache.slice_ancestry is not None
 
     fm_entries["total_slices"] = len(cache.slices)
     if search_term is not None:

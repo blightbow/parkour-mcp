@@ -3,7 +3,7 @@
 import logging
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from kagiapi import KagiClient
 
@@ -32,7 +32,7 @@ def _extract_balance(response: dict) -> Optional[float]:
     return None
 
 
-def _check_balance(response: dict, is_summarize: bool = False) -> Optional[str]:
+def _check_balance(response: Any, is_summarize: bool = False) -> Optional[str]:
     """Check balance from response, update lockout state, return warning or None.
 
     Non-summarize calls clear the lockout if balance has recovered.
@@ -192,6 +192,7 @@ async def summarize(
         if url:
             response = client.summarize(url=url, summary_type=summary_type, target_language="EN")
         else:
+            assert text is not None  # guarded by earlier url/text validation
             response = client.summarize(text=text, summary_type=summary_type, target_language="EN")
     except Exception as e:
         logger.exception("Error during summarization")

@@ -62,7 +62,9 @@ class TestLiveMediawikiMarkdown:
     @pytest.mark.asyncio
     async def test_full_page_to_markdown(self):
         info = await _detect_mediawiki(WIKI_URL)
+        assert info is not None
         page = await _fetch_mediawiki_page(info["api_base"], info["page_title"])
+        assert page is not None
         md = _mediawiki_html_to_markdown(page["html"])
 
         assert len(md) > 1000
