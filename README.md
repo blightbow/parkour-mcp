@@ -237,7 +237,7 @@ footnotes_only: True
 
 arXiv `/abs/` and `/pdf/` URLs are intercepted by the fetch tools and served via the arXiv Atom API, returning structured metadata instead of scraped HTML. This gives you author affiliations, categories, version history, DOI crosslinks, and journal refs — data that would otherwise require manual extraction from the landing page. `/pdf/` URLs get a frontmatter hint noting that the original URL was a PDF link.
 
-`/html/` URLs are deliberately **not** intercepted. arXiv's HTML endpoint serves the full rendered paper, which is more useful as full text with BM25 slicing support than as metadata-only.
+`/html/` URLs are deliberately **not** intercepted. arXiv's HTML endpoint serves the full rendered paper, which is more useful as full text with BM25 slicing support than as metadata-only. Not all papers have HTML renders (many older or pre-LaTeX papers lack them), so the `full_text` hint is only emitted after a HEAD check confirms availability. When HTML is unavailable, a `warning` field is emitted instead and the SemanticScholar cross-reference steers toward body text snippets as an alternative.
 
 **arXiv URL interception** — `/abs/` URLs return structured metadata via API:
 

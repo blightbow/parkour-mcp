@@ -339,22 +339,48 @@ class TestFormatArxivList:
 class TestFetchArxivPaper:
     @respx.mock
     @pytest.mark.asyncio
-    async def test_end_to_end(self):
+    async def test_end_to_end_html_available(self):
         respx.get(ARXIV_API_URL).mock(
             return_value=httpx.Response(200, text=ARXIV_SINGLE_ENTRY_XML)
+        )
+        respx.head("https://arxiv.org/html/1706.03762v7").mock(
+            return_value=httpx.Response(200)
         )
         result = await _fetch_arxiv_paper("1706.03762")
         assert "---" in result  # frontmatter
         assert "api: arXiv" in result
         assert "full_text:" in result
+        assert "warning:" not in result
         assert "see_also:" in result
         assert "# Attention Is All You Need" in result
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_end_to_end_html_unavailable(self):
+        respx.get(ARXIV_API_URL).mock(
+            return_value=httpx.Response(200, text=ARXIV_SINGLE_ENTRY_XML)
+        )
+        respx.head("https://arxiv.org/html/1706.03762v7").mock(
+            return_value=httpx.Response(404)
+        )
+        result = await _fetch_arxiv_paper("1706.03762")
+        assert "full_text:" not in result
+        assert "warning:" in result
+        assert "HTML full text is not available" in result
+        assert "abstract and metadata" in result
+        # Body should not include the HTML link
+        assert "**HTML:**" not in result
+        # S2 cross-reference should mention snippets as alternative
+        assert "body text snippets" in result
 
     @respx.mock
     @pytest.mark.asyncio
     async def test_pdf_hint(self):
         respx.get(ARXIV_API_URL).mock(
             return_value=httpx.Response(200, text=ARXIV_SINGLE_ENTRY_XML)
+        )
+        respx.head("https://arxiv.org/html/1706.03762v7").mock(
+            return_value=httpx.Response(200)
         )
         result = await _fetch_arxiv_paper("1706.03762", _pdf_url=True)
         assert "note:" in result
@@ -405,6 +431,9 @@ class TestArxivTool:
         respx.get(ARXIV_API_URL).mock(
             return_value=httpx.Response(200, text=ARXIV_SINGLE_ENTRY_XML)
         )
+        respx.head("https://arxiv.org/html/1706.03762v7").mock(
+            return_value=httpx.Response(200)
+        )
         result = await arxiv(action="paper", query="1706.03762")
         assert "Attention Is All You Need" in result
         assert "api: arXiv" in result
@@ -414,6 +443,9 @@ class TestArxivTool:
     async def test_paper_action_with_url(self):
         respx.get(ARXIV_API_URL).mock(
             return_value=httpx.Response(200, text=ARXIV_SINGLE_ENTRY_XML)
+        )
+        respx.head("https://arxiv.org/html/1706.03762v7").mock(
+            return_value=httpx.Response(200)
         )
         result = await arxiv(action="paper", query="https://arxiv.org/abs/1706.03762")
         assert "Attention Is All You Need" in result
@@ -450,6 +482,9 @@ class TestArxivFastPath:
         respx.get(ARXIV_API_URL).mock(
             return_value=httpx.Response(200, text=ARXIV_SINGLE_ENTRY_XML)
         )
+        respx.head("https://arxiv.org/html/1706.03762v7").mock(
+            return_value=httpx.Response(200)
+        )
         result = await _arxiv_fast_path("https://arxiv.org/abs/1706.03762")
         assert result is not None
         assert "Attention Is All You Need" in result
@@ -459,6 +494,9 @@ class TestArxivFastPath:
     async def test_pdf_url_triggers_api(self):
         respx.get(ARXIV_API_URL).mock(
             return_value=httpx.Response(200, text=ARXIV_SINGLE_ENTRY_XML)
+        )
+        respx.head("https://arxiv.org/html/1706.03762v7").mock(
+            return_value=httpx.Response(200)
         )
         result = await _arxiv_fast_path("https://arxiv.org/pdf/1706.03762")
         assert result is not None

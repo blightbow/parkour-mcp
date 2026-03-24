@@ -77,8 +77,9 @@ Conditional:
 | `title`    | Paper title |
 | `source`   | Canonical arXiv abs URL |
 | `api`      | `arXiv` |
-| `full_text`| Pointer to `/html/` URL for full text |
-| `see_also` | SemanticScholar cross-reference |
+| `full_text`| Pointer to `/html/` URL for full text (only when HTML render exists) |
+| `warning`  | Emitted when HTML full text is unavailable (only abstract/metadata included) |
+| `see_also` | SemanticScholar cross-reference; mentions body text snippets when HTML unavailable |
 
 **`search` and `category` actions:**
 
