@@ -194,7 +194,7 @@ async def _arxiv_request(params: dict) -> list[dict] | str:
 # Formatters
 # ---------------------------------------------------------------------------
 
-def _format_arxiv_paper(data: dict) -> str:
+def _format_arxiv_paper(data: dict, *, html_available: bool = True) -> str:
     """Format a full paper response as markdown."""
     parts = []
 
@@ -250,14 +250,20 @@ def _format_arxiv_paper(data: dict) -> str:
     if arxiv_id:
         parts.append(f"**Abstract:** https://arxiv.org/abs/{arxiv_id}")
         parts.append(f"**PDF:** https://arxiv.org/pdf/{arxiv_id}")
-        parts.append(f"**HTML:** https://arxiv.org/html/{arxiv_id}")
+        if html_available:
+            parts.append(f"**HTML:** https://arxiv.org/html/{arxiv_id}")
         parts.append("")
 
     # Cross-reference to Semantic Scholar
     if arxiv_id:
-        parts.append(
-            f"*For citation data, use SemanticScholar with `ARXIV:{arxiv_id}`*\n"
-        )
+        if html_available:
+            parts.append(
+                f"*For citation data, use SemanticScholar with `ARXIV:{arxiv_id}`*\n"
+            )
+        else:
+            parts.append(
+                f"*For citation data and body text snippets, use SemanticScholar with `ARXIV:{arxiv_id}`*\n"
+            )
 
     # Abstract
     if abstract := data.get("abstract"):
@@ -325,21 +331,43 @@ async def _fetch_arxiv_paper(arxiv_id: str, *, _pdf_url: bool = False) -> str:
     paper = result[0]
     clean_id = paper.get("id", arxiv_id)
 
+    # Check whether an HTML render exists (not all papers have one)
+    html_url = f"https://arxiv.org/html/{clean_id}"
+    html_available = False
+    try:
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+            head = await client.head(html_url)
+            html_available = head.status_code == 200
+    except httpx.RequestError:
+        pass
+
     fm_entries = {
         "title": paper.get("title", "Untitled"),
         "source": f"https://arxiv.org/abs/{clean_id}",
         "api": "arXiv",
-        "full_text": f"Use WebFetchDirect with https://arxiv.org/html/{clean_id} for full paper text with search/slices",
-        "see_also": f"ARXIV:{clean_id} with SemanticScholar for citations",
+        "full_text": (
+            f"Use WebFetchDirect with {html_url} for full paper text with search/slices"
+            if html_available
+            else None
+        ),
+        "warning": (
+            None if html_available
+            else "HTML full text is not available for this paper; only abstract and metadata are included"
+        ),
+        "see_also": (
+            f"ARXIV:{clean_id} with SemanticScholar for citations"
+            if html_available
+            else f"ARXIV:{clean_id} with SemanticScholar for citations and body text snippets"
+        ),
     }
     if _pdf_url:
         fm_entries["note"] = (
-            "Original URL was a PDF link. Structured metadata returned instead. "
-            f"For readable full text, use https://arxiv.org/html/{clean_id}"
+            "Original URL was a PDF link. Structured metadata returned instead."
+            + (f" For readable full text, use {html_url}" if html_available else "")
         )
 
     fm = _build_frontmatter(fm_entries)
-    return fm + "\n\n" + _format_arxiv_paper(paper)
+    return fm + "\n\n" + _format_arxiv_paper(paper, html_available=html_available)
 
 
 # ---------------------------------------------------------------------------
