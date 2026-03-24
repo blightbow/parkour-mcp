@@ -117,7 +117,7 @@ Conditional:
 | `api`   | `Semantic Scholar` |
 | `action`| `references` |
 | `paper` | Source paper ID |
-| `total` | Total reference count |
+| `hint`  | Pagination guidance (when more pages exist) |
 
 **`author_search` action:**
 

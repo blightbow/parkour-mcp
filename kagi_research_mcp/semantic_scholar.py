@@ -459,16 +459,17 @@ async def semantic_scholar(
         # References endpoint wraps each paper in {"citedPaper": {...}}
         raw = result.get("data") or []
         papers = [item.get("citedPaper", item) for item in raw]
-        total = result.get("total")
         if not papers:
             return f"No references found for paper: {query}"
+        # References endpoint uses cursor pagination (next) without a total count
+        has_more = result.get("next") is not None
         fm = _build_frontmatter({
             "api": "Semantic Scholar",
             "action": "references",
             "paper": query,
-            "total": total,
+            "hint": "Use offset/limit to paginate" if has_more else None,
         })
-        return fm + "\n\n" + _format_paper_list(papers, total=total, offset=offset)
+        return fm + "\n\n" + _format_paper_list(papers, total=None, offset=offset)
 
     elif action == "author_search":
         params = {

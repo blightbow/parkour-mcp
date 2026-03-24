@@ -228,8 +228,8 @@ S2_CITATION_RESPONSE = {
 }
 
 S2_REFERENCE_RESPONSE = {
-    "total": 44,
     "offset": 0,
+    "next": 1,
     "data": [
         {
             "citedPaper": {

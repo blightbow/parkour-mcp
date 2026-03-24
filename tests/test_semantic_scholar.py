@@ -353,6 +353,7 @@ class TestSemanticScholarReferences:
         assert result.startswith("---\n")
         assert "api: Semantic Scholar" in result
         assert "action: references" in result
+        assert "hint:" in result  # fixture has next=1, so more pages exist
         assert "Bahdanau" in result
         assert "Neural Machine Translation" in result
 
