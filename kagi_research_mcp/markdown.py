@@ -354,6 +354,23 @@ def _filter_markdown_by_sections(
         if slug:
             slug_to_idx.setdefault(slug, i)
 
+    def _has_subsections(idx: int) -> bool:
+        """Check if the section at idx has child sections (deeper level)."""
+        if idx + 1 < len(sections):
+            return sections[idx + 1]["level"] > sections[idx]["level"]
+        return False
+
+    def _match(idx: int, fragment: Optional[str] = None) -> dict:
+        meta: dict = {
+            "name": sections[idx]["name"],
+            "ancestry_path": _build_ancestry(idx),
+        }
+        if fragment is not None:
+            meta["matched_fragment"] = fragment
+        if _has_subsections(idx):
+            meta["has_subsections"] = True
+        return meta
+
     matched_parts = []
     matched_meta = []
     unmatched = []
@@ -364,19 +381,12 @@ def _filter_markdown_by_sections(
             idx = display_to_idx[req_name]
             sec = sections[idx]
             matched_parts.append(markdown[sec["start_pos"]:sec["end_pos"]].strip())
-            matched_meta.append({
-                "name": sec["name"],
-                "ancestry_path": _build_ancestry(idx),
-            })
+            matched_meta.append(_match(idx))
         elif req_name in slug_to_idx:
             idx = slug_to_idx[req_name]
             sec = sections[idx]
             matched_parts.append(markdown[sec["start_pos"]:sec["end_pos"]].strip())
-            matched_meta.append({
-                "name": sec["name"],
-                "ancestry_path": _build_ancestry(idx),
-                "matched_fragment": req_name,
-            })
+            matched_meta.append(_match(idx, fragment=req_name))
         else:
             # Fuzzy fallback: slugify the fragment so it matches the same
             # canonical form as the heading slugs in slug_to_idx.  Handles
@@ -388,11 +398,7 @@ def _filter_markdown_by_sections(
                 idx = slug_to_idx[fuzzy]
                 sec = sections[idx]
                 matched_parts.append(markdown[sec["start_pos"]:sec["end_pos"]].strip())
-                matched_meta.append({
-                    "name": sec["name"],
-                    "ancestry_path": _build_ancestry(idx),
-                    "matched_fragment": req_name,
-                })
+                matched_meta.append(_match(idx, fragment=req_name))
             else:
                 unmatched.append(req_name)
 

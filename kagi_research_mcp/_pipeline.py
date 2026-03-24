@@ -309,6 +309,12 @@ def _process_markdown_sections(
         # When sections aren't found, show available sections with slugs
         if sections_not_found:
             sections_available = _build_section_list(all_sections, include_slugs=True)
+        # Warn when extracted sections have subsections not included in the output
+        if sections_requested_meta and any(m.get("has_subsections") for m in sections_requested_meta):
+            frontmatter_entries["note"] = (
+                "Section extraction returns only the selected heading's direct content. "
+                "Subsections are separate entries — request them by name to include them."
+            )
 
     markdown_content, truncation_hint = _apply_truncation(markdown_content, max_tokens)
     if truncation_hint and all_sections and not section_names:

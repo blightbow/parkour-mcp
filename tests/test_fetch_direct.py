@@ -117,6 +117,9 @@ class TestWebFetchDirectMarkdown:
         result = await web_fetch_direct("https://example.com/page", section="Second Section")
         assert "Second Section" in result
         assert "section:" in result
+        # Second Section has a child Subsection — note should warn about depth
+        assert "note:" in result
+        assert "Subsections are separate entries" in result
 
     @pytest.mark.asyncio
     @respx.mock

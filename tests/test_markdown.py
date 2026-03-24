@@ -307,6 +307,24 @@ class TestFilterMarkdownBySections:
         _, meta, _ = _filter_markdown_by_sections(SAMPLE_MARKDOWN, ["Subsection A"], sections)
         assert meta[0]["ancestry_path"] == "Main Title > Section Two > Subsection A"
 
+    def test_has_subsections_true(self):
+        """Parent sections with children should be flagged."""
+        sections = _extract_sections_from_markdown(SAMPLE_MARKDOWN)
+        _, meta, _ = _filter_markdown_by_sections(SAMPLE_MARKDOWN, ["Section Two"], sections)
+        assert meta[0].get("has_subsections") is True
+
+    def test_has_subsections_false(self):
+        """Leaf sections should not have the has_subsections flag."""
+        sections = _extract_sections_from_markdown(SAMPLE_MARKDOWN)
+        _, meta, _ = _filter_markdown_by_sections(SAMPLE_MARKDOWN, ["Section One"], sections)
+        assert "has_subsections" not in meta[0]
+
+    def test_has_subsections_via_slug(self):
+        """has_subsections should work through slug and fuzzy match paths too."""
+        sections = _extract_sections_from_markdown(SAMPLE_MARKDOWN)
+        _, meta, _ = _filter_markdown_by_sections(SAMPLE_MARKDOWN, ["section-two"], sections)
+        assert meta[0].get("has_subsections") is True
+
     def test_unmatched_section_returned(self):
         sections = _extract_sections_from_markdown(SAMPLE_MARKDOWN)
         filtered, meta, unmatched = _filter_markdown_by_sections(SAMPLE_MARKDOWN, ["Nonexistent"], sections)

@@ -63,6 +63,7 @@ Conditional:
 | `matched_slices`   | BM25 search results |
 | `slices`           | Slice retrieval indices |
 | `hint`             | BM25 search and slice retrieval |
+| `note`             | Section extraction depth warning (when subsections exist) |
 | `sections:`        | Section tree (truncation or `web_fetch_sections`) |
 | `section:`         | Single-section extraction |
 | `matched_fragment` | Fragment-resolved section |
