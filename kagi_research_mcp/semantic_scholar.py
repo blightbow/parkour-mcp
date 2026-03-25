@@ -362,12 +362,19 @@ async def _fetch_s2_paper(paper_id: str) -> str:
             m = re.search(r'author\s*=\s*\{(.+?)\}', citation_styles["bibtex"])
             if m:
                 author_names = [a.strip() for a in m.group(1).split(" and ")]
+        # Build alt_dois for cross-DOI dedup (arXiv ↔ journal)
+        alt_dois = []
+        if arxiv_id:
+            arxiv_doi = f"10.48550/arXiv.{arxiv_id}"
+            if arxiv_doi != doi:
+                alt_dois.append(arxiv_doi)
         fm_shelf = _track_on_shelf(CitationRecord(
             doi=doi,
             title=title,
             authors=author_names,
             year=result.get("year"),
             venue=result.get("venue"),
+            alt_dois=alt_dois,
             source_tool="semantic_scholar",
             bibtex=citation_styles.get("bibtex"),
             citation_apa=citation_text,

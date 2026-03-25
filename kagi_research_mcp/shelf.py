@@ -27,11 +27,12 @@ logger = logging.getLogger(__name__)
 class CitationRecord:
     """A single tracked paper on the research shelf."""
 
-    doi: str                                    # primary key
+    doi: str                                    # primary key (prefer journal DOI over preprint)
     title: str
     authors: list[str] = field(default_factory=list)   # ["Last, First", ...]
     year: Optional[int] = None
     venue: Optional[str] = None
+    alt_dois: list[str] = field(default_factory=list)  # alternate DOIs (preprint ↔ journal)
     arxiv_version: Optional[str] = None          # e.g. "v7" — the specific arXiv revision inspected
     source_tool: Optional[str] = None           # "arxiv", "semantic_scholar", "doi"
     bibtex: Optional[str] = None
@@ -41,6 +42,24 @@ class CitationRecord:
     score: Optional[int] = None                 # LLM-assigned
     confirmed: bool = False                     # LLM-managed
     notes: Optional[str] = None                 # LLM-managed freetext
+
+
+def _doi_priority(doi: str) -> int:
+    """Return a priority score for DOI type (higher = more authoritative).
+
+    Journal/publisher DOIs are preferred over preprint server DOIs,
+    which are preferred over synthesized arXiv DOIs.
+    """
+    if doi.startswith("10.48550/arXiv."):
+        return 0  # synthesized arXiv DOI — lowest
+    if doi.startswith("10.1101/"):
+        return 1  # bioRxiv/medRxiv — preprint server
+    return 2      # journal/publisher — highest
+
+
+def _is_preprint_doi(doi: str) -> bool:
+    """Return True if the DOI is a preprint/repository identifier."""
+    return _doi_priority(doi) < 2
 
 
 # ---------------------------------------------------------------------------
@@ -121,47 +140,99 @@ class ResearchShelf:
     def __init__(self):
         self._records: dict[str, CitationRecord] = {}
 
+    def _find_by_alt_doi(self, record: CitationRecord) -> Optional[str]:
+        """Find an existing record that shares a DOI with the new record.
+
+        Checks:
+        1. New record's alt_dois against existing primary keys
+        2. New record's primary DOI against existing alt_dois
+        Returns the existing primary key, or None.
+        """
+        for alt in record.alt_dois:
+            if alt in self._records:
+                return alt
+        for key, existing in self._records.items():
+            if record.doi in existing.alt_dois:
+                return key
+        return None
+
     def track(self, record: CitationRecord) -> None:
-        """Upsert a record — updates metadata, preserves score/confirmed/notes."""
-        if record.doi in self._records:
-            existing = self._records[record.doi]
+        """Upsert a record — updates metadata, preserves score/confirmed/notes.
+
+        Deduplicates across preprint/journal DOIs: when the same paper is
+        tracked via different DOIs (e.g. arXiv + bioRxiv, or preprint +
+        journal), merges into a single entry keyed on the journal DOI.
+        """
+        # Check for exact DOI match first
+        existing_key = record.doi if record.doi in self._records else None
+
+        # If no exact match, check alt_dois for cross-DOI dedup
+        if not existing_key:
+            existing_key = self._find_by_alt_doi(record)
+
+        if existing_key:
+            existing = self._records[existing_key]
             # Preserve user-managed fields
             record.score = existing.score
             record.confirmed = existing.confirmed
             record.notes = existing.notes
             record.added = existing.added
+            # Merge alt_dois from both records
+            all_dois = set(existing.alt_dois) | set(record.alt_dois)
+            all_dois.add(existing.doi)
+            all_dois.add(record.doi)
+            # Choose the highest-priority DOI as primary
+            record.doi = max(all_dois, key=_doi_priority)
+            # alt_dois = everything except the chosen primary
+            record.alt_dois = sorted(d for d in all_dois if d != record.doi)
+            # Remove old key if re-keying
+            if existing_key != record.doi and existing_key in self._records:
+                del self._records[existing_key]
         else:
             record.added = record.added or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         self._records[record.doi] = record
 
+    def _resolve_doi(self, doi: str) -> Optional[str]:
+        """Resolve a DOI to its primary key, checking alt_dois as fallback."""
+        if doi in self._records:
+            return doi
+        for key, rec in self._records.items():
+            if doi in rec.alt_dois:
+                return key
+        return None
+
     def remove(self, dois: list[str]) -> list[str]:
-        """Batch remove by DOI. Returns list of actually removed DOIs."""
+        """Batch remove by DOI (resolves alt_dois). Returns list of actually removed DOIs."""
         removed = []
         for doi in dois:
-            if doi in self._records:
-                del self._records[doi]
+            key = self._resolve_doi(doi)
+            if key:
+                del self._records[key]
                 removed.append(doi)
         return removed
 
     def set_score(self, doi: str, value: int) -> bool:
         """Set score for a paper. Returns False if DOI not found."""
-        if doi not in self._records:
+        key = self._resolve_doi(doi)
+        if not key:
             return False
-        self._records[doi].score = value
+        self._records[key].score = value
         return True
 
     def confirm(self, doi: str) -> bool:
         """Mark a paper as confirmed. Returns False if DOI not found."""
-        if doi not in self._records:
+        key = self._resolve_doi(doi)
+        if not key:
             return False
-        self._records[doi].confirmed = True
+        self._records[key].confirmed = True
         return True
 
     def set_note(self, doi: str, text: str) -> bool:
         """Set freetext note. Returns False if DOI not found."""
-        if doi not in self._records:
+        key = self._resolve_doi(doi)
+        if not key:
             return False
-        self._records[doi].notes = text
+        self._records[key].notes = text
         return True
 
     def list_all(self) -> list[CitationRecord]:
