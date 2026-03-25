@@ -491,6 +491,44 @@ dimension d v...
 
 Corpus-wide search (no `paper_id`) returns results grouped by paper then section. A pre-flight check gates scoped searches on full-text availability; papers without it get an informative message suggesting the `paper` action for abstract/TL;DR.
 
+### Research Shelf
+
+The research shelf is an in-memory document tracker that passively records papers as they are inspected through the ArXiv, Semantic Scholar, and DOI tools. It fills a gap in the research workflow: without it, maintaining a list of consulted papers requires the LLM to reconstruct citations from memory at session end, which is both error-prone and token-expensive.
+
+Papers are tracked automatically on individual paper lookups (not searches). The shelf uses DOI as its primary key, with cross-DOI deduplication so the same paper discovered via both arXiv and a journal DOI merges into a single entry. When multiple DOIs exist for the same work (preprint + journal), the most authoritative DOI is preferred as the primary key per academic citation best practice (journal > bioRxiv/medRxiv > arXiv). Fetching an arXiv `/html/` URL via `web_fetch_direct` also auto-tracks the paper, closing the gap when full paper text is being read directly.
+
+The shelf supports scoring, confirmation, and freetext notes for triage, and exports in BibTeX, RIS, and JSON formats. JSON export/import enables cross-session persistence via the agent's memory files.
+
+```
+>>> research_shelf(action="list")
+---
+api: ResearchShelf
+action: list
+---
+
+| # | Score | Status | Title | DOI | Source |
+|---|-------|--------|-------|-----|--------|
+| 1 | 9 | confirmed | Attention Is All You Need | 10.48550/arXiv.1706.03762 | arxiv |
+| 2 | — |  | BERT: Pre-training of Deep Bidir... | 10.18653/v1/N19-1423 | semantic_scholar |
+
+>>> research_shelf(action="export", query="bibtex")
+---
+api: ResearchShelf
+action: export
+format: bibtex
+---
+
+@misc{vaswani2017,
+  author = {Vaswani, Ashish and Shazeer, Noam},
+  title = {Attention Is All You Need},
+  year = {2017},
+  doi = {10.48550/arXiv.1706.03762},
+  eprint = {1706.03762},
+  archivePrefix = {arXiv}
+}
+...
+```
+
 ### Kagi Tooling
 
 
