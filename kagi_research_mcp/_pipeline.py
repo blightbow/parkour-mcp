@@ -341,11 +341,14 @@ def _process_markdown_sections(
     frontmatter_entries["truncated"] = truncation_hint
     fm = _build_frontmatter(
         frontmatter_entries,
-        sections_requested=sections_requested_meta,
         sections_not_found=sections_not_found,
-        sections_available=sections_available,
     )
-    fenced = _fence_content(markdown_content, title=title)
+
+    # Append section metadata to fenced content (untrusted heading names)
+    body_parts = [markdown_content]
+    if sections_available:
+        body_parts.append("\n\nSections:\n" + "\n".join(sections_available))
+    fenced = _fence_content("\n".join(body_parts) if len(body_parts) > 1 else markdown_content, title=title)
     return fm + "\n\n" + fenced
 
 

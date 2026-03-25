@@ -358,15 +358,10 @@ def _sections_response(
     sections_not_found = None
 
     if section_names:
-        _, matched_meta, unmatched = _filter_markdown_by_sections(
+        _, _matched_meta, unmatched = _filter_markdown_by_sections(
             markdown_content, section_names, all_sections,
         )
         sections_not_found = unmatched or None
-        if matched_meta:
-            m = matched_meta[0]
-            entries["section"] = m["name"]
-            if m.get("matched_fragment"):
-                entries["matched_fragment"] = f'"#{m["matched_fragment"]}"'
 
     fm = _build_frontmatter(
         entries,

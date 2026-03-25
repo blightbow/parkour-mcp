@@ -117,7 +117,7 @@ class TestWebFetchDirectMarkdown:
 
         result = await web_fetch_direct("https://example.com/page", section="Second Section")
         assert "Second Section" in result
-        assert "section:" in result
+        assert "│ ## Second Section" in result
         # Second Section has a child Subsection — note should warn about depth
         assert "note:" in result
         assert "Subsections are separate entries" in result
@@ -138,7 +138,7 @@ class TestWebFetchDirectMarkdown:
 
         result = await web_fetch_direct("https://example.com/big", max_tokens=100)
         assert "truncated:" in result
-        assert "sections:" in result
+        assert "Sections:" in result  # sections list rendered inside fence
 
     @pytest.mark.asyncio
     @respx.mock
@@ -237,8 +237,7 @@ class TestWebFetchDirectParameterDowngrade:
             "https://example.com/page", section="Second Section", footnotes=[1, 2]
         )
         # Section extraction should succeed
-        assert "section:" in result
-        assert "Second Section" in result
+        assert "│ ## Second Section" in result
         # Footnotes warning should appear in frontmatter
         assert "warning:" in result
         assert "footnotes parameter ignored" in result
@@ -299,7 +298,7 @@ class TestWebFetchDirectMediawikiFastPath:
         )
 
         result = await web_fetch_direct("https://example.com/page", section="Second Section")
-        assert "section: Second Section" in result
+        assert "│ ## Second Section" in result
 
     @pytest.mark.asyncio
     @respx.mock
@@ -316,7 +315,9 @@ class TestWebFetchDirectMediawikiFastPath:
         result = await web_fetch_direct(
             "https://example.com/page", section=["Second Section", "Subsection"]
         )
-        assert "sections:" in result
+        # Multi-section content appears inside the fence
+        assert "│ ## Second Section" in result
+        assert "│ ### Subsection" in result
 
 
 class TestWebFetchDirectFragmentExtraction:
@@ -336,8 +337,7 @@ class TestWebFetchDirectFragmentExtraction:
 
         result = await web_fetch_direct("https://example.com/page#second-section")
         assert "source: https://example.com/page#second-section" in result
-        assert "section: Second Section" in result
-        assert 'matched_fragment: "#second-section"' in result
+        assert "│ ## Second Section" in result
         assert "Another paragraph" in result
 
     @pytest.mark.asyncio
@@ -391,8 +391,7 @@ class TestWebFetchDirectFragmentExtraction:
         # Fragment dropped from source: explicit section= overrode it
         assert "source: https://example.com/page\n" in result
         assert "warning: URL fragment #subsection was ignored; explicit section parameter takes precedence" in result
-        assert "section: Second Section" in result
-        assert "matched_fragment" not in result
+        assert "│ ## Second Section" in result
 
 
 class TestWebFetchSections:
@@ -432,9 +431,7 @@ class TestWebFetchSections:
 
         result = await web_fetch_sections("https://example.com/page#second-section")
         assert "source: https://example.com/page#second-section" in result
-        assert "section: Second Section" in result
-        assert 'matched_fragment: "#second-section"' in result
-        # Full tree should still be shown for context
+        # Fragment match info no longer surfaced; full tree still shown
         assert "│ - " in result
 
     @pytest.mark.asyncio

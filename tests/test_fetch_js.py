@@ -81,7 +81,7 @@ class TestWebFetchJsMediawikiFastPath:
             "https://wiki.example.com/wiki/Test_Page",
             section="Section Two",
         )
-        assert "section: Section Two" in result
+        assert "│ ## Section Two" in result
         assert "Content of section two" in result
 
     @pytest.mark.asyncio
@@ -98,7 +98,8 @@ class TestWebFetchJsMediawikiFastPath:
             "https://wiki.example.com/wiki/Test_Page",
             section=["Section One", "Section Two"],
         )
-        assert "sections:" in result
+        # Multi-section content appears inside the fence
+        assert "│ ## Section One" in result
         assert "Content of section one" in result
         assert "Content of section two" in result
 
@@ -142,7 +143,7 @@ class TestWebFetchJsMediawikiFastPath:
             "https://wiki.example.com/wiki/Test_Page",
             section="Section Two",
         )
-        assert "section: Section Two" in result
+        assert "│ ## Section Two" in result
 
 
 class TestWebFetchJsSearchSlices:
