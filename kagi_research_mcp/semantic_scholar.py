@@ -346,8 +346,10 @@ async def _fetch_s2_paper(paper_id: str) -> str:
         body += f"\n## Citation\n\n{citation_text}\n"
 
     # Passive shelf tracking (fire-and-forget)
-    fm_shelf = None
-    if doi:
+    fm_shelf: object = None
+    if not doi:
+        fm_shelf = "not tracked — paper has no DOI in Semantic Scholar"
+    else:
         from .shelf import _track_on_shelf, CitationRecord
         authors = result.get("authors") or []
         citation_styles = result.get("citationStyles") or {}

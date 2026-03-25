@@ -409,10 +409,13 @@ async def _fetch_arxiv_paper(arxiv_id: str, *, _pdf_url: bool = False) -> str:
     # Passive shelf tracking (fire-and-forget)
     from .shelf import _track_on_shelf, CitationRecord
     version_match = _VERSION_SUFFIX_RE.search(clean_id)
+    published = paper.get("published") or ""
+    year = int(published[:4]) if len(published) >= 4 and published[:4].isdigit() else None
     fm_entries["shelf"] = _track_on_shelf(CitationRecord(
         doi=arxiv_doi,
         title=paper.get("title", "Untitled"),
         authors=[a.get("name", "Unknown") for a in paper.get("authors") or []],
+        year=year,
         arxiv_version=version_match.group(0) if version_match else None,
         source_tool="arxiv",
         citation_apa=citation_text,
