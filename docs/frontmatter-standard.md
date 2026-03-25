@@ -102,9 +102,7 @@ Conditional:
 | `slices`           | Slice retrieval indices |
 | `hint`             | BM25 search, slice retrieval, and `web_fetch_sections` |
 | `note`             | Section extraction depth warning (when subsections exist) |
-| `sections:`        | Section tree (truncation hints; `web_fetch_sections` renders the tree inside fenced content) |
-| `section:`         | Single-section extraction |
-| `matched_fragment` | Fragment-resolved section |
+| `shelf`            | Research shelf tracking status (auto-tracked papers) |
 
 ### Kagi tools (`kagi_search`, `kagi_summarize`)
 
@@ -133,6 +131,7 @@ Conditional:
 | `full_text`| Pointer to `/html/` URL for full text (only when HTML render exists) |
 | `warning`  | Emitted when HTML full text is unavailable (only abstract/metadata included) |
 | `see_also` | SemanticScholar cross-reference; mentions body text snippets when HTML unavailable |
+| `shelf`    | Research shelf tracking status |
 
 **`search` and `category` actions:**
 
@@ -153,6 +152,7 @@ Conditional:
 | `source`   | S2 paper URL |
 | `api`      | `Semantic Scholar` |
 | `see_also` | ArXiv cross-reference (when arXiv ID available) |
+| `shelf`    | Research shelf tracking status (or advisory when no DOI available) |
 
 **`search` action:**
 
