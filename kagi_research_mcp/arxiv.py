@@ -236,14 +236,21 @@ def _format_arxiv_paper(data: dict, *, html_available: bool = True) -> str:
     if primary or categories:
         parts.append("")
 
-    # DOI, journal ref, comment
-    if doi := data.get("doi"):
-        parts.append(f"**DOI:** [{doi}](https://doi.org/{doi})")
+    # DOIs — synthesized arXiv DOI + publisher DOI from Atom API
+    arxiv_doi = f"10.48550/arXiv.{arxiv_id}" if arxiv_id else None
+    publisher_doi = data.get("doi")  # from <arxiv:doi> — this is the PUBLISHER DOI
+
+    if arxiv_doi:
+        parts.append(f"**arXiv DOI:** [{arxiv_doi}](https://doi.org/{arxiv_doi})")
+    if publisher_doi and publisher_doi != arxiv_doi:
+        parts.append(f"**Publisher DOI:** [{publisher_doi}](https://doi.org/{publisher_doi})")
+
+    # Journal ref, comment
     if journal_ref := data.get("journal_ref"):
         parts.append(f"**Journal ref:** {journal_ref}")
     if comment := data.get("comment"):
         parts.append(f"**Comment:** {comment}")
-    if doi or journal_ref or comment:
+    if arxiv_doi or publisher_doi or journal_ref or comment:
         parts.append("")
 
     # Links

@@ -48,9 +48,10 @@ _SEARCH_FIELDS = (
     "publicationTypes,journal,openAccessPdf,tldr"
 )
 _DETAIL_FIELDS = (
-    "paperId,title,year,authors,abstract,venue,citationCount,"
-    "influentialCitationCount,referenceCount,publicationTypes,"
-    "journal,externalIds,openAccessPdf,tldr,publicationDate"
+    "paperId,title,year,authors,authors.externalIds,authors.affiliations,"
+    "abstract,venue,citationCount,influentialCitationCount,referenceCount,"
+    "publicationTypes,journal,externalIds,openAccessPdf,tldr,publicationDate,"
+    "citationStyles"
 )
 _REFERENCE_FIELDS = (
     "paperId,title,year,authors,citationCount,venue,contexts"
@@ -143,11 +144,25 @@ def _format_paper_detail(data: dict) -> str:
     title = data.get("title", "Untitled")
     parts.append(f"# {title}\n")
 
-    # Authors
+    # Authors (with affiliations and ORCIDs when available)
     authors = data.get("authors") or []
     if authors:
-        names = [a.get("name", "Unknown") for a in authors]
-        parts.append(f"**Authors:** {', '.join(names)}\n")
+        author_strs = []
+        display_authors = authors[:10]
+        for a in display_authors:
+            name = a.get("name", "Unknown")
+            # Affiliations
+            affs = a.get("affiliations") or []
+            if affs:
+                name += f" ({', '.join(affs)})"
+            # ORCID from externalIds
+            ext = a.get("externalIds") or {}
+            if orcid := ext.get("ORCID"):
+                name += f" [ORCID](https://orcid.org/{orcid})"
+            author_strs.append(name)
+        if len(authors) > 10:
+            author_strs.append(f"... and {len(authors) - 10} more")
+        parts.append(f"**Authors:** {', '.join(author_strs)}\n")
 
     # Year, venue, publication date
     year = data.get("year")
@@ -208,6 +223,11 @@ def _format_paper_detail(data: dict) -> str:
     pub_types = data.get("publicationTypes") or []
     if pub_types:
         parts.append(f"**Publication types:** {', '.join(pub_types)}\n")
+
+    # BibTeX (from citationStyles)
+    citation_styles = data.get("citationStyles") or {}
+    if bibtex := citation_styles.get("bibtex"):
+        parts.append(f"## BibTeX\n\n```bibtex\n{bibtex.strip()}\n```\n")
 
     return "\n".join(parts)
 

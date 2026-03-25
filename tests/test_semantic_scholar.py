@@ -338,6 +338,63 @@ class TestSemanticScholarPaperCitationCounts:
 
 
 # ---------------------------------------------------------------------------
+# _format_paper_detail — author enrichment and BibTeX
+# ---------------------------------------------------------------------------
+
+class TestFormatPaperDetailEnriched:
+    def test_orcid_rendered_as_link(self):
+        result = _format_paper_detail(S2_PAPER_DETAIL_RESPONSE)
+        assert "[ORCID](https://orcid.org/0000-0002-1234-5678)" in result
+
+    def test_author_without_orcid_renders_normally(self):
+        result = _format_paper_detail(S2_PAPER_DETAIL_RESPONSE)
+        assert "Noam Shazeer" in result
+        # Shazeer has no ORCID — should not have a link
+        assert result.count("[ORCID]") == 1  # only Vaswani's
+
+    def test_affiliations_rendered(self):
+        result = _format_paper_detail(S2_PAPER_DETAIL_RESPONSE)
+        assert "(Google Brain)" in result
+
+    def test_bibtex_section_present(self):
+        result = _format_paper_detail(S2_PAPER_DETAIL_RESPONSE)
+        assert "## BibTeX" in result
+        assert "```bibtex" in result
+        assert "@Article{Vaswani2017AttentionIA" in result
+
+    def test_bibtex_absent_when_missing(self):
+        data = dict(S2_PAPER_DETAIL_RESPONSE)
+        data["citationStyles"] = {}
+        result = _format_paper_detail(data)
+        assert "## BibTeX" not in result
+
+    def test_authors_truncated_at_ten(self):
+        data = dict(S2_PAPER_DETAIL_RESPONSE)
+        data["authors"] = [
+            {"authorId": str(i), "name": f"Author {i}"}
+            for i in range(15)
+        ]
+        result = _format_paper_detail(data)
+        assert "... and 5 more" in result
+        assert "Author 0" in result
+        assert "Author 9" in result
+        assert "Author 10" not in result
+
+    def test_mixed_author_metadata(self):
+        """Authors with varying metadata: some have ORCIDs, some affiliations, some neither."""
+        data = dict(S2_PAPER_DETAIL_RESPONSE)
+        data["authors"] = [
+            {"name": "Alice", "affiliations": ["MIT"], "externalIds": {"ORCID": "0000-0001-0000-0001"}},
+            {"name": "Bob", "affiliations": [], "externalIds": {}},
+            {"name": "Carol", "affiliations": ["Stanford"], "externalIds": {}},
+        ]
+        result = _format_paper_detail(data)
+        assert "Alice (MIT) [ORCID](https://orcid.org/0000-0001-0000-0001)" in result
+        assert "Bob" in result
+        assert "Carol (Stanford)" in result
+
+
+# ---------------------------------------------------------------------------
 # semantic_scholar — references
 # ---------------------------------------------------------------------------
 

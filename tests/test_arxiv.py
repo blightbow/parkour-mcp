@@ -50,7 +50,7 @@ ARXIV_SINGLE_ENTRY_XML = """\
     <author>
       <name>Niki Parmar</name>
     </author>
-    <arxiv:doi>10.48550/arXiv.1706.03762</arxiv:doi>
+    <arxiv:doi>10.5555/3295222.3295349</arxiv:doi>
     <arxiv:journal_ref>Advances in Neural Information Processing Systems 30 (NIPS 2017)</arxiv:journal_ref>
     <arxiv:comment>15 pages, 5 figures</arxiv:comment>
     <arxiv:primary_category term="cs.CL"/>
@@ -176,7 +176,7 @@ class TestParseArxivEntry:
         assert "cs.LG" in data["categories"]
         assert data["published"] == "2017-06-12T17:57:34Z"
         assert data["updated"] == "2023-08-02T01:18:13Z"
-        assert data["doi"] == "10.48550/arXiv.1706.03762"
+        assert data["doi"] == "10.5555/3295222.3295349"
         assert "NIPS 2017" in data["journal_ref"]
         assert data["comment"] == "15 pages, 5 figures"
         assert len(data["links"]) == 2
@@ -276,11 +276,42 @@ class TestFormatArxivPaper:
         assert "Niki Parmar" in output
         assert "cs.CL" in output
         assert "cs.AI" in output
-        assert "10.48550/arXiv.1706.03762" in output
         assert "NIPS 2017" in output
         assert "15 pages, 5 figures" in output
         assert "SemanticScholar" in output
         assert "## Abstract" in output
+
+    def test_arxiv_doi_synthesized(self):
+        """arXiv DOI is deterministically synthesized from the ID."""
+        data = {"id": "1706.03762", "title": "Test"}
+        output = _format_arxiv_paper(data)
+        assert "**arXiv DOI:** [10.48550/arXiv.1706.03762]" in output
+        assert "https://doi.org/10.48550/arXiv.1706.03762" in output
+
+    def test_publisher_doi_shown_separately(self):
+        """When publisher DOI is distinct from arXiv DOI, both are shown."""
+        import xml.etree.ElementTree as ET
+        root = ET.fromstring(ARXIV_SINGLE_ENTRY_XML)
+        entry = root.find(f"{{{_arxiv_module._ATOM_NS}}}entry")
+        assert entry is not None
+        data = _parse_arxiv_entry(entry)
+        output = _format_arxiv_paper(data)
+        assert "**arXiv DOI:**" in output
+        assert "**Publisher DOI:** [10.5555/3295222.3295349]" in output
+
+    def test_publisher_doi_dedup_when_matches_arxiv(self):
+        """When publisher DOI equals synthesized arXiv DOI, only show once."""
+        data = {"id": "1706.03762", "title": "Test", "doi": "10.48550/arXiv.1706.03762"}
+        output = _format_arxiv_paper(data)
+        assert "**arXiv DOI:**" in output
+        assert "**Publisher DOI:**" not in output
+
+    def test_no_publisher_doi(self):
+        """Paper without publisher DOI shows only arXiv DOI."""
+        data = {"id": "2301.12345", "title": "Test", "doi": None}
+        output = _format_arxiv_paper(data)
+        assert "**arXiv DOI:** [10.48550/arXiv.2301.12345]" in output
+        assert "**Publisher DOI:**" not in output
 
     def test_empty_paper(self):
         output = _format_arxiv_paper({})
