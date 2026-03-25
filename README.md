@@ -491,9 +491,15 @@ dimension d v...
 
 Corpus-wide search (no `paper_id`) returns results grouped by paper then section. A pre-flight check gates scoped searches on full-text availability; papers without it get an informative message suggesting the `paper` action for abstract/TL;DR.
 
+### DOI resolution
+
+`doi.org` URLs passed to the fetch tools are intercepted and resolved via DOI content negotiation rather than HTML scraping. This returns structured citation metadata (authors, title, venue, year) from the publisher's registered data in CrossRef or DataCite. The resolved paper is auto-tracked on the research shelf.
+
+arXiv DOIs (`10.48550/arXiv.*`) are delegated to the arXiv handler, so the full arXiv metadata experience is preserved even when the DOI form is used.
+
 ### Research Shelf
 
-The research shelf is an in-memory document tracker that passively records papers as they are inspected through the ArXiv, Semantic Scholar, and DOI tools. It fills a gap in the research workflow: without it, maintaining a list of consulted papers requires the LLM to reconstruct citations from memory at session end, which is both error-prone and token-expensive.
+The research shelf is an in-memory document tracker that passively records papers as they are inspected through the ArXiv tool, the Semantic Scholar tool, and DOI resolution. It fills a gap in the research workflow: without it, maintaining a list of consulted papers requires the LLM to reconstruct citations from memory at session end, which is both error-prone and token-expensive.
 
 Papers are tracked automatically on individual paper lookups (not searches). The shelf uses DOI as its primary key, with cross-DOI deduplication so the same paper discovered via both arXiv and a journal DOI merges into a single entry. When multiple DOIs exist for the same work (preprint + journal), the most authoritative DOI is preferred as the primary key per academic citation best practice (journal > bioRxiv/medRxiv > arXiv). Fetching an arXiv `/html/` URL via `web_fetch_direct` also auto-tracks the paper, closing the gap when full paper text is being read directly.
 
