@@ -387,6 +387,21 @@ async def _fetch_arxiv_paper(arxiv_id: str, *, _pdf_url: bool = False) -> str:
             + (f" For readable full text, use {html_url}" if html_available else "")
         )
 
+    # Passive shelf tracking (fire-and-forget)
+    try:
+        from .shelf import _get_shelf, CitationRecord
+        shelf = _get_shelf()
+        shelf.track(CitationRecord(
+            doi=arxiv_doi,
+            title=paper.get("title", "Untitled"),
+            authors=[a.get("name", "Unknown") for a in paper.get("authors") or []],
+            source_tool="arxiv",
+            citation_apa=citation_text,
+        ))
+        fm_entries["shelf"] = shelf.status_line()
+    except Exception:
+        logger.debug("Shelf tracking failed for arXiv %s", clean_id, exc_info=True)
+
     fm = _build_frontmatter(fm_entries)
     body = _format_arxiv_paper(paper, html_available=html_available)
     if citation_text:

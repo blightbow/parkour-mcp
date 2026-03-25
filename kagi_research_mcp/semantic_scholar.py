@@ -339,11 +339,39 @@ async def _fetch_s2_paper(paper_id: str) -> str:
     if citation_text:
         body += f"\n## Citation\n\n{citation_text}\n"
 
+    # Passive shelf tracking (fire-and-forget)
+    fm_shelf = None
+    if doi:
+        try:
+            from .shelf import _get_shelf, CitationRecord
+            authors = result.get("authors") or []
+            citation_styles = result.get("citationStyles") or {}
+            shelf = _get_shelf()
+            shelf.track(CitationRecord(
+                doi=doi,
+                title=title,
+                authors=[a.get("name", "Unknown") for a in authors],
+                year=result.get("year"),
+                venue=result.get("venue"),
+                source_tool="semantic_scholar",
+                bibtex=citation_styles.get("bibtex"),
+                citation_apa=citation_text,
+                orcids={
+                    a.get("name", ""): (a.get("externalIds") or {}).get("ORCID", "")
+                    for a in authors
+                    if (a.get("externalIds") or {}).get("ORCID")
+                },
+            ))
+            fm_shelf = shelf.status_line()
+        except Exception:
+            logger.debug("Shelf tracking failed for S2 paper %s", paper_id, exc_info=True)
+
     fm = _build_frontmatter({
         "title": title,
         "source": source_url,
         "api": "Semantic Scholar",
         "see_also": f"ARXIV:{arxiv_id} with ArXiv for categories and affiliations" if arxiv_id else None,
+        "shelf": fm_shelf,
     })
     return fm + "\n\n" + body
 

@@ -10,6 +10,7 @@ from .fetch_js import web_fetch_js
 from .fetch_direct import web_fetch_direct, web_fetch_sections
 from .semantic_scholar import semantic_scholar
 from .arxiv import arxiv
+from .shelf import research_shelf, _get_shelf
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -27,6 +28,7 @@ TOOL_NAMES = {
     "summarize": {"code": "KagiSummarize", "desktop": "kagi_summarize"},
     "semantic_scholar": {"code": "SemanticScholar", "desktop": "semantic_scholar"},
     "arxiv": {"code": "ArXiv", "desktop": "arxiv"},
+    "research_shelf": {"code": "ResearchShelf", "desktop": "research_shelf"},
 }
 
 # Profile variables for description templates
@@ -170,6 +172,14 @@ independently). Use slices=[3, 4, 5] to retrieve specific slices by index.
 
 Supports HTML, plain text, JSON, and XML content types.""",
     },
+    "research_shelf": """Manage the research shelf — a persistent tracker for papers inspected during research.
+
+Papers are automatically added when you use ArXiv, SemanticScholar, or DOI
+tools to inspect individual papers. Use this tool to review, score, confirm,
+or remove tracked papers, and to export citations in BibTeX or RIS format.
+
+The shelf persists across context resets. Use export json / import to save
+and restore shelf state via agent memory for cross-session persistence.""",
 }
 
 
@@ -200,11 +210,23 @@ def main():
         ("summarize", summarize),
         ("semantic_scholar", semantic_scholar),
         ("arxiv", arxiv),
+        ("research_shelf", research_shelf),
     ]
     for internal_name, func in tools:
         name = TOOL_NAMES[internal_name][args.profile]
         desc = _build_description(internal_name, args.profile)
         mcp.add_tool(func, name=name, description=desc)
+
+    # MCP resource: read-only shelf summary
+    @mcp.resource("research://shelf")
+    async def shelf_resource() -> str:
+        """Current research shelf contents."""
+        shelf = _get_shelf()
+        records = shelf.list_all()
+        if not records:
+            return "Research shelf is empty."
+        from .shelf import _format_shelf_list
+        return _format_shelf_list(records)
 
     mcp.run(transport="stdio")
 
