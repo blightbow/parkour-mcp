@@ -308,6 +308,20 @@ def _format_author(data: dict, papers: Optional[list[dict]] = None) -> str:
     return "\n".join(parts)
 
 
+def _s2_see_also(
+    arxiv_id: Optional[str], doi: Optional[str],
+) -> Optional[list[str] | str]:
+    """Build see_also hints for an S2 paper response."""
+    hints = []
+    if arxiv_id:
+        hints.append(f"ARXIV:{arxiv_id} with ArXiv for categories")
+    if doi:
+        hints.append(f"https://doi.org/{doi} for license and publisher metadata")
+    if not hints:
+        return None
+    return hints if len(hints) > 1 else hints[0]
+
+
 async def _fetch_s2_paper(paper_id: str) -> str:
     """Fetch a single paper and return formatted markdown with frontmatter."""
     from .doi import fetch_formatted_citation
@@ -370,7 +384,7 @@ async def _fetch_s2_paper(paper_id: str) -> str:
         "title": title,
         "source": source_url,
         "api": "Semantic Scholar",
-        "see_also": f"ARXIV:{arxiv_id} with ArXiv for categories and affiliations" if arxiv_id else None,
+        "see_also": _s2_see_also(arxiv_id, doi),
         "shelf": fm_shelf,
     })
     return fm + "\n\n" + body

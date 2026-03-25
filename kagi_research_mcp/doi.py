@@ -52,6 +52,125 @@ def _detect_doi_url(url: str) -> Optional[str]:
 
 
 # ---------------------------------------------------------------------------
+# Registration Agency detection (cached per-prefix)
+# ---------------------------------------------------------------------------
+_ra_cache: dict[str, str] = {}
+
+
+async def _detect_ra(doi: str, *, timeout: float = 5.0) -> Optional[str]:
+    """Detect the Registration Agency for a DOI prefix.
+
+    Uses doi.org/doiRA/{prefix} API with in-memory caching.
+    Returns "DataCite", "Crossref", etc., or None on failure.
+    """
+    prefix = doi.split("/")[0]  # "10.48550"
+    if prefix in _ra_cache:
+        return _ra_cache[prefix]
+
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.get(
+                f"https://doi.org/doiRA/{prefix}",
+                headers={"User-Agent": _API_USER_AGENT},
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                if isinstance(data, list) and data:
+                    ra = data[0].get("RA", "")
+                    _ra_cache[prefix] = ra
+                    return ra
+    except Exception as e:
+        logger.debug("RA detection failed for %s: %s", prefix, e)
+    return None
+
+
+# ---------------------------------------------------------------------------
+# DataCite REST API
+# ---------------------------------------------------------------------------
+_datacite_rate_lock = asyncio.Lock()
+_datacite_last_request: float = 0.0
+_DATACITE_MIN_INTERVAL = 0.1  # 10 req/s
+
+
+async def _datacite_rate_wait() -> None:
+    """Enforce minimum interval between DataCite API requests."""
+    global _datacite_last_request
+    async with _datacite_rate_lock:
+        elapsed = time.monotonic() - _datacite_last_request
+        if elapsed < _DATACITE_MIN_INTERVAL:
+            await asyncio.sleep(_DATACITE_MIN_INTERVAL - elapsed)
+        _datacite_last_request = time.monotonic()
+
+
+async def fetch_datacite_metadata(
+    doi: str, *, timeout: float = 5.0,
+) -> Optional[dict]:
+    """Fetch enriched metadata from DataCite REST API.
+
+    Returns a simplified dict with ORCIDs, affiliations, SPDX license,
+    and related identifiers — or None on failure.
+    """
+    await _datacite_rate_wait()
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.get(
+                f"https://api.datacite.org/dois/{doi}",
+                headers={"User-Agent": _API_USER_AGENT, "Accept": "application/json"},
+            )
+            if resp.status_code != 200:
+                return None
+            raw = resp.json()
+            attrs = raw.get("data", {}).get("attributes", {})
+
+            # Extract ORCIDs from creators
+            orcids: dict[str, str] = {}
+            creators = attrs.get("creators") or []
+            for c in creators:
+                name = c.get("name", "")
+                for ni in c.get("nameIdentifiers") or []:
+                    if ni.get("nameIdentifierScheme") == "ORCID":
+                        orcid_url = ni.get("nameIdentifier", "")
+                        # Normalize: may be full URL or bare ID
+                        orcid_id = orcid_url.replace("https://orcid.org/", "")
+                        if orcid_id:
+                            orcids[name] = orcid_id
+
+            # SPDX license
+            rights_list = attrs.get("rightsList") or []
+            license_id = None
+            license_url = None
+            for r in rights_list:
+                if r.get("rightsIdentifierScheme") == "SPDX":
+                    license_id = r.get("rightsIdentifier")
+                    license_url = r.get("rightsUri")
+                    break
+                # Fallback: any rights entry with a URI
+                if not license_id and r.get("rightsUri"):
+                    license_id = r.get("rights")
+                    license_url = r.get("rightsUri")
+
+            # Related identifiers
+            related = []
+            for ri in (attrs.get("relatedIdentifiers") or [])[:10]:
+                related.append({
+                    "type": ri.get("relatedIdentifierType"),
+                    "relation": ri.get("relationType"),
+                    "id": ri.get("relatedIdentifier"),
+                })
+
+            return {
+                "orcids": orcids,
+                "license_id": license_id,
+                "license_url": license_url,
+                "related": related,
+                "resource_type": attrs.get("types", {}).get("resourceTypeGeneral"),
+            }
+    except Exception as e:
+        logger.debug("DataCite fetch failed for %s: %s", doi, e)
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Content negotiation
 # ---------------------------------------------------------------------------
 
@@ -157,17 +276,35 @@ def _format_csl_date(issued: dict) -> Optional[str]:
     return None
 
 
-def _format_csl_json_as_markdown(data: dict) -> str:
-    """Format CSL-JSON metadata into readable markdown."""
+def _format_csl_json_as_markdown(data: dict, *, datacite: Optional[dict] = None) -> str:
+    """Format CSL-JSON metadata into readable markdown.
+
+    When datacite enrichment dict is provided, merges ORCIDs into author
+    display and adds SPDX license info.
+    """
     parts = []
+    dc_orcids = (datacite or {}).get("orcids") or {}
 
     title = data.get("title", "Untitled")
     parts.append(f"# {title}\n")
 
-    # Authors
+    # Authors (with ORCIDs from DataCite when available)
     authors = data.get("author") or []
     if authors:
-        author_strs = [_format_csl_author(a) for a in authors[:10]]
+        author_strs = []
+        for a in authors[:10]:
+            name = _format_csl_author(a)
+            # Match ORCID by "Last, First" name
+            orcid = dc_orcids.get(name)
+            if not orcid:
+                # DataCite uses "Last, First" format — also try CSL family name
+                family = a.get("family", "")
+                given = a.get("given", "")
+                if family and given:
+                    orcid = dc_orcids.get(f"{family}, {given}")
+            if orcid:
+                name += f" [ORCID](https://orcid.org/{orcid})"
+            author_strs.append(name)
         if len(authors) > 10:
             author_strs.append(f"... and {len(authors) - 10} more")
         parts.append(f"**Authors:** {', '.join(author_strs)}\n")
@@ -181,8 +318,12 @@ def _format_csl_json_as_markdown(data: dict) -> str:
         meta_bits.append(f"**Publisher:** {publisher}")
     if container := data.get("container-title"):
         meta_bits.append(f"**Journal:** {container}")
-    if csl_type := data.get("type"):
-        meta_bits.append(f"**Type:** {csl_type}")
+    csl_type = data.get("type")
+    # Prefer DataCite's resource type (more specific than CSL-JSON mapping)
+    dc_type = (datacite or {}).get("resource_type")
+    display_type = dc_type or csl_type
+    if display_type:
+        meta_bits.append(f"**Type:** {display_type}")
     if meta_bits:
         parts.append("  \n".join(meta_bits) + "\n")
 
@@ -190,15 +331,19 @@ def _format_csl_json_as_markdown(data: dict) -> str:
     if doi := data.get("DOI"):
         parts.append(f"**DOI:** [{doi}](https://doi.org/{doi})\n")
 
-    # License
-    if copyright_text := data.get("copyright"):
+    # License — prefer SPDX from DataCite, fall back to CSL-JSON copyright
+    dc_license_id = (datacite or {}).get("license_id")
+    dc_license_url = (datacite or {}).get("license_url")
+    if dc_license_id and dc_license_url:
+        parts.append(f"**License:** [{dc_license_id}]({dc_license_url})\n")
+    elif dc_license_id:
+        parts.append(f"**License:** {dc_license_id}\n")
+    elif copyright_text := data.get("copyright"):
         parts.append(f"**License:** {copyright_text}\n")
 
     # Abstract
     if abstract := data.get("abstract"):
-        # CSL-JSON abstracts may contain HTML tags — strip them
-        import re as _re
-        clean = _re.sub(r'<[^>]+>', '', abstract).strip()
+        clean = re.sub(r'<[^>]+>', '', abstract).strip()
         if clean:
             parts.append(f"## Abstract\n\n{clean}\n")
 
@@ -234,9 +379,15 @@ async def _fetch_doi_paper(doi: str) -> str:
     if not csl_data and not citation_text:
         return f"Error: Could not resolve DOI: {doi}. No metadata returned from doi.org."
 
+    # DataCite enrichment: ORCIDs, SPDX license, related identifiers
+    datacite = None
+    ra = await _detect_ra(doi)
+    if ra == "DataCite":
+        datacite = await fetch_datacite_metadata(doi)
+
     # Format body from CSL-JSON, or minimal fallback
     if csl_data:
-        body = _format_csl_json_as_markdown(csl_data)
+        body = _format_csl_json_as_markdown(csl_data, datacite=datacite)
         title = csl_data.get("title", "Untitled")
     else:
         title = "Untitled"
@@ -256,6 +407,7 @@ async def _fetch_doi_paper(doi: str) -> str:
             parts = issued.get("date-parts")
             if parts and parts[0]:
                 year = parts[0][0]
+        orcids = datacite.get("orcids") if datacite else None
         shelf.track(CitationRecord(
             doi=doi,
             title=title,
@@ -264,6 +416,7 @@ async def _fetch_doi_paper(doi: str) -> str:
             venue=(csl_data or {}).get("container-title"),
             source_tool="doi",
             citation_apa=citation_text,
+            orcids=orcids,
         ))
         fm_shelf = shelf.status_line()
     except Exception:

@@ -322,6 +322,20 @@ def _format_arxiv_list(
 # Fast-path entry point (called from _pipeline.py)
 # ---------------------------------------------------------------------------
 
+def _arxiv_see_also(
+    arxiv_id: str, html_available: bool, citation_text: Optional[str],
+) -> list[str] | str:
+    """Build see_also hints for an arXiv paper response."""
+    hints = []
+    if html_available:
+        hints.append(f"ARXIV:{arxiv_id} with SemanticScholar for citation counts")
+    else:
+        hints.append(f"ARXIV:{arxiv_id} with SemanticScholar for citation counts and body text snippets")
+    if not citation_text:
+        hints.append(f"https://doi.org/10.48550/arXiv.{arxiv_id} for formatted citation")
+    return hints if len(hints) > 1 else hints[0]
+
+
 async def _check_html_available(arxiv_id: str) -> bool:
     """Check whether an arXiv HTML render exists for the given paper ID."""
     html_url = f"https://arxiv.org/html/{arxiv_id}"
@@ -375,11 +389,7 @@ async def _fetch_arxiv_paper(arxiv_id: str, *, _pdf_url: bool = False) -> str:
             None if html_available
             else "HTML full text is not available for this paper; only abstract and metadata are included"
         ),
-        "see_also": (
-            f"ARXIV:{clean_id} with SemanticScholar for citations"
-            if html_available
-            else f"ARXIV:{clean_id} with SemanticScholar for citations and body text snippets"
-        ),
+        "see_also": _arxiv_see_also(clean_id, html_available, citation_text),
     }
     if _pdf_url:
         fm_entries["note"] = (
