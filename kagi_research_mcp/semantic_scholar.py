@@ -352,11 +352,20 @@ async def _fetch_s2_paper(paper_id: str) -> str:
     else:
         from .shelf import _track_on_shelf, CitationRecord
         authors = result.get("authors") or []
+        author_names = [a.get("name", "Unknown") for a in authors]
         citation_styles = result.get("citationStyles") or {}
+        # S2 sometimes returns authors with no name populated even when
+        # the BibTeX citation has the full list.  Fall back to parsing
+        # the BibTeX author field when top-level data is all "Unknown".
+        if all(n == "Unknown" for n in author_names) and citation_styles.get("bibtex"):
+            import re
+            m = re.search(r'author\s*=\s*\{(.+?)\}', citation_styles["bibtex"])
+            if m:
+                author_names = [a.strip() for a in m.group(1).split(" and ")]
         fm_shelf = _track_on_shelf(CitationRecord(
             doi=doi,
             title=title,
-            authors=[a.get("name", "Unknown") for a in authors],
+            authors=author_names,
             year=result.get("year"),
             venue=result.get("venue"),
             source_tool="semantic_scholar",
