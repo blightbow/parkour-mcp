@@ -407,15 +407,24 @@ async def _fetch_arxiv_paper(arxiv_id: str, *, _pdf_url: bool = False) -> str:
         )
 
     # Passive shelf tracking (fire-and-forget)
+    # Prefer publisher DOI as primary when available; arXiv DOI becomes alt
     from .shelf import _track_on_shelf, CitationRecord
     version_match = _VERSION_SUFFIX_RE.search(clean_id)
     published = paper.get("published") or ""
     year = int(published[:4]) if len(published) >= 4 and published[:4].isdigit() else None
+    publisher_doi = paper.get("doi")
+    if publisher_doi and publisher_doi != arxiv_doi:
+        shelf_doi = publisher_doi
+        shelf_alt = [arxiv_doi]
+    else:
+        shelf_doi = arxiv_doi
+        shelf_alt = []
     fm_entries["shelf"] = _track_on_shelf(CitationRecord(
-        doi=arxiv_doi,
+        doi=shelf_doi,
         title=paper.get("title", "Untitled"),
         authors=[a.get("name", "Unknown") for a in paper.get("authors") or []],
         year=year,
+        alt_dois=shelf_alt,
         arxiv_version=version_match.group(0) if version_match else None,
         source_tool="arxiv",
         citation_apa=citation_text,

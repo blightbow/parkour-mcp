@@ -134,6 +134,112 @@ class TestShelfCrud:
 
 
 # ---------------------------------------------------------------------------
+# Cross-DOI deduplication
+# ---------------------------------------------------------------------------
+
+class TestShelfDedup:
+    def test_arxiv_then_journal_dedup(self, shelf):
+        """arXiv entry should merge when journal DOI arrives via S2."""
+        shelf.track(CitationRecord(
+            doi="10.48550/arXiv.2411.08909",
+            title="LC-PLM",
+            authors=["Author A"],
+            source_tool="arxiv",
+        ))
+        assert len(shelf.list_all()) == 1
+
+        # S2 arrives with journal DOI + arXiv alt
+        shelf.track(CitationRecord(
+            doi="10.1101/2024.10.29.620988",
+            title="LC-PLM: Long-context Protein Language Modeling",
+            authors=["Author A", "Author B"],
+            alt_dois=["10.48550/arXiv.2411.08909"],
+            source_tool="semantic_scholar",
+        ))
+        assert len(shelf.list_all()) == 1
+        rec = shelf.list_all()[0]
+        # Journal DOI becomes primary (not a preprint DOI)
+        assert rec.doi == "10.1101/2024.10.29.620988"
+        assert "10.48550/arXiv.2411.08909" in rec.alt_dois
+
+    def test_journal_then_arxiv_dedup(self, shelf):
+        """bioRxiv entry should merge when arXiv DOI arrives, bioRxiv keeps primary."""
+        shelf.track(CitationRecord(
+            doi="10.1101/2024.10.29.620988",
+            title="LC-PLM",
+            source_tool="semantic_scholar",
+        ))
+        # arXiv arrives with bioRxiv DOI as alt
+        shelf.track(CitationRecord(
+            doi="10.48550/arXiv.2411.08909",
+            title="LC-PLM",
+            alt_dois=["10.1101/2024.10.29.620988"],
+            source_tool="arxiv",
+        ))
+        assert len(shelf.list_all()) == 1
+        rec = shelf.list_all()[0]
+        # bioRxiv DOI has higher priority than arXiv DOI
+        assert rec.doi == "10.1101/2024.10.29.620988"
+        assert "10.48550/arXiv.2411.08909" in rec.alt_dois
+
+    def test_real_journal_doi_preferred(self, shelf):
+        """A real journal DOI should always win over preprint DOIs."""
+        shelf.track(CitationRecord(
+            doi="10.48550/arXiv.1706.03762",
+            title="Attention Is All You Need",
+            source_tool="arxiv",
+        ))
+        shelf.track(CitationRecord(
+            doi="10.5555/3295222.3295349",
+            title="Attention is All you Need",
+            alt_dois=["10.48550/arXiv.1706.03762"],
+            source_tool="semantic_scholar",
+        ))
+        assert len(shelf.list_all()) == 1
+        rec = shelf.list_all()[0]
+        assert rec.doi == "10.5555/3295222.3295349"
+        assert "10.48550/arXiv.1706.03762" in rec.alt_dois
+
+    def test_dedup_preserves_user_fields(self, shelf):
+        """Merge should preserve score/confirmed/notes from existing entry."""
+        shelf.track(CitationRecord(
+            doi="10.48550/arXiv.1706.03762",
+            title="Attention Is All You Need",
+            source_tool="arxiv",
+        ))
+        shelf.set_score("10.48550/arXiv.1706.03762", 9)
+        shelf.confirm("10.48550/arXiv.1706.03762")
+        shelf.set_note("10.48550/arXiv.1706.03762", "Foundational paper")
+
+        shelf.track(CitationRecord(
+            doi="10.5555/3295222.3295349",
+            title="Attention is All you Need",
+            alt_dois=["10.48550/arXiv.1706.03762"],
+            source_tool="semantic_scholar",
+        ))
+        rec = shelf.list_all()[0]
+        assert rec.score == 9
+        assert rec.confirmed is True
+        assert rec.notes == "Foundational paper"
+
+    def test_no_false_dedup(self, shelf):
+        """Papers with no overlapping DOIs should not merge."""
+        shelf.track(CitationRecord(doi="10.1234/a", title="Paper A"))
+        shelf.track(CitationRecord(doi="10.1234/b", title="Paper B"))
+        assert len(shelf.list_all()) == 2
+
+    def test_resolve_doi_via_alt(self, shelf):
+        """Operations by alt DOI should resolve to the correct record."""
+        shelf.track(CitationRecord(
+            doi="10.5555/3295222.3295349",
+            title="Attention",
+            alt_dois=["10.48550/arXiv.1706.03762"],
+        ))
+        assert shelf.set_score("10.48550/arXiv.1706.03762", 8)
+        assert shelf.list_all()[0].score == 8
+
+
+# ---------------------------------------------------------------------------
 # Persistence
 # ---------------------------------------------------------------------------
 
