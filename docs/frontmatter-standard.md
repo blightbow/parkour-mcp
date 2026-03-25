@@ -6,11 +6,15 @@ all tools remain consistent as the codebase evolves.
 
 ## Purpose
 
-Frontmatter serves two roles:
+Frontmatter serves three roles:
 
-1. **Metadata** — title, source URL, API origin, pagination totals.
+1. **Metadata** — source URL, API origin, pagination totals.
    Gives the LLM structured context about what it just received.
-2. **Next-action hints** — nudges toward productive follow-up tool
+2. **Trust boundary** — the `trust` field marks fenced outputs as
+   untrusted external content.  All trusted signals (truncation
+   hints, balance warnings, section lists) live in frontmatter,
+   never inside the fenced content zone.
+3. **Next-action hints** — nudges toward productive follow-up tool
    calls.  These are the primary mechanism for guiding multi-step
    research workflows.
 
@@ -75,8 +79,12 @@ Always present:
 
 | Field    | Description |
 |----------|-------------|
-| `title`  | Page title  |
 | `source` | Canonical URL |
+| `trust`  | Trust advisory for fenced content |
+
+Note: page titles are rendered inside the fenced content zone as a
+markdown heading, not in frontmatter.  This prevents attacker-controlled
+data from appearing in the trusted metadata block.
 
 Conditional:
 
@@ -94,9 +102,24 @@ Conditional:
 | `slices`           | Slice retrieval indices |
 | `hint`             | BM25 search, slice retrieval, and `web_fetch_sections` |
 | `note`             | Section extraction depth warning (when subsections exist) |
-| `sections:`        | Section tree (truncation or `web_fetch_sections`) |
+| `sections:`        | Section tree (truncation hints; `web_fetch_sections` renders the tree inside fenced content) |
 | `section:`         | Single-section extraction |
 | `matched_fragment` | Fragment-resolved section |
+
+### Kagi tools (`kagi_search`, `kagi_summarize`)
+
+Always present:
+
+| Field    | Description |
+|----------|-------------|
+| `source` | Search query (`kagi search: {query}`) or summarized URL / `text input` |
+| `trust`  | Trust advisory for fenced content |
+
+Conditional:
+
+| Field              | When |
+|--------------------|------|
+| `balance_warning`  | Kagi API balance below $1.00 |
 
 ### arXiv tool
 
