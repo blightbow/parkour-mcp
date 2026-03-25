@@ -210,8 +210,18 @@ S2_PAPER_DETAIL_RESPONSE = {
     "title": "Attention is All you Need",
     "year": 2017,
     "authors": [
-        {"authorId": "1234", "name": "Ashish Vaswani"},
-        {"authorId": "5678", "name": "Noam Shazeer"},
+        {
+            "authorId": "1234",
+            "name": "Ashish Vaswani",
+            "affiliations": ["Google Brain"],
+            "externalIds": {"ORCID": "0000-0002-1234-5678"},
+        },
+        {
+            "authorId": "5678",
+            "name": "Noam Shazeer",
+            "affiliations": ["Google Brain"],
+            "externalIds": {},
+        },
     ],
     "abstract": "The dominant sequence transduction models are based on complex recurrent or convolutional neural networks.",
     "venue": "NeurIPS",
@@ -226,6 +236,9 @@ S2_PAPER_DETAIL_RESPONSE = {
     "openAccessPdf": {"url": "https://arxiv.org/pdf/1706.03762"},
     "tldr": {"model": "tldr@v2", "text": "A new network architecture based solely on attention mechanisms."},
     "publicationDate": "2017-06-12",
+    "citationStyles": {
+        "bibtex": "@Article{Vaswani2017AttentionIA,\n author = {Ashish Vaswani and Noam Shazeer},\n journal = {Advances in Neural Information Processing Systems},\n title = {Attention is All you Need},\n year = {2017}\n}",
+    },
 }
 
 S2_CITATION_RESPONSE = {
