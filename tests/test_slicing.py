@@ -309,7 +309,8 @@ class TestWebFetchDirectSearch:
         result = await web_fetch_direct("https://example.com/page", search="")
         # Should return normal page content, not slice format
         assert "total_slices:" not in result
-        assert "title: Searchable Page" in result
+        assert "source:" in result
+        assert "│ # Searchable Page" in result
 
 
 # ---------------------------------------------------------------------------

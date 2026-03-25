@@ -9,6 +9,7 @@ from .common import _FETCH_HEADERS
 from .markdown import (
     html_to_markdown, _extract_sections_from_markdown, _build_section_list,
     _filter_markdown_by_sections, _build_frontmatter, _apply_hard_truncation,
+    _fence_content, _TRUST_ADVISORY,
 )
 from ._pipeline import (
     _extract_fragment, _normalize_sections, _resolve_fragment_source,
@@ -118,20 +119,22 @@ async def web_fetch_direct(
                 # Filter to requested footnote numbers
                 selected = [c for c in all_footnotes if c["n"] in requested]
                 not_found = sorted(set(requested) - {c["n"] for c in selected})
+                title = wiki_page["title"]
                 fm_entries = {
-                    "title": wiki_page["title"],
                     "source": source_url,
+                    "trust": _TRUST_ADVISORY,
                     "footnotes_only": True,
                 }
                 if not_found:
                     available = sorted(c["n"] for c in all_footnotes)
-                    # Show a compact range hint
                     fm_entries["footnotes_not_found"] = not_found
                     fm_entries["footnotes_available"] = f"1-{available[-1]}"
                 fm = _build_frontmatter(fm_entries)
                 if selected:
-                    return fm + "\n\n" + _format_citations(selected)
-                return fm
+                    return fm + "\n\n" + _fence_content(
+                        _format_citations(selected), title=title,
+                    )
+                return fm + "\n\n" + _fence_content("", title=title)
         except Exception:
             pass
         return f"Error: Footnote retrieval requires a MediaWiki page (Wikipedia, etc.)"
@@ -226,13 +229,13 @@ async def web_fetch_direct(
         )
 
         fm = _build_frontmatter({
-            "title": title,
             "source": source_url,
+            "trust": _TRUST_ADVISORY,
             "warning": fragment_warning,
             "content_type": ct_label,
             "truncated": truncation_hint,
         })
-        return fm + "\n\n" + text
+        return fm + "\n\n" + _fence_content(text, title=title)
 
     # HTML content: parse → markdown
     title, markdown_content = html_to_markdown(response.text)
@@ -340,12 +343,15 @@ def _sections_response(
     all_sections = _extract_sections_from_markdown(markdown_content)
 
     if not all_sections:
-        fm = _build_frontmatter({"title": title, "source": url})
-        return fm + "\n\nNo sections found."
+        fm = _build_frontmatter({
+            "source": url,
+            "trust": _TRUST_ADVISORY,
+        })
+        return fm + "\n\n" + _fence_content("No sections found.", title=title)
 
     entries = {
-        "title": title,
         "source": url,
+        "trust": _TRUST_ADVISORY,
         "hint": "Use WebFetchDirect with section parameter to extract specific sections by name",
     }
     sections_available = _build_section_list(all_sections, include_slugs=True)
@@ -356,7 +362,6 @@ def _sections_response(
             markdown_content, section_names, all_sections,
         )
         sections_not_found = unmatched or None
-        # Surface match info in entries so it doesn't suppress the tree
         if matched_meta:
             m = matched_meta[0]
             entries["section"] = m["name"]
@@ -366,6 +371,7 @@ def _sections_response(
     fm = _build_frontmatter(
         entries,
         sections_not_found=sections_not_found,
-        sections_available=sections_available,
     )
-    return fm
+    # Render section list as fenced body content (headings are untrusted)
+    section_body = "\n".join(sections_available)
+    return fm + "\n\n" + _fence_content(section_body, title=title)

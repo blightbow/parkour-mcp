@@ -18,6 +18,8 @@ from .markdown import (
     _build_frontmatter,
     _apply_semantic_truncation,
     _compute_slice_ancestry,
+    _fence_content,
+    _TRUST_ADVISORY,
 )
 from .mediawiki import _detect_mediawiki, _fetch_mediawiki_page, _mediawiki_html_to_markdown
 from .semantic_scholar import _detect_s2_url, _fetch_s2_paper
@@ -332,6 +334,10 @@ def _process_markdown_sections(
     if truncation_hint and all_sections and not section_names:
         sections_available = _build_section_list(all_sections)
 
+    # Move title out of frontmatter — it goes inside the fence
+    title = frontmatter_entries.pop("title", None)
+
+    frontmatter_entries["trust"] = _TRUST_ADVISORY
     frontmatter_entries["truncated"] = truncation_hint
     fm = _build_frontmatter(
         frontmatter_entries,
@@ -339,7 +345,8 @@ def _process_markdown_sections(
         sections_not_found=sections_not_found,
         sections_available=sections_available,
     )
-    return fm + "\n\n" + markdown_content
+    fenced = _fence_content(markdown_content, title=title)
+    return fm + "\n\n" + fenced
 
 
 # ---------------------------------------------------------------------------
@@ -361,6 +368,10 @@ def _slice_output(
     assert cache.slices is not None
     assert cache.slice_ancestry is not None
 
+    # Move title out of frontmatter — it goes inside the fence
+    title = fm_entries.pop("title", None)
+
+    fm_entries["trust"] = _TRUST_ADVISORY
     fm_entries["total_slices"] = len(cache.slices)
     if search_term is not None:
         fm_entries["search"] = f'"{search_term}"'
@@ -381,13 +392,12 @@ def _slice_output(
         content = cache.slices[idx]
         needed = len(header) + 1 + len(content) + 2  # header + \n + content + \n\n
         if used + needed > char_budget and parts:
-            remaining = len(indices) - len(parts)
-            parts.append(f"\n[{remaining} more slice(s) omitted — adjust max_tokens to see more]")
             break
         parts.append(f"{header}\n{content}")
         used += needed
 
-    return fm + "\n\n" + "\n\n".join(parts)
+    fenced = _fence_content("\n\n".join(parts), title=title)
+    return fm + "\n\n" + fenced
 
 
 def _search_slices(

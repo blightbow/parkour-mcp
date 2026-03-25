@@ -12,6 +12,9 @@ from kagi_research_mcp.markdown import (
     _build_frontmatter,
     _apply_hard_truncation,
     _apply_semantic_truncation,
+    _fence_content,
+    _FENCE_OPEN,
+    _FENCE_CLOSE,
 )
 
 from .conftest import SAMPLE_MARKDOWN, SAMPLE_MARKDOWN_WITH_DUPLICATES
@@ -616,7 +619,6 @@ class TestApplyHardTruncation:
         content = "x" * 5000
         result, hint = _apply_hard_truncation(content, 100)
         assert len(result) < len(content)
-        assert "[content truncated]" in result
         assert hint is not None
         assert "tokens" in hint
 
@@ -637,7 +639,6 @@ class TestApplySemanticTruncation:
         content = "\n\n".join(sections)
 
         result, hint = _apply_semantic_truncation(content, 200)
-        assert "[content truncated]" in result
         assert hint is not None
         assert "tokens" in hint
         # Output should be shorter than the original
@@ -653,3 +654,42 @@ class TestApplySemanticTruncation:
         # The hint should mention the actual shown amount
         assert "showing first" in hint
         assert "Full page is" in hint
+
+
+class TestFenceContent:
+    def test_basic_fencing(self):
+        result = _fence_content("Hello world")
+        assert result.startswith(_FENCE_OPEN)
+        assert result.endswith(_FENCE_CLOSE)
+        assert "│ Hello world" in result
+
+    def test_with_title(self):
+        result = _fence_content("Body text", title="Page Title")
+        lines = result.split("\n")
+        assert lines[0] == _FENCE_OPEN
+        assert lines[1] == "│ # Page Title"
+        assert lines[2] == "│ "
+        assert lines[3] == "│ Body text"
+        assert lines[-1] == _FENCE_CLOSE
+
+    def test_multiline_content(self):
+        result = _fence_content("Line 1\nLine 2\nLine 3")
+        assert "│ Line 1" in result
+        assert "│ Line 2" in result
+        assert "│ Line 3" in result
+
+    def test_no_title(self):
+        result = _fence_content("Content only")
+        assert "# " not in result.split("\n")[1]
+        assert "│ Content only" in result
+
+    def test_empty_content_with_title(self):
+        result = _fence_content("", title="Just a Title")
+        assert "│ # Just a Title" in result
+        assert result.startswith(_FENCE_OPEN)
+        assert result.endswith(_FENCE_CLOSE)
+
+    def test_self_labeling_delimiters(self):
+        """Fence delimiters should carry semantic meaning without external explanation."""
+        assert "untrusted" in _FENCE_OPEN
+        assert "untrusted" in _FENCE_CLOSE

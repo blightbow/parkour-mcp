@@ -45,7 +45,7 @@ class TestWebFetchJsMediawikiFastPath:
         )
 
         result = await web_fetch_js("https://wiki.example.com/wiki/Test_Page")
-        assert "title: Test Page" in result
+        assert "│ # Test Page" in result
         assert "site: Test Wiki" in result
         assert "generator: MediaWiki" in result
         assert "Section One" in result
@@ -65,7 +65,6 @@ class TestWebFetchJsMediawikiFastPath:
             "https://wiki.example.com/wiki/Test_Page", max_tokens=5
         )
         assert "truncated:" in result
-        assert "[content truncated]" in result
 
     @pytest.mark.asyncio
     @respx.mock

@@ -10,7 +10,10 @@ from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
 
 from .common import _FETCH_HEADERS
-from .markdown import html_to_markdown, _build_frontmatter, _apply_hard_truncation
+from .markdown import (
+    html_to_markdown, _build_frontmatter, _apply_hard_truncation,
+    _fence_content, _TRUST_ADVISORY,
+)
 from .mediawiki import _extract_citations, _format_citations
 from ._pipeline import (
     _extract_fragment, _normalize_sections, _resolve_fragment_source,
@@ -313,9 +316,10 @@ async def web_fetch_js(
                     return f"Error: No footnotes found for {url}"
                 selected = [c for c in all_footnotes if c["n"] in requested]
                 not_found = sorted(set(requested) - {c["n"] for c in selected})
+                title = wiki_page["title"]
                 fm_entries = {
-                    "title": wiki_page["title"],
                     "source": source_url,
+                    "trust": _TRUST_ADVISORY,
                     "footnotes_only": True,
                 }
                 if not_found:
@@ -324,8 +328,10 @@ async def web_fetch_js(
                     fm_entries["footnotes_available"] = f"1-{available[-1]}"
                 fm = _build_frontmatter(fm_entries)
                 if selected:
-                    return fm + "\n\n" + _format_citations(selected)
-                return fm
+                    return fm + "\n\n" + _fence_content(
+                        _format_citations(selected), title=title,
+                    )
+                return fm + "\n\n" + _fence_content("", title=title)
         except Exception:
             pass
         return f"Error: Footnote retrieval requires a MediaWiki page (Wikipedia, etc.)"
@@ -394,13 +400,13 @@ async def web_fetch_js(
 
                     warnings = [skip_warning, fragment_warning] if fragment_warning else skip_warning
                     fm = _build_frontmatter({
-                        "title": title,
                         "source": source_url,
+                        "trust": _TRUST_ADVISORY,
                         "warning": warnings,
                         "content_type": ct_label,
                         "truncated": truncation_hint,
                     })
-                    return fm + "\n\n" + text
+                    return fm + "\n\n" + _fence_content(text, title=title)
         except Exception:
             pass  # HEAD failed or ambiguous — fall through to Playwright
 
@@ -552,22 +558,17 @@ async def web_fetch_js(
         )
 
     if interactive_elements:
-        output += "\n---\n"
-        output += "## Interactive Elements (for follow-up actions)\n"
+        elem_lines = ["## Interactive Elements (for follow-up actions)\n"]
         for elem in interactive_elements:
-            output += f"\n- **{elem['type']}**: `{elem['selector']}`"
+            elem_lines.append(f"- **{elem['type']}**: `{elem['selector']}`")
             if elem.get('options'):
-                output += f"\n  Options: {', '.join(elem['options'][:10])}"
+                elem_lines.append(f"  Options: {', '.join(elem['options'][:10])}")
             if elem.get('placeholder'):
-                output += f"\n  Placeholder: {elem['placeholder']}"
+                elem_lines.append(f"  Placeholder: {elem['placeholder']}")
             if elem.get('label'):
-                output += f"\n  Label: {elem['label']}"
+                elem_lines.append(f"  Label: {elem['label']}")
             if elem.get('href'):
-                output += f"\n  Href: {elem['href']}"
-        if elements_truncated:
-            output += (
-                f"\n\n*[List truncated to {max_elements} elements. "
-                "Use max_elements parameter to increase limit.]*"
-            )
+                elem_lines.append(f"  Href: {elem['href']}")
+        output += "\n" + _fence_content("\n".join(elem_lines))
 
     return output

@@ -48,7 +48,7 @@ class TestCheckBalance:
     def test_warning_when_balance_low(self):
         warning = _check_balance({"meta": {"api_balance": 0.50}})
         assert warning is not None
-        assert "<!-- warning:" in warning
+        assert "Kagi API balance low" in warning
         assert "$0.50" in warning
 
     def test_low_balance_sets_lockout(self):
@@ -122,7 +122,7 @@ class TestSummarizeLockout:
             result = await search("test query")
 
         assert kagi_mod._summarize_locked is True
-        assert result.startswith("<!-- warning:")
+        assert "balance_warning:" in result
         assert "$0.42" in result
         assert "Result" in result  # actual results still returned
 
@@ -137,7 +137,7 @@ class TestSummarizeLockout:
         with patch.object(kagi_mod, "get_client", return_value=mock_client):
             result = await summarize(url="https://example.com")
 
-        assert result.startswith("<!-- warning:")
+        assert "balance_warning:" in result
         assert "Summary text here." in result
         assert "$0.10" in result
         assert kagi_mod._summarize_locked is True

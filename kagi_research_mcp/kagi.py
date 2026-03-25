@@ -7,6 +7,8 @@ from typing import Any, Optional
 
 from kagiapi import KagiClient
 
+from .markdown import _build_frontmatter, _fence_content, _TRUST_ADVISORY
+
 logger = logging.getLogger(__name__)
 
 CONFIG_PATH = Path.home() / ".config" / "kagi" / "api_key"
@@ -45,8 +47,8 @@ def _check_balance(response: Any, is_summarize: bool = False) -> Optional[str]:
     if balance < _LOW_BALANCE_THRESHOLD:
         _summarize_locked = True
         return (
-            f"<!-- warning: Kagi API balance low: ${balance:.2f} remaining. "
-            f"Add funds at https://kagi.com/settings?p=billing -->\n"
+            f"Kagi API balance low: ${balance:.2f} remaining. "
+            f"Add funds at https://kagi.com/settings?p=billing"
         )
     else:
         # Balance is healthy — clear lockout (only non-summarize calls reach here
@@ -143,13 +145,18 @@ async def search(query: str, limit: int = 5) -> str:
         output_parts.append("")
         output_parts.append(f"Related searches: {', '.join(related_searches)}")
 
-    output = "\n".join(output_parts)
+    content = "\n".join(output_parts)
 
-    warning = _check_balance(response, is_summarize=False)
-    if warning:
-        output = warning + output
+    fm_entries = {
+        "source": f"kagi search: {query}",
+        "trust": _TRUST_ADVISORY,
+    }
+    balance_warning = _check_balance(response, is_summarize=False)
+    if balance_warning:
+        fm_entries["balance_warning"] = balance_warning
 
-    return output
+    fm = _build_frontmatter(fm_entries)
+    return fm + "\n\n" + _fence_content(content)
 
 
 async def summarize(
@@ -199,13 +206,18 @@ async def summarize(
         return _handle_kagi_error(e)
 
     # Extract summary
-    output = response.get("data", {}).get("output", "")
+    content = response.get("data", {}).get("output", "")
 
-    if not output:
+    if not content:
         return "Error: No summary returned from API."
 
-    warning = _check_balance(response, is_summarize=True)
-    if warning:
-        output = warning + output
+    fm_entries = {
+        "source": url or "text input",
+        "trust": _TRUST_ADVISORY,
+    }
+    balance_warning = _check_balance(response, is_summarize=True)
+    if balance_warning:
+        fm_entries["balance_warning"] = balance_warning
 
-    return output
+    fm = _build_frontmatter(fm_entries)
+    return fm + "\n\n" + _fence_content(content)

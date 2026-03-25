@@ -52,9 +52,9 @@ class TestWebFetchDirectMarkdown:
 
         result = await web_fetch_direct("https://example.com/page")
         assert result.startswith("---")
-        assert "title: Main Heading" in result
+        assert "trust:" in result
         assert "source:" in result
-        assert "Main Heading" in result
+        assert "│ # Main Heading" in result
         # Should NOT contain XML
         assert "<document" not in result
 
@@ -139,7 +139,6 @@ class TestWebFetchDirectMarkdown:
         result = await web_fetch_direct("https://example.com/big", max_tokens=100)
         assert "truncated:" in result
         assert "sections:" in result
-        assert "[content truncated]" in result
 
     @pytest.mark.asyncio
     @respx.mock
@@ -153,7 +152,6 @@ class TestWebFetchDirectMarkdown:
 
         result = await web_fetch_direct("https://example.com/big.json", max_tokens=100)
         assert "truncated:" in result
-        assert "[content truncated]" in result
 
 
 class TestWebFetchDirectErrors:
@@ -262,7 +260,7 @@ class TestWebFetchDirectMediawikiFastPath:
         )
 
         result = await web_fetch_direct("https://wiki.example.com/wiki/Test_Page")
-        assert "title: Test Page" in result
+        assert "│ # Test Page" in result
         assert "site: Test Wiki" in result
         assert "generator: MediaWiki" in result
 
@@ -286,8 +284,7 @@ class TestWebFetchDirectMediawikiFastPath:
 
         result = await web_fetch_direct("https://wiki.example.com/wiki/Test_Page")
         # Should still return content via normal fetch
-        assert "title:" in result
-        assert "Main Heading" in result
+        assert "│ # Main Heading" in result
 
     @pytest.mark.asyncio
     @respx.mock
@@ -413,7 +410,7 @@ class TestWebFetchSections:
         )
 
         result = await web_fetch_sections("https://example.com/page")
-        assert "sections:" in result
+        assert "│ - Main Heading" in result
         assert "(#main-heading)" in result
         assert "(#second-section)" in result
         assert "(#subsection)" in result
@@ -438,7 +435,7 @@ class TestWebFetchSections:
         assert "section: Second Section" in result
         assert 'matched_fragment: "#second-section"' in result
         # Full tree should still be shown for context
-        assert "sections:" in result
+        assert "│ - " in result
 
     @pytest.mark.asyncio
     @respx.mock
@@ -455,7 +452,7 @@ class TestWebFetchSections:
         assert "source: https://example.com/page#nonexistent" in result
         assert "sections_not_found:" in result
         assert '"nonexistent"' in result
-        assert "sections:" in result
+        assert "│ - " in result
 
     @pytest.mark.asyncio
     @respx.mock
