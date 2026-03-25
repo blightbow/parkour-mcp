@@ -322,6 +322,17 @@ def _format_arxiv_list(
 # Fast-path entry point (called from _pipeline.py)
 # ---------------------------------------------------------------------------
 
+async def _check_html_available(arxiv_id: str) -> bool:
+    """Check whether an arXiv HTML render exists for the given paper ID."""
+    html_url = f"https://arxiv.org/html/{arxiv_id}"
+    try:
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+            head = await client.head(html_url)
+            return head.status_code == 200
+    except httpx.RequestError:
+        return False
+
+
 async def _fetch_arxiv_paper(arxiv_id: str, *, _pdf_url: bool = False) -> str:
     """Fetch a single paper by ID and return formatted markdown with frontmatter.
 
@@ -329,6 +340,8 @@ async def _fetch_arxiv_paper(arxiv_id: str, *, _pdf_url: bool = False) -> str:
         arxiv_id: Bare arXiv ID (e.g. "1706.03762" or "1706.03762v5")
         _pdf_url: If True, the original URL was a /pdf/ link — add a hint.
     """
+    from .doi import fetch_formatted_citation
+
     result = await _arxiv_request({"id_list": arxiv_id})
     if isinstance(result, str):
         return result
@@ -337,17 +350,18 @@ async def _fetch_arxiv_paper(arxiv_id: str, *, _pdf_url: bool = False) -> str:
 
     paper = result[0]
     clean_id = paper.get("id", arxiv_id)
+    arxiv_doi = f"10.48550/arXiv.{clean_id}"
 
-    # Check whether an HTML render exists (not all papers have one)
+    # Concurrent: HTML availability check + DOI citation fetch
+    html_result, cite_result = await asyncio.gather(
+        _check_html_available(clean_id),
+        fetch_formatted_citation(arxiv_doi),
+        return_exceptions=True,
+    )
+    html_available = html_result if isinstance(html_result, bool) else False
+    citation_text = cite_result if isinstance(cite_result, str) else None
+
     html_url = f"https://arxiv.org/html/{clean_id}"
-    html_available = False
-    try:
-        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
-            head = await client.head(html_url)
-            html_available = head.status_code == 200
-    except httpx.RequestError:
-        pass
-
     fm_entries = {
         "title": paper.get("title", "Untitled"),
         "source": f"https://arxiv.org/abs/{clean_id}",
@@ -374,7 +388,10 @@ async def _fetch_arxiv_paper(arxiv_id: str, *, _pdf_url: bool = False) -> str:
         )
 
     fm = _build_frontmatter(fm_entries)
-    return fm + "\n\n" + _format_arxiv_paper(paper, html_available=html_available)
+    body = _format_arxiv_paper(paper, html_available=html_available)
+    if citation_text:
+        body += f"\n## Citation\n\n{citation_text}\n"
+    return fm + "\n\n" + body
 
 
 # ---------------------------------------------------------------------------

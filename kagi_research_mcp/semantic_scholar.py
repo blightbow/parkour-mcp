@@ -310,6 +310,8 @@ def _format_author(data: dict, papers: Optional[list[dict]] = None) -> str:
 
 async def _fetch_s2_paper(paper_id: str) -> str:
     """Fetch a single paper and return formatted markdown with frontmatter."""
+    from .doi import fetch_formatted_citation
+
     result = await _s2_request(f"/paper/{paper_id}", {"fields": _DETAIL_FIELDS})
     if isinstance(result, str):
         return result
@@ -319,6 +321,23 @@ async def _fetch_s2_paper(paper_id: str) -> str:
     source_url = f"https://www.semanticscholar.org/paper/{s2_id}"
     ext_ids = result.get("externalIds") or {}
     arxiv_id = ext_ids.get("ArXiv")
+    doi = ext_ids.get("DOI")
+
+    # Start citation fetch concurrently while formatting
+    cite_task = asyncio.create_task(fetch_formatted_citation(doi)) if doi else None
+
+    body = _format_paper_detail(result)
+
+    # Collect citation result
+    citation_text = None
+    if cite_task:
+        try:
+            citation_text = await asyncio.wait_for(cite_task, timeout=6.0)
+        except Exception:
+            pass
+
+    if citation_text:
+        body += f"\n## Citation\n\n{citation_text}\n"
 
     fm = _build_frontmatter({
         "title": title,
@@ -326,7 +345,7 @@ async def _fetch_s2_paper(paper_id: str) -> str:
         "api": "Semantic Scholar",
         "see_also": f"ARXIV:{arxiv_id} with ArXiv for categories and affiliations" if arxiv_id else None,
     })
-    return fm + "\n\n" + _format_paper_detail(result)
+    return fm + "\n\n" + body
 
 
 def _format_snippets(data: dict, paper_id: Optional[str] = None) -> str:
@@ -450,22 +469,7 @@ async def semantic_scholar(
         return fm + "\n\n" + _format_paper_list(papers, total=total, offset=offset)
 
     elif action == "paper":
-        params = {"fields": fields or _DETAIL_FIELDS}
-        result = await _s2_request(f"/paper/{query}", params)
-        if isinstance(result, str):
-            return result
-        title = result.get("title", "Untitled")
-        s2_id = result.get("paperId", query)
-        source_url = f"https://www.semanticscholar.org/paper/{s2_id}"
-        ext_ids = result.get("externalIds") or {}
-        arxiv_id = ext_ids.get("ArXiv")
-        fm = _build_frontmatter({
-            "title": title,
-            "source": source_url,
-            "api": "Semantic Scholar",
-            "see_also": f"ARXIV:{arxiv_id} with ArXiv for categories and affiliations" if arxiv_id else None,
-        })
-        return fm + "\n\n" + _format_paper_detail(result)
+        return await _fetch_s2_paper(query)
 
     elif action == "references":
         params = {

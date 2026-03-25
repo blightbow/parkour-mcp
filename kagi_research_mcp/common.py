@@ -1,5 +1,6 @@
 """Shared constants for kagi-research-mcp."""
 
+import os
 import platform
 from importlib.metadata import version as _pkg_version
 
@@ -27,9 +28,12 @@ _FETCH_HEADERS = {
 # Wikimedia User-Agent policy.
 #
 # Format: product/version (comment) http-library/version renderer/version
+# Optional mailto: enables CrossRef "polite pool" (10 req/s vs 5 req/s).
+_CONTACT_EMAIL = os.environ.get("MCP_CONTACT_EMAIL", "")
+_CONTACT_PART = f" mailto:{_CONTACT_EMAIL};" if _CONTACT_EMAIL else ""
 _API_USER_AGENT = (
     f"kagi-research-mcp/{_VERSION} "
-    f"(MCP content tool; +https://github.com/blightbow/kagi-research-mcp) "
+    f"(MCP content tool;{_CONTACT_PART} +https://github.com/blightbow/kagi-research-mcp) "
     f"httpx/{_HTTPX_VERSION} markdownify/{_MARKDOWNIFY_VERSION} "
     f"Python/{_PYTHON_VERSION} {_PLATFORM}"
 )

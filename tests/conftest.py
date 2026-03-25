@@ -7,11 +7,20 @@ import pytest
 import kagi_research_mcp.semantic_scholar
 _s2_mod = sys.modules["kagi_research_mcp.semantic_scholar"]
 
+import kagi_research_mcp.doi
+_doi_mod = sys.modules["kagi_research_mcp.doi"]
+
 
 @pytest.fixture(autouse=True)
 def _disable_s2_rate_limit(monkeypatch):
     """Disable the 1s rate limiter in unit tests."""
     monkeypatch.setattr(_s2_mod, "_S2_MIN_INTERVAL", 0.0)
+
+
+@pytest.fixture(autouse=True)
+def _disable_doi_rate_limit(monkeypatch):
+    """Disable the 0.2s rate limiter in unit tests."""
+    monkeypatch.setattr(_doi_mod, "_DOI_MIN_INTERVAL", 0.0)
 
 
 # Sample markdown document used across multiple test modules
