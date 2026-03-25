@@ -8,9 +8,12 @@ from kagi_research_mcp.doi import (
     DOI_URL_RE,
     ARXIV_DOI_RE,
     _detect_doi_url,
+    _fetch_doi_paper,
     fetch_formatted_citation,
     fetch_csl_json,
 )
+from kagi_research_mcp._pipeline import _doi_fast_path
+from kagi_research_mcp.shelf import _reset_shelf
 
 
 # ---------------------------------------------------------------------------
@@ -145,3 +148,105 @@ class TestFetchCslJson:
         )
         result = await fetch_csl_json("10.1234/slow")
         assert result is None
+
+
+# ---------------------------------------------------------------------------
+# _fetch_doi_paper
+# ---------------------------------------------------------------------------
+
+class TestFetchDoiPaper:
+    @pytest.fixture(autouse=True)
+    def _use_fresh_shelf(self):
+        _reset_shelf()
+        yield
+        _reset_shelf()
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_formats_csl_json(self):
+        respx.get("https://doi.org/10.6084/m9.figshare.5616445").mock(
+            side_effect=[
+                httpx.Response(200, json=SAMPLE_CSL_JSON),
+                httpx.Response(200, text=SAMPLE_APA_CITATION),
+            ]
+        )
+        result = await _fetch_doi_paper("10.6084/m9.figshare.5616445")
+        assert "Attention Is All You Need" in result
+        assert "Vaswani" in result
+        assert "api: DOI" in result
+        assert "## Citation" in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_both_fail_returns_error(self):
+        respx.get("https://doi.org/10.9999/gone").mock(
+            return_value=httpx.Response(404)
+        )
+        result = await _fetch_doi_paper("10.9999/gone")
+        assert "Error" in result
+        assert "Could not resolve" in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_csl_only_no_citation(self):
+        """When citation fetch fails but CSL-JSON succeeds, output is still complete."""
+        respx.get("https://doi.org/10.1234/partial").mock(
+            side_effect=[
+                httpx.Response(200, json=SAMPLE_CSL_JSON),
+                httpx.Response(406),
+            ]
+        )
+        result = await _fetch_doi_paper("10.1234/partial")
+        assert "Attention Is All You Need" in result
+        assert "## Citation" not in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_tracks_on_shelf(self):
+        respx.get("https://doi.org/10.6084/m9.figshare.5616445").mock(
+            side_effect=[
+                httpx.Response(200, json=SAMPLE_CSL_JSON),
+                httpx.Response(200, text=SAMPLE_APA_CITATION),
+            ]
+        )
+        result = await _fetch_doi_paper("10.6084/m9.figshare.5616445")
+        assert "shelf:" in result
+
+
+# ---------------------------------------------------------------------------
+# _doi_fast_path
+# ---------------------------------------------------------------------------
+
+class TestDoiFastPath:
+    @pytest.fixture(autouse=True)
+    def _use_fresh_shelf(self):
+        _reset_shelf()
+        yield
+        _reset_shelf()
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_doi_url_intercepted(self):
+        respx.get("https://doi.org/10.6084/m9.figshare.5616445").mock(
+            side_effect=[
+                httpx.Response(200, json=SAMPLE_CSL_JSON),
+                httpx.Response(200, text=SAMPLE_APA_CITATION),
+            ]
+        )
+        result = await _doi_fast_path("https://doi.org/10.6084/m9.figshare.5616445")
+        assert result is not None
+        assert "Attention Is All You Need" in result
+        assert "api: DOI" in result
+
+    @pytest.mark.asyncio
+    async def test_non_doi_url_returns_none(self):
+        result = await _doi_fast_path("https://example.com/page")
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_dx_doi_url_detected(self):
+        """dx.doi.org URLs should also be detected."""
+        # Will fail at content negotiation but should not return None
+        result = await _doi_fast_path("https://dx.doi.org/10.9999/test")
+        # Should attempt resolution, not return None
+        assert result is not None  # returns error string, not None

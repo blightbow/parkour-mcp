@@ -13,7 +13,7 @@ from .markdown import (
 )
 from ._pipeline import (
     _extract_fragment, _normalize_sections, _resolve_fragment_source,
-    _mediawiki_fast_path, _arxiv_fast_path, _s2_fast_path,
+    _mediawiki_fast_path, _arxiv_fast_path, _s2_fast_path, _doi_fast_path,
     _process_markdown_sections,
     _cached_mediawiki_fetch,
     _page_cache, _search_slices, _get_slices,
@@ -164,6 +164,18 @@ async def web_fetch_direct(
                     "Use the SemanticScholar tool's snippets action instead."
                 )
             result = await _s2_fast_path(url)
+            if result is not None:
+                return result
+    except Exception:
+        pass
+
+    # --- DOI fast path (after arXiv/S2, before MediaWiki) ---
+    try:
+        from .doi import _detect_doi_url
+        if _detect_doi_url(url):
+            if want_slicing:
+                return "Error: search/slices not supported for DOI resolver URLs."
+            result = await _doi_fast_path(url)
             if result is not None:
                 return result
     except Exception:

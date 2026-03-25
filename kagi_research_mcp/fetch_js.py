@@ -17,7 +17,7 @@ from .markdown import (
 from .mediawiki import _extract_citations, _format_citations
 from ._pipeline import (
     _extract_fragment, _normalize_sections, _resolve_fragment_source,
-    _mediawiki_fast_path, _arxiv_fast_path, _s2_fast_path,
+    _mediawiki_fast_path, _arxiv_fast_path, _s2_fast_path, _doi_fast_path,
     _process_markdown_sections,
     _cached_mediawiki_fetch,
     _page_cache, _dispatch_slicing,
@@ -347,6 +347,14 @@ async def web_fetch_js(
     # --- Semantic Scholar fast path (before launching browser) ---
     try:
         result = await _s2_fast_path(url)
+        if result is not None:
+            return result
+    except Exception:
+        pass
+
+    # --- DOI fast path (after arXiv/S2, before MediaWiki) ---
+    try:
+        result = await _doi_fast_path(url)
         if result is not None:
             return result
     except Exception:

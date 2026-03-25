@@ -5,14 +5,11 @@ single paper is inspected.  Provides BibTeX/RIS export, JSON import/export
 for agent memory persistence, and an MCP tool for interactive management.
 """
 
-import fcntl
 import json
 import logging
-import os
 import re
 import time
 from dataclasses import dataclass, field, asdict
-from pathlib import Path
 from typing import Annotated, Optional
 
 from pydantic import Field as PydanticField
@@ -106,54 +103,22 @@ def record_to_ris(record: CitationRecord) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Shelf storage
+# Shelf storage (in-memory, session-scoped)
 # ---------------------------------------------------------------------------
-
-_DEFAULT_SHELF_PATH = "~/.local/share/kagi-research-mcp/shelf.json"
+# The shelf lives in MCP server process memory for the session lifetime.
+# Cross-session persistence is agent-managed via export json / import:
+# agents write exports to their memory files and import on future sessions.
+# This avoids cross-project contamination from a shared file path.
 
 
 class ResearchShelf:
-    """Persistent JSON-backed research document tracker."""
+    """In-memory research document tracker for the current session."""
 
-    def __init__(self, path: Path):
-        self._path = path
+    def __init__(self):
         self._records: dict[str, CitationRecord] = {}
-        self._loaded = False
-
-    def _ensure_loaded(self) -> None:
-        """Lazy-load from disk on first access."""
-        if self._loaded:
-            return
-        if self._path.exists():
-            try:
-                with open(self._path, "r") as f:
-                    fcntl.flock(f, fcntl.LOCK_SH)
-                    try:
-                        data = json.load(f)
-                    finally:
-                        fcntl.flock(f, fcntl.LOCK_UN)
-                for doi, rec_dict in data.items():
-                    self._records[doi] = CitationRecord(**rec_dict)
-            except Exception as e:
-                logger.warning("Failed to load shelf from %s: %s", self._path, e)
-        self._loaded = True
-
-    def _save(self) -> None:
-        """Write shelf to disk with file locking."""
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        with open(self._path, "w") as f:
-            fcntl.flock(f, fcntl.LOCK_EX)
-            try:
-                json.dump(
-                    {doi: asdict(rec) for doi, rec in self._records.items()},
-                    f, indent=2, ensure_ascii=False,
-                )
-            finally:
-                fcntl.flock(f, fcntl.LOCK_UN)
 
     def track(self, record: CitationRecord) -> None:
         """Upsert a record — updates metadata, preserves score/confirmed/notes."""
-        self._ensure_loaded()
         if record.doi in self._records:
             existing = self._records[record.doi]
             # Preserve user-managed fields
@@ -164,77 +129,61 @@ class ResearchShelf:
         else:
             record.added = record.added or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         self._records[record.doi] = record
-        self._save()
 
     def remove(self, dois: list[str]) -> list[str]:
         """Batch remove by DOI. Returns list of actually removed DOIs."""
-        self._ensure_loaded()
         removed = []
         for doi in dois:
             if doi in self._records:
                 del self._records[doi]
                 removed.append(doi)
-        if removed:
-            self._save()
         return removed
 
     def set_score(self, doi: str, value: int) -> bool:
         """Set score for a paper. Returns False if DOI not found."""
-        self._ensure_loaded()
         if doi not in self._records:
             return False
         self._records[doi].score = value
-        self._save()
         return True
 
     def confirm(self, doi: str) -> bool:
         """Mark a paper as confirmed. Returns False if DOI not found."""
-        self._ensure_loaded()
         if doi not in self._records:
             return False
         self._records[doi].confirmed = True
-        self._save()
         return True
 
     def set_note(self, doi: str, text: str) -> bool:
         """Set freetext note. Returns False if DOI not found."""
-        self._ensure_loaded()
         if doi not in self._records:
             return False
         self._records[doi].notes = text
-        self._save()
         return True
 
     def list_all(self) -> list[CitationRecord]:
         """Return all records sorted by added timestamp."""
-        self._ensure_loaded()
         return sorted(self._records.values(), key=lambda r: r.added or "")
 
     def count(self) -> int:
         """Return total number of tracked papers."""
-        self._ensure_loaded()
         return len(self._records)
 
     def confirmed_count(self) -> int:
         """Return number of confirmed papers."""
-        self._ensure_loaded()
         return sum(1 for r in self._records.values() if r.confirmed)
 
     def export_bibtex(self) -> str:
         """Export all records as a BibTeX file."""
-        self._ensure_loaded()
         entries = [record_to_bibtex(r) for r in self.list_all()]
         return "\n\n".join(entries)
 
     def export_ris(self) -> str:
         """Export all records as an RIS file."""
-        self._ensure_loaded()
         entries = [record_to_ris(r) for r in self.list_all()]
         return "\n\n".join(entries)
 
     def export_json(self) -> str:
         """Export full shelf as JSON string for agent memory persistence."""
-        self._ensure_loaded()
         return json.dumps(
             {doi: asdict(rec) for doi, rec in self._records.items()},
             indent=2, ensure_ascii=False,
@@ -242,7 +191,6 @@ class ResearchShelf:
 
     def import_json(self, data: str) -> int:
         """Import shelf from JSON string. Returns count of records imported."""
-        self._ensure_loaded()
         parsed = json.loads(data)
         count = 0
         for doi, rec_dict in parsed.items():
@@ -259,20 +207,16 @@ class ResearchShelf:
                 record.added = existing.added
                 self._records[doi] = record
                 count += 1
-        self._save()
         return count
 
     def clear(self) -> int:
         """Remove all entries. Returns count removed."""
-        self._ensure_loaded()
         count = len(self._records)
         self._records.clear()
-        self._save()
         return count
 
     def status_line(self) -> Optional[str]:
         """Compact status for frontmatter. Returns None if shelf is empty."""
-        self._ensure_loaded()
         total = len(self._records)
         if total == 0:
             return None
@@ -288,12 +232,10 @@ _shelf: Optional[ResearchShelf] = None
 
 
 def _get_shelf() -> ResearchShelf:
-    """Return the global shelf instance, creating it on first call."""
+    """Return the global in-memory shelf instance."""
     global _shelf
     if _shelf is None:
-        path = Path(os.environ.get("MCP_SHELF_PATH", _DEFAULT_SHELF_PATH)).expanduser()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        _shelf = ResearchShelf(path)
+        _shelf = ResearchShelf()
     return _shelf
 
 

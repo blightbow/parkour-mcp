@@ -17,9 +17,9 @@ from kagi_research_mcp.shelf import (
 
 
 @pytest.fixture
-def shelf(tmp_path):
-    """Create a fresh shelf backed by a temp file."""
-    return ResearchShelf(tmp_path / "shelf.json")
+def shelf():
+    """Create a fresh in-memory shelf."""
+    return ResearchShelf()
 
 
 @pytest.fixture
@@ -138,23 +138,24 @@ class TestShelfCrud:
 # ---------------------------------------------------------------------------
 
 class TestShelfPersistence:
-    def test_survives_reload(self, tmp_path, sample_record):
-        path = tmp_path / "shelf.json"
-        shelf1 = ResearchShelf(path)
+    def test_export_import_simulates_session_restore(self, sample_record):
+        """Export from one shelf, import into a fresh one — simulates agent memory restore."""
+        shelf1 = ResearchShelf()
         shelf1.track(sample_record)
         shelf1.set_score(sample_record.doi, 7)
+        exported = shelf1.export_json()
 
-        # Fresh instance reads from same file
-        shelf2 = ResearchShelf(path)
+        shelf2 = ResearchShelf()
+        count = shelf2.import_json(exported)
+        assert count == 1
         records = shelf2.list_all()
         assert len(records) == 1
         assert records[0].score == 7
 
-    def test_empty_shelf_file_not_created_until_track(self, tmp_path):
-        path = tmp_path / "shelf.json"
-        shelf = ResearchShelf(path)
-        shelf._ensure_loaded()
-        assert not path.exists()
+    def test_fresh_shelf_is_empty(self):
+        shelf = ResearchShelf()
+        assert shelf.list_all() == []
+        assert shelf.count() == 0
 
 
 # ---------------------------------------------------------------------------
@@ -215,7 +216,7 @@ class TestJsonRoundtrip:
         exported = shelf.export_json()
 
         # Import into fresh shelf
-        shelf2 = ResearchShelf(shelf._path.parent / "shelf2.json")
+        shelf2 = ResearchShelf()
         count = shelf2.import_json(exported)
         assert count == 2
 
@@ -275,10 +276,9 @@ class TestStatusLine:
 
 class TestResearchShelfTool:
     @pytest.fixture(autouse=True)
-    def _use_temp_shelf(self, tmp_path, monkeypatch):
-        """Point the global shelf at a temp file."""
+    def _use_fresh_shelf(self):
+        """Reset the global shelf for each test."""
         _reset_shelf()
-        monkeypatch.setenv("MCP_SHELF_PATH", str(tmp_path / "shelf.json"))
         yield
         _reset_shelf()
 

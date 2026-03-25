@@ -24,6 +24,7 @@ from .markdown import (
 from .mediawiki import _detect_mediawiki, _fetch_mediawiki_page, _mediawiki_html_to_markdown
 from .semantic_scholar import _detect_s2_url, _fetch_s2_paper
 from .arxiv import _detect_arxiv_url, _fetch_arxiv_paper
+from .doi import _detect_doi_url, _fetch_doi_paper
 
 logger = logging.getLogger(__name__)
 
@@ -280,6 +281,19 @@ async def _s2_fast_path(url: str) -> Optional[str]:
     # the API call failed — still return it to avoid falling through to
     # an HTTP fetch that would hit CAPTCHA.
     return result
+
+
+async def _doi_fast_path(url: str) -> Optional[str]:
+    """Attempt to resolve a doi.org URL via content negotiation.
+
+    Returns formatted paper details on success, or None to signal fallback.
+    Delegates arXiv DOIs (10.48550/arXiv.*) to the arXiv handler.
+    """
+    doi = _detect_doi_url(url)
+    if not doi:
+        return None
+
+    return await _fetch_doi_paper(doi)
 
 
 # ---------------------------------------------------------------------------
