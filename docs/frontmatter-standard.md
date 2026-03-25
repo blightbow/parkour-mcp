@@ -27,6 +27,14 @@ Frontmatter serves three roles:
 - **Error strings have no frontmatter.**  They are already
   self-describing.
 - **Pagination stays in body text.**  It is content, not metadata.
+- **No document-sourced data in frontmatter.**  Page titles, section
+  headings, and other values extracted from external content belong
+  inside the fenced content zone, not in frontmatter fields.
+  Frontmatter is the trusted metadata boundary — placing
+  attacker-controlled strings there (e.g. a crafted `<title>` tag)
+  allows them to inherit the trust of tool-generated metadata and
+  opens a frontmatter injection vector.  See the trust boundary
+  discussion in *Purpose* above.
 
 ## Hint Field Types
 
