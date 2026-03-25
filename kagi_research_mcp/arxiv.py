@@ -348,7 +348,7 @@ async def _check_html_available(arxiv_id: str) -> bool:
     """Check whether an arXiv HTML render exists for the given paper ID."""
     html_url = f"https://arxiv.org/html/{arxiv_id}"
     try:
-        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=10.0) as client:
             head = await client.head(html_url)
             return head.status_code == 200
     except httpx.RequestError:

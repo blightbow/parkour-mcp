@@ -158,21 +158,48 @@ async def fetch_datacite_metadata(
 # Content negotiation
 # ---------------------------------------------------------------------------
 
+# Hosts that doi.org redirects to for content negotiation.
+# DataCite DOIs → data.crosscite.org; CrossRef DOIs → api.crossref.org.
+_DOI_REDIRECT_ALLOW = frozenset({
+    "doi.org",
+    "data.crosscite.org",
+    "api.crossref.org",
+})
+
+
 async def _doi_content_negotiate(
     doi: str, accept: str, *, timeout: float = 5.0,
 ) -> Optional[httpx.Response]:
     """Send a rate-limited content negotiation request to doi.org.
 
+    Follows redirects only to known metadata hosts (CrossRef, DataCite,
+    CrossCite).  Rejects redirects to unknown hosts to prevent SSRF.
+
     Returns the Response on HTTP 200, or None on any failure.
     Never raises — designed for concurrent use with asyncio.gather.
     """
+    from urllib.parse import urlparse
+
     await _doi_limiter.wait()
     try:
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
             resp = await client.get(
                 f"https://doi.org/{doi}",
                 headers={"User-Agent": _API_USER_AGENT, "Accept": accept},
             )
+            # Follow redirect manually with host validation
+            if resp.is_redirect:
+                location = resp.headers.get("location", "")
+                target_host = urlparse(location).hostname or ""
+                if target_host not in _DOI_REDIRECT_ALLOW:
+                    logger.debug(
+                        "DOI redirect to untrusted host %s for %s", target_host, doi,
+                    )
+                    return None
+                resp = await client.get(
+                    location,
+                    headers={"User-Agent": _API_USER_AGENT, "Accept": accept},
+                )
             if resp.status_code == 200:
                 return resp
             logger.debug("DOI content negotiation HTTP %d for %s (%s)", resp.status_code, doi, accept)
