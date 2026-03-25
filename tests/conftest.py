@@ -21,6 +21,7 @@ def _disable_s2_rate_limit(monkeypatch):
 def _disable_doi_rate_limit(monkeypatch):
     """Disable the 0.2s rate limiter in unit tests."""
     monkeypatch.setattr(_doi_mod, "_DOI_MIN_INTERVAL", 0.0)
+    monkeypatch.setattr(_doi_mod, "_DATACITE_MIN_INTERVAL", 0.0)
 
 
 # Sample markdown document used across multiple test modules

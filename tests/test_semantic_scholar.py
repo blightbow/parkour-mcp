@@ -325,7 +325,7 @@ class TestSemanticScholarPaperCitationCounts:
     @pytest.mark.asyncio
     @respx.mock
     async def test_paper_without_arxiv_id(self):
-        """Paper without arXiv ID should not include see_also."""
+        """Paper without arXiv ID should only have DOI hint, not arXiv hint."""
         paper_id = "204e3073870fae3d05bcbc2f6a8e263d9b72e776"
         detail = dict(S2_PAPER_DETAIL_RESPONSE)
         detail["externalIds"] = {"DOI": "10.1234/test"}
@@ -334,7 +334,8 @@ class TestSemanticScholarPaperCitationCounts:
         )
         result = await semantic_scholar("paper", paper_id)
         assert result.startswith("---\n")
-        assert "see_also" not in result
+        assert "ArXiv" not in result.split("---")[1]  # no arXiv hint in frontmatter
+        assert "doi.org/10.1234/test" in result  # DOI hint present
 
 
 # ---------------------------------------------------------------------------

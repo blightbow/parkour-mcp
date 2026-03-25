@@ -136,6 +136,15 @@ The snippets action does BM25 keyword search within paper body text
 Use paper_id to scope to a single paper, or omit for corpus-wide search.
 Example: action="snippets", query="multi-head attention",
 paper_id="204e3073870fae3d05bcbc2f6a8e263d9b72e776".""",
+
+    "research_shelf": """Manage the research shelf — a persistent tracker for papers inspected during research.
+
+Papers are automatically added when you use ArXiv, SemanticScholar, or DOI
+tools to inspect individual papers. Use this tool to review, score, confirm,
+or remove tracked papers, and to export citations in BibTeX or RIS format.
+
+The shelf persists across context resets. Use export json / import to save
+and restore shelf state via agent memory for cross-session persistence.""",
 }
 
 # Per-profile description overrides (replaces the template entirely)
@@ -172,14 +181,6 @@ independently). Use slices=[3, 4, 5] to retrieve specific slices by index.
 
 Supports HTML, plain text, JSON, and XML content types.""",
     },
-    "research_shelf": """Manage the research shelf — a persistent tracker for papers inspected during research.
-
-Papers are automatically added when you use ArXiv, SemanticScholar, or DOI
-tools to inspect individual papers. Use this tool to review, score, confirm,
-or remove tracked papers, and to export citations in BibTeX or RIS format.
-
-The shelf persists across context resets. Use export json / import to save
-and restore shelf state via agent memory for cross-session persistence.""",
 }
 
 

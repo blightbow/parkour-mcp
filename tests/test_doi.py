@@ -8,9 +8,13 @@ from kagi_research_mcp.doi import (
     DOI_URL_RE,
     ARXIV_DOI_RE,
     _detect_doi_url,
+    _detect_ra,
+    _ra_cache,
     _fetch_doi_paper,
     fetch_formatted_citation,
     fetch_csl_json,
+    fetch_datacite_metadata,
+    _format_csl_json_as_markdown,
 )
 from kagi_research_mcp._pipeline import _doi_fast_path
 from kagi_research_mcp.shelf import _reset_shelf
@@ -250,3 +254,162 @@ class TestDoiFastPath:
         result = await _doi_fast_path("https://dx.doi.org/10.9999/test")
         # Should attempt resolution, not return None
         assert result is not None  # returns error string, not None
+
+
+# ---------------------------------------------------------------------------
+# RA detection
+# ---------------------------------------------------------------------------
+
+class TestDetectRA:
+    @pytest.fixture(autouse=True)
+    def _clear_ra_cache(self):
+        _ra_cache.clear()
+        yield
+        _ra_cache.clear()
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_datacite_prefix(self):
+        respx.get("https://doi.org/doiRA/10.5281").mock(
+            return_value=httpx.Response(200, json=[{"RA": "DataCite"}])
+        )
+        ra = await _detect_ra("10.5281/zenodo.123")
+        assert ra == "DataCite"
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_crossref_prefix(self):
+        respx.get("https://doi.org/doiRA/10.1038").mock(
+            return_value=httpx.Response(200, json=[{"RA": "Crossref"}])
+        )
+        ra = await _detect_ra("10.1038/nature12373")
+        assert ra == "Crossref"
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_prefix_cache_hit(self):
+        route = respx.get("https://doi.org/doiRA/10.5281").mock(
+            return_value=httpx.Response(200, json=[{"RA": "DataCite"}])
+        )
+        await _detect_ra("10.5281/zenodo.123")
+        await _detect_ra("10.5281/zenodo.456")
+        assert route.call_count == 1  # cached after first call
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_api_failure_returns_none(self):
+        respx.get("https://doi.org/doiRA/10.9999").mock(
+            return_value=httpx.Response(500)
+        )
+        ra = await _detect_ra("10.9999/test")
+        assert ra is None
+
+
+# ---------------------------------------------------------------------------
+# DataCite metadata
+# ---------------------------------------------------------------------------
+
+SAMPLE_DATACITE_RESPONSE = {
+    "data": {
+        "attributes": {
+            "creators": [
+                {
+                    "name": "Cope, Jez",
+                    "givenName": "Jez",
+                    "familyName": "Cope",
+                    "nameIdentifiers": [
+                        {
+                            "nameIdentifier": "https://orcid.org/0000-0003-3629-1383",
+                            "nameIdentifierScheme": "ORCID",
+                        }
+                    ],
+                },
+                {
+                    "name": "Hardeman, Megan",
+                    "nameIdentifiers": [],
+                },
+            ],
+            "rightsList": [
+                {
+                    "rights": "Creative Commons Attribution 4.0 International",
+                    "rightsUri": "https://creativecommons.org/licenses/by/4.0/legalcode",
+                    "rightsIdentifier": "cc-by-4.0",
+                    "rightsIdentifierScheme": "SPDX",
+                }
+            ],
+            "relatedIdentifiers": [
+                {
+                    "relatedIdentifier": "10.6084/m9.figshare.5616445",
+                    "relatedIdentifierType": "DOI",
+                    "relationType": "IsIdenticalTo",
+                }
+            ],
+            "types": {"resourceTypeGeneral": "Audiovisual"},
+        }
+    }
+}
+
+
+class TestFetchDataciteMetadata:
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_success(self):
+        respx.get("https://api.datacite.org/dois/10.6084/m9.figshare.5616445").mock(
+            return_value=httpx.Response(200, json=SAMPLE_DATACITE_RESPONSE)
+        )
+        result = await fetch_datacite_metadata("10.6084/m9.figshare.5616445")
+        assert result is not None
+        assert result["orcids"]["Cope, Jez"] == "0000-0003-3629-1383"
+        assert "Hardeman, Megan" not in result["orcids"]
+        assert result["license_id"] == "cc-by-4.0"
+        assert "creativecommons.org" in result["license_url"]
+        assert result["resource_type"] == "Audiovisual"
+        assert len(result["related"]) == 1
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_failure_returns_none(self):
+        respx.get("https://api.datacite.org/dois/10.9999/fake").mock(
+            return_value=httpx.Response(404)
+        )
+        result = await fetch_datacite_metadata("10.9999/fake")
+        assert result is None
+
+
+# ---------------------------------------------------------------------------
+# CSL-JSON formatting with DataCite enrichment
+# ---------------------------------------------------------------------------
+
+class TestFormatCslJsonWithDatacite:
+    def test_orcids_from_datacite(self):
+        datacite = {
+            "orcids": {"Vaswani, Ashish": "0000-0002-1234-5678"},
+            "license_id": "cc-by-4.0",
+            "license_url": "https://creativecommons.org/licenses/by/4.0/legalcode",
+            "resource_type": "Dataset",
+            "related": [],
+        }
+        result = _format_csl_json_as_markdown(SAMPLE_CSL_JSON, datacite=datacite)
+        assert "[ORCID](https://orcid.org/0000-0002-1234-5678)" in result
+        assert "cc-by-4.0" in result
+        assert "Dataset" in result
+
+    def test_without_datacite(self):
+        result = _format_csl_json_as_markdown(SAMPLE_CSL_JSON)
+        assert "ORCID" not in result
+        # Falls back to CSL-JSON type
+        assert "article" in result
+
+    def test_spdx_license_preferred_over_copyright(self):
+        csl = dict(SAMPLE_CSL_JSON)
+        csl["copyright"] = "All rights reserved"
+        datacite = {
+            "orcids": {},
+            "license_id": "cc-by-4.0",
+            "license_url": "https://creativecommons.org/licenses/by/4.0/",
+            "resource_type": None,
+            "related": [],
+        }
+        result = _format_csl_json_as_markdown(csl, datacite=datacite)
+        assert "cc-by-4.0" in result
+        assert "All rights reserved" not in result
