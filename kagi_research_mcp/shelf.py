@@ -105,8 +105,25 @@ def record_to_bibtex(record: CitationRecord) -> str:
     if record.doi:
         fields.append(f"  doi = {{{record.doi}}}")
 
+    # arXiv eprint fields per convention (archivePrefix + eprint ID)
+    arxiv_id = _extract_arxiv_id(record)
+    if arxiv_id:
+        fields.append(f"  eprint = {{{arxiv_id}}}")
+        fields.append("  archivePrefix = {arXiv}")
+
     fields_str = ",\n".join(fields)
     return f"@misc{{{key},\n{fields_str}\n}}"
+
+
+def _extract_arxiv_id(record: CitationRecord) -> Optional[str]:
+    """Extract arXiv paper ID from a record's DOI or alt_dois."""
+    _PREFIX = "10.48550/arXiv."
+    if record.doi.startswith(_PREFIX):
+        return record.doi[len(_PREFIX):]
+    for alt in record.alt_dois:
+        if alt.startswith(_PREFIX):
+            return alt[len(_PREFIX):]
+    return None
 
 
 def record_to_ris(record: CitationRecord) -> str:

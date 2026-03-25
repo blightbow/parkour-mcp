@@ -37,6 +37,19 @@ def _detect_arxiv_url(url: str) -> Optional[str]:
     return m.group(1) if m else None
 
 
+# Matches /html/ paths (full paper text — not intercepted by the fast path)
+_ARXIV_HTML_RE = re.compile(
+    r'https?://(?:export\.)?arxiv\.org/html/(\d{4}\.\d{4,5}(?:v\d+)?)',
+    re.IGNORECASE,
+)
+
+
+def _detect_arxiv_html_url(url: str) -> Optional[str]:
+    """Extract arXiv ID from an /html/ URL, or None."""
+    m = _ARXIV_HTML_RE.search(url)
+    return m.group(1) if m else None
+
+
 _VERSION_SUFFIX_RE = re.compile(r'v\d+$')
 
 
