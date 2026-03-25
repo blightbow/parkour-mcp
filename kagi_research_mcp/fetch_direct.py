@@ -255,9 +255,26 @@ async def web_fetch_direct(
     if not markdown_content:
         return f"Error: No content extracted from {url}"
 
+    fm_entries = {"title": title, "source": source_url, "warning": fragment_warning}
+
+    # arXiv /html/ auto-tracking: if this is a full paper fetch, track it
+    # on the shelf so it shows up alongside papers found via ArXiv/S2 tools.
+    try:
+        from .arxiv import _detect_arxiv_html_url, _strip_version
+        arxiv_id = _detect_arxiv_html_url(url)
+        if arxiv_id:
+            from .shelf import _track_on_shelf, CitationRecord
+            arxiv_doi = f"10.48550/arXiv.{_strip_version(arxiv_id)}"
+            fm_entries["shelf"] = _track_on_shelf(CitationRecord(
+                doi=arxiv_doi,
+                title=title,
+                source_tool="arxiv",
+            ))
+    except Exception:
+        pass
+
     output = _process_markdown_sections(
-        markdown_content, section_names, max_tokens,
-        {"title": title, "source": source_url, "warning": fragment_warning},
+        markdown_content, section_names, max_tokens, fm_entries,
         cache_url=url, renderer="direct",
     )
 

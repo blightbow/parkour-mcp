@@ -264,6 +264,23 @@ def _mediawiki_html_to_markdown(html: str) -> str:
         if p.get_text(strip=True).startswith("Cite error:"):
             p.decompose()
 
+    # Replace math elements with LaTeX source.  MediaWiki renders <math> as
+    # MathML + an <img> fallback.  markdownify converts both, producing noise
+    # like "{\displaystyle x^2} [Image: {\displaystyle x^2}]".  Extract the
+    # TeX annotation and discard the rest.
+    for math_el in soup.find_all("math"):
+        annotation = math_el.find("annotation", encoding="application/x-tex")
+        if annotation and annotation.string:
+            latex = annotation.string.strip()
+            math_el.replace_with(f" ${latex}$ ")
+        else:
+            # No annotation — use alt text from the companion fallback image
+            alt = math_el.get("alttext", "")
+            math_el.replace_with(f" ${alt}$ " if alt else "")
+    # Remove orphaned math fallback images (class="mwe-math-fallback-image-*")
+    for img in soup.find_all("img", class_=re.compile(r"mwe-math-fallback")):
+        img.decompose()
+
     # Clean heading markup (removes .mw-editsection, unwraps inline tags)
     _clean_headings(soup)
 
