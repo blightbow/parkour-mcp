@@ -19,13 +19,6 @@ uv run pytest tests/test_arxiv.py::test_function_name
 # Run live integration tests (hits real endpoints)
 uv run pytest -m live
 
-# Start MCP server
-uv run kagi-research-mcp --profile code      # Claude Code (PascalCase tools)
-uv run kagi-research-mcp --profile desktop   # Claude Desktop (snake_case tools)
-
-# Type checking
-uv run pyright
-
 # Regenerate README examples (live endpoints + Reddit fixtures)
 uv run python3 scripts/regenerate_readme_examples.py
 ```
