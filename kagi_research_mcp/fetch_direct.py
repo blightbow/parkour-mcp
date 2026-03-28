@@ -13,7 +13,7 @@ from .markdown import (
 )
 from ._pipeline import (
     _extract_fragment, _normalize_sections, _resolve_fragment_source,
-    _mediawiki_fast_path, _arxiv_fast_path, _s2_fast_path, _doi_fast_path,
+    _mediawiki_fast_path, _arxiv_fast_path, _s2_fast_path, _doi_fast_path, _reddit_fast_path,
     _process_markdown_sections,
     _cached_mediawiki_fetch,
     _page_cache, _search_slices, _get_slices,
@@ -97,7 +97,7 @@ async def web_fetch_direct(
     if want_slicing:
         fm_base = {"source": source_url, "warning": fragment_warning}
         cached = _page_cache.get(url)
-        if cached and cached.renderer in ("direct", "wiki"):
+        if cached and cached.renderer in ("direct", "wiki", "reddit"):
             fm_base["title"] = cached.title or "Untitled"
             if search is not None:
                 return _search_slices(url, search, max_tokens, fm_base) or \
@@ -177,6 +177,36 @@ async def web_fetch_direct(
                 return "Error: search/slices not supported for DOI resolver URLs."
             result = await _doi_fast_path(url)
             if result is not None:
+                return result
+    except Exception:
+        pass
+
+    # --- Reddit fast path (after DOI, before MediaWiki) ---
+    try:
+        from .reddit import _detect_reddit_url
+        if _detect_reddit_url(url):
+            # Always run the fast path first — it populates _page_cache
+            result = await _reddit_fast_path(url, max_tokens)
+            if result is not None:
+                if want_slicing:
+                    return _dispatch_slicing(
+                        url, search, slices,
+                        slices_list if slices is not None else [],
+                        max_tokens, source_url, warning=fragment_warning,
+                    )
+                if section_names:
+                    # Section filtering on cached Reddit markdown
+                    cached = _page_cache.get(url)
+                    if cached and cached.markdown:
+                        return _process_markdown_sections(
+                            cached.markdown, section_names, max_tokens,
+                            frontmatter_entries={
+                                "source": source_url,
+                                "api": "Reddit (.json)",
+                                "warning": fragment_warning,
+                            },
+                            cache_url=url,
+                        )
                 return result
     except Exception:
         pass
@@ -324,6 +354,44 @@ async def web_fetch_sections(url: str) -> str:
                     "Use WebFetchDirect or SemanticScholar tool for full content.",
         })
         return fm
+
+    # --- Reddit fast path (comment tree as sections) ---
+    from .reddit import (
+        _detect_reddit_url, _classify_reddit_url, _fetch_reddit_json,
+        _resolve_redd_it, _build_comment_section_tree, RedditPageType,
+    )
+    reddit_url = _detect_reddit_url(url)
+    if reddit_url:
+        try:
+            # Resolve short links
+            if _classify_reddit_url(reddit_url) == RedditPageType.SHORT_LINK:
+                reddit_url = await _resolve_redd_it(reddit_url) or reddit_url
+
+            page_type = _classify_reddit_url(reddit_url)
+            if page_type == RedditPageType.COMMENT_THREAD:
+                data = await _fetch_reddit_json(reddit_url)
+                if isinstance(data, list) and len(data) >= 2:
+                    title, section_body = _build_comment_section_tree(data)
+                    fm = _build_frontmatter({
+                        "source": original_url,
+                        "api": "Reddit (.json)",
+                        "trust": _TRUST_ADVISORY,
+                        "hint": "Use WebFetchDirect with section=#comment_id to "
+                                "extract a specific comment and its replies, "
+                                "or search= for keyword search across comments",
+                    })
+                    return fm + "\n\n" + _fence_content(section_body)
+
+            # Non-thread Reddit pages: no meaningful section tree
+            fm = _build_frontmatter({
+                "source": original_url,
+                "api": "Reddit (.json)",
+                "note": "Section listing is only available for comment threads. "
+                        "Use WebFetchDirect with search= for keyword search.",
+            })
+            return fm
+        except Exception:
+            pass
 
     # --- MediaWiki fast path (uses single-entry cache) ---
     try:

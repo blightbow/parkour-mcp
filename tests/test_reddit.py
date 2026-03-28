@@ -1,0 +1,618 @@
+"""Tests for the Reddit fast path."""
+
+import httpx
+import pytest
+import respx
+
+from kagi_research_mcp.reddit import (
+    _detect_reddit_url,
+    _classify_reddit_url,
+    _fetch_reddit_content,
+    _format_comment_thread,
+    _format_listing,
+    _render_comments,
+    _format_timestamp,
+    _build_comment_section_tree,
+    _split_by_comments,
+    _MAX_COMMENT_DEPTH,
+    RedditPageType,
+)
+from kagi_research_mcp._pipeline import _reddit_fast_path, _page_cache
+
+
+# ---------------------------------------------------------------------------
+# Sample JSON fixtures
+# ---------------------------------------------------------------------------
+
+def _make_post(
+    *,
+    title: str = "Test Post Title",
+    author: str = "test_user",
+    selftext: str = "This is the post body.",
+    score: int = 42,
+    num_comments: int = 5,
+    subreddit: str = "Python",
+    created_utc: float = 1700000000.0,
+    is_self: bool = True,
+    url: str = "https://old.reddit.com/r/Python/comments/abc123/test_post_title/",
+    link_flair_text: str | None = "Discussion",
+    upvote_ratio: float = 0.85,
+) -> dict:
+    return {
+        "kind": "t3",
+        "data": {
+            "title": title,
+            "author": author,
+            "selftext": selftext,
+            "score": score,
+            "num_comments": num_comments,
+            "subreddit": subreddit,
+            "created_utc": created_utc,
+            "is_self": is_self,
+            "url": url,
+            "link_flair_text": link_flair_text,
+            "upvote_ratio": upvote_ratio,
+        },
+    }
+
+
+def _make_comment(
+    *,
+    id: str = "abc1234",
+    author: str = "commenter",
+    body: str = "Great post!",
+    score: int = 10,
+    created_utc: float = 1700000100.0,
+    replies: object = "",
+) -> dict:
+    return {
+        "kind": "t1",
+        "data": {
+            "id": id,
+            "author": author,
+            "body": body,
+            "score": score,
+            "created_utc": created_utc,
+            "replies": replies,
+        },
+    }
+
+
+def _make_thread_json(
+    post: dict | None = None,
+    comments: list[dict] | None = None,
+) -> list:
+    if post is None:
+        post = _make_post()
+    if comments is None:
+        comments = [_make_comment()]
+    return [
+        {"data": {"children": [post]}},
+        {"data": {"children": comments}},
+    ]
+
+
+def _make_listing_json(posts: list[dict] | None = None, after: str | None = None) -> list:
+    if posts is None:
+        posts = [_make_post(title=f"Post {i}") for i in range(3)]
+    return [{"data": {"children": posts, "after": after}}]
+
+
+THREAD_JSON = _make_thread_json()
+
+LISTING_JSON = _make_listing_json()
+
+
+# ---------------------------------------------------------------------------
+# URL detection
+# ---------------------------------------------------------------------------
+
+class TestDetectRedditUrl:
+    def test_www_reddit(self):
+        result = _detect_reddit_url("https://www.reddit.com/r/Python/")
+        assert result == "https://old.reddit.com/r/Python/"
+
+    def test_old_reddit(self):
+        result = _detect_reddit_url("https://old.reddit.com/r/Python/")
+        assert result == "https://old.reddit.com/r/Python/"
+
+    def test_new_reddit(self):
+        result = _detect_reddit_url("https://new.reddit.com/r/Python/")
+        assert result == "https://old.reddit.com/r/Python/"
+
+    def test_np_reddit(self):
+        result = _detect_reddit_url("https://np.reddit.com/r/Python/")
+        assert result == "https://old.reddit.com/r/Python/"
+
+    def test_bare_reddit(self):
+        result = _detect_reddit_url("https://reddit.com/r/Python/")
+        assert result == "https://old.reddit.com/r/Python/"
+
+    def test_redd_it(self):
+        result = _detect_reddit_url("https://redd.it/abc123")
+        assert result == "https://redd.it/abc123"
+
+    def test_non_reddit_returns_none(self):
+        assert _detect_reddit_url("https://example.com/page") is None
+        assert _detect_reddit_url("https://arxiv.org/abs/1234.5678") is None
+
+    def test_preserves_sort_param(self):
+        result = _detect_reddit_url("https://www.reddit.com/r/Python/?sort=top")
+        assert result is not None
+        assert "sort=top" in result
+
+    def test_strips_other_params(self):
+        result = _detect_reddit_url("https://www.reddit.com/r/Python/?ref=share&sort=new")
+        assert result is not None
+        assert "sort=new" in result
+        assert "ref" not in result
+
+    def test_adds_trailing_slash(self):
+        result = _detect_reddit_url("https://www.reddit.com/r/Python")
+        assert result is not None
+        assert result.endswith("/") or "?" in result
+
+    def test_comment_thread_url(self):
+        url = "https://www.reddit.com/r/Python/comments/abc123/some_title/"
+        result = _detect_reddit_url(url)
+        assert result is not None
+        assert "old.reddit.com" in result
+        assert "/r/Python/comments/abc123/some_title/" in result
+
+    def test_user_url(self):
+        result = _detect_reddit_url("https://www.reddit.com/u/spez/")
+        assert result is not None
+        assert "old.reddit.com" in result
+
+
+# ---------------------------------------------------------------------------
+# Page type classification
+# ---------------------------------------------------------------------------
+
+class TestClassifyRedditUrl:
+    def test_comment_thread(self):
+        url = "https://old.reddit.com/r/Python/comments/abc123/title/"
+        assert _classify_reddit_url(url) == RedditPageType.COMMENT_THREAD
+
+    def test_subreddit(self):
+        url = "https://old.reddit.com/r/Python/"
+        assert _classify_reddit_url(url) == RedditPageType.SUBREDDIT
+
+    def test_user_u(self):
+        url = "https://old.reddit.com/u/spez/"
+        assert _classify_reddit_url(url) == RedditPageType.USER
+
+    def test_user_full(self):
+        url = "https://old.reddit.com/user/spez/"
+        assert _classify_reddit_url(url) == RedditPageType.USER
+
+    def test_redd_it(self):
+        url = "https://redd.it/abc123"
+        assert _classify_reddit_url(url) == RedditPageType.SHORT_LINK
+
+
+# ---------------------------------------------------------------------------
+# Comment thread formatting
+# ---------------------------------------------------------------------------
+
+class TestFormatCommentThread:
+    def test_renders_post_header(self):
+        title, md = _format_comment_thread(THREAD_JSON)
+        assert title == "Test Post Title"
+        assert "# Test Post Title" in md
+        assert "u/test_user" in md
+        assert "42 points" in md
+        assert "r/Python" in md
+
+    def test_renders_selftext(self):
+        _, md = _format_comment_thread(THREAD_JSON)
+        assert "This is the post body." in md
+
+    def test_renders_link_post(self):
+        link_post = _make_post(
+            is_self=False,
+            selftext="",
+            url="https://example.com/article",
+        )
+        _, md = _format_comment_thread(_make_thread_json(post=link_post))
+        assert "https://example.com/article" in md
+
+    def test_renders_flair(self):
+        _, md = _format_comment_thread(THREAD_JSON)
+        assert "[Discussion]" in md
+
+    def test_renders_comments(self):
+        _, md = _format_comment_thread(THREAD_JSON)
+        assert "## Comments" in md
+        assert "### abc1234" in md
+        assert "u/commenter" in md
+        assert "Great post!" in md
+
+    def test_renders_nested_comments(self):
+        reply = _make_comment(
+            id="reply123",
+            author="replier",
+            body="I agree!",
+            score=5,
+        )
+        parent = _make_comment(
+            id="parent456",
+            author="parent_commenter",
+            body="Top-level comment",
+            replies={
+                "data": {
+                    "children": [reply],
+                },
+            },
+        )
+        _, md = _format_comment_thread(_make_thread_json(comments=[parent]))
+        assert "### parent456" in md
+        assert "#### reply123" in md
+        assert "u/parent_commenter" in md
+        assert "u/replier" in md
+
+    def test_deleted_author(self):
+        comment = _make_comment(author="[deleted]", body="[deleted]")
+        _, md = _format_comment_thread(_make_thread_json(comments=[comment]))
+        assert "[deleted]" in md
+
+    def test_empty_replies_string(self):
+        """Reddit uses empty string for no replies — should not crash."""
+        comment = _make_comment(replies="")
+        _, md = _format_comment_thread(_make_thread_json(comments=[comment]))
+        assert "Great post!" in md
+
+
+class TestRenderComments:
+    def test_skips_non_t1_kinds(self):
+        children = [{"kind": "more", "data": {"count": 42}}]
+        result = _render_comments(children, depth=0)
+        assert result == ""
+
+    def test_max_depth_stops_recursion(self):
+        result = _render_comments(
+            [_make_comment()], depth=_MAX_COMMENT_DEPTH,
+        )
+        assert result == ""
+
+    def test_heading_levels_increase_with_depth(self):
+        reply = _make_comment(id="deep_reply", author="deep_user", body="Deeply nested")
+        parent = _make_comment(
+            id="top_comment",
+            author="top_user",
+            body="Top level",
+            replies={"data": {"children": [reply]}},
+        )
+        result = _render_comments([parent], depth=0)
+        assert "### top_comment" in result
+        assert "#### deep_reply" in result
+        assert "**u/top_user**" in result
+        assert "**u/deep_user**" in result
+
+
+# ---------------------------------------------------------------------------
+# Listing formatting
+# ---------------------------------------------------------------------------
+
+class TestFormatListing:
+    def test_subreddit_listing(self):
+        title, md = _format_listing(LISTING_JSON, kind="subreddit")
+        assert title == "r/Python"
+        assert "# r/Python" in md
+        assert "**Post 0**" in md
+        assert "**Post 1**" in md
+        assert "**Post 2**" in md
+
+    def test_includes_scores(self):
+        _, md = _format_listing(LISTING_JSON, kind="subreddit")
+        assert "42 pts" in md
+        assert "5 comments" in md
+
+    def test_includes_flair(self):
+        _, md = _format_listing(LISTING_JSON, kind="subreddit")
+        assert "[Discussion]" in md
+
+    def test_empty_listing(self):
+        empty = [{"data": {"children": [], "after": None}}]
+        _, md = _format_listing(empty, kind="subreddit")
+        assert "*No posts found.*" in md
+
+    def test_pagination_hint(self):
+        data = _make_listing_json(after="t3_nextpage")
+        _, md = _format_listing(data, kind="subreddit")
+        assert "t3_nextpage" in md
+
+    def test_user_listing_with_comments(self):
+        user_comment = {
+            "kind": "t1",
+            "data": {
+                "author": "test_user",
+                "body": "This is my comment on a thread",
+                "score": 7,
+                "subreddit": "Python",
+                "created_utc": 1700000000.0,
+            },
+        }
+        data = [{"data": {"children": [user_comment], "after": None}}]
+        title, md = _format_listing(data, kind="user")
+        assert title == "u/test_user"
+        assert "r/Python" in md
+
+
+# ---------------------------------------------------------------------------
+# Comment section tree (for web_fetch_sections)
+# ---------------------------------------------------------------------------
+
+class TestBuildCommentSectionTree:
+    def test_builds_tree(self):
+        reply = _make_comment(id="reply_id", author="replier", body="Short", score=5)
+        parent = _make_comment(
+            id="parent_id", author="parent_user", body="A longer comment body here",
+            score=42, replies={"data": {"children": [reply]}},
+        )
+        data = _make_thread_json(comments=[parent])
+        title, body = _build_comment_section_tree(data)
+        assert title == "Test Post Title"
+        assert "#parent_id" in body
+        assert "u/parent_user" in body
+        assert "42 pts" in body
+        assert "#reply_id" in body
+        assert "u/replier" in body
+
+    def test_includes_char_count(self):
+        comment = _make_comment(id="cmt1", body="Hello world", score=1)
+        data = _make_thread_json(comments=[comment])
+        _, body = _build_comment_section_tree(data)
+        assert "11 chars" in body
+
+    def test_indents_replies(self):
+        reply = _make_comment(id="child", body="reply", score=1)
+        parent = _make_comment(
+            id="parent", body="top", score=1,
+            replies={"data": {"children": [reply]}},
+        )
+        data = _make_thread_json(comments=[parent])
+        _, body = _build_comment_section_tree(data)
+        lines = body.split("\n")
+        parent_line = [l for l in lines if "#parent" in l][0]
+        child_line = [l for l in lines if "#child" in l][0]
+        # Child should be indented more than parent
+        assert len(child_line) - len(child_line.lstrip()) > len(parent_line) - len(parent_line.lstrip())
+
+
+# ---------------------------------------------------------------------------
+# Timestamp formatting
+# ---------------------------------------------------------------------------
+
+class TestFormatTimestamp:
+    def test_formats_utc(self):
+        result = _format_timestamp(1700000000.0)
+        assert "2023-11-14" in result
+        assert "UTC" in result
+
+
+# ---------------------------------------------------------------------------
+# Fetch integration (mocked HTTP)
+# ---------------------------------------------------------------------------
+
+class TestFetchRedditContent:
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_fetches_comment_thread(self):
+        url = "https://old.reddit.com/r/Python/comments/abc123/test/"
+        respx.get(
+            "https://old.reddit.com/r/Python/comments/abc123/test/.json"
+        ).mock(return_value=httpx.Response(200, json=THREAD_JSON))
+
+        title, md = await _fetch_reddit_content(url)
+        assert title == "Test Post Title"
+        assert "This is the post body." in md
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_fetches_subreddit_listing(self):
+        url = "https://old.reddit.com/r/Python/"
+        respx.get(
+            "https://old.reddit.com/r/Python/.json"
+        ).mock(return_value=httpx.Response(200, json=LISTING_JSON))
+
+        title, md = await _fetch_reddit_content(url)
+        assert title == "r/Python"
+        assert "Post 0" in md
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_http_error_returns_error_string(self):
+        url = "https://old.reddit.com/r/Python/comments/abc123/test/"
+        respx.get(
+            "https://old.reddit.com/r/Python/comments/abc123/test/.json"
+        ).mock(return_value=httpx.Response(404))
+
+        title, md = await _fetch_reddit_content(url)
+        assert title == "Reddit"
+        assert "Error" in md
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_rate_limit_429(self):
+        url = "https://old.reddit.com/r/Python/"
+        respx.get(
+            "https://old.reddit.com/r/Python/.json"
+        ).mock(return_value=httpx.Response(429))
+
+        _, md = await _fetch_reddit_content(url)
+        assert "rate limit" in md.lower()
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_timeout_returns_error(self):
+        url = "https://old.reddit.com/r/Python/"
+        respx.get(
+            "https://old.reddit.com/r/Python/.json"
+        ).mock(side_effect=httpx.TimeoutException("timeout"))
+
+        _, md = await _fetch_reddit_content(url)
+        assert "timed out" in md.lower()
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_redd_it_resolves_redirect(self):
+        # redd.it redirects 301 → www.reddit.com; httpx follows with follow_redirects=True
+        respx.head("https://redd.it/abc123").mock(
+            return_value=httpx.Response(
+                301,
+                headers={"location": "https://www.reddit.com/r/Python/comments/abc123/test/"},
+            ),
+        )
+        # httpx follows the redirect and sends HEAD to the target
+        respx.head("https://www.reddit.com/r/Python/comments/abc123/test/").mock(
+            return_value=httpx.Response(200),
+        )
+        respx.get(
+            "https://old.reddit.com/r/Python/comments/abc123/test/.json"
+        ).mock(return_value=httpx.Response(200, json=THREAD_JSON))
+
+        title, _ = await _fetch_reddit_content("https://redd.it/abc123")
+        assert title == "Test Post Title"
+
+
+# ---------------------------------------------------------------------------
+# Fast-path integration
+# ---------------------------------------------------------------------------
+
+class TestRedditFastPath:
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_reddit_url_intercepted(self):
+        url = "https://www.reddit.com/r/Python/comments/abc123/test/"
+        respx.get(
+            "https://old.reddit.com/r/Python/comments/abc123/test/.json"
+        ).mock(return_value=httpx.Response(200, json=THREAD_JSON))
+
+        result = await _reddit_fast_path(url)
+        assert result is not None
+        assert "Test Post Title" in result
+        assert "api: Reddit (.json)" in result
+
+    @pytest.mark.asyncio
+    async def test_non_reddit_url_returns_none(self):
+        result = await _reddit_fast_path("https://example.com/page")
+        assert result is None
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_error_returns_string_not_none(self):
+        url = "https://www.reddit.com/r/Python/comments/abc123/test/"
+        respx.get(
+            "https://old.reddit.com/r/Python/comments/abc123/test/.json"
+        ).mock(return_value=httpx.Response(500))
+
+        result = await _reddit_fast_path(url)
+        assert result is not None
+        assert "Error" in result
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_cache_populated(self):
+        url = "https://www.reddit.com/r/Python/comments/abc123/test/"
+        respx.get(
+            "https://old.reddit.com/r/Python/comments/abc123/test/.json"
+        ).mock(return_value=httpx.Response(200, json=THREAD_JSON))
+
+        await _reddit_fast_path(url)
+        cached = _page_cache.get(url)
+        assert cached is not None
+        assert cached.renderer == "reddit"
+        assert cached.title == "Test Post Title"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_slicing_search(self):
+        """BM25 search over cached Reddit content works."""
+        url = "https://www.reddit.com/r/Python/comments/abc123/test/"
+        respx.get(
+            "https://old.reddit.com/r/Python/comments/abc123/test/.json"
+        ).mock(return_value=httpx.Response(200, json=THREAD_JSON))
+
+        await _reddit_fast_path(url)
+        indices = _page_cache.search("post body")
+        assert len(indices) > 0
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_fenced_content(self):
+        """Output should have content fencing for untrusted content."""
+        url = "https://www.reddit.com/r/Python/comments/abc123/test/"
+        respx.get(
+            "https://old.reddit.com/r/Python/comments/abc123/test/.json"
+        ).mock(return_value=httpx.Response(200, json=THREAD_JSON))
+
+        result = await _reddit_fast_path(url)
+        assert result is not None
+        assert "┌─ untrusted content" in result
+        assert "└─ untrusted content" in result
+        assert "│" in result
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_comment_aware_slicing(self):
+        """Cache should split by comment, not arbitrary text boundaries."""
+        reply = _make_comment(id="reply_1", author="replier", body="A reply", score=3)
+        c1 = _make_comment(
+            id="comment_1", author="user_a", body="First comment",
+            replies={"data": {"children": [reply]}},
+        )
+        c2 = _make_comment(id="comment_2", author="user_b", body="Second comment")
+        data = _make_thread_json(comments=[c1, c2])
+        url = "https://www.reddit.com/r/Python/comments/abc123/test/"
+        respx.get(
+            "https://old.reddit.com/r/Python/comments/abc123/test/.json"
+        ).mock(return_value=httpx.Response(200, json=data))
+
+        await _reddit_fast_path(url)
+        cached = _page_cache.get(url)
+        assert cached is not None
+        # Slice 0 = post body, then one slice per comment
+        assert cached.slices is not None
+        assert len(cached.slices) == 4  # post + c1 + reply_1 + c2
+        # Each comment slice should start with the comment heading
+        assert "### comment_1" in cached.slices[1]
+        assert "#### reply_1" in cached.slices[2]
+        assert "### comment_2" in cached.slices[3]
+        # Post body slice should NOT contain comment headings
+        assert "###" not in cached.slices[0]
+
+
+# ---------------------------------------------------------------------------
+# Comment-aware splitting
+# ---------------------------------------------------------------------------
+
+class TestSplitByComments:
+    def test_splits_at_comment_headings(self):
+        md = "# Title\n\nPost body.\n\n## Comments\n\n### abc\n\nComment 1.\n\n### def\n\nComment 2.\n"
+        chunks = _split_by_comments(md)
+        assert len(chunks) == 3  # post body + 2 comments
+        assert "# Title" in chunks[0][1]
+        assert "### abc" in chunks[1][1]
+        assert "### def" in chunks[2][1]
+
+    def test_nested_comments_split_separately(self):
+        md = "# Title\n\n## Comments\n\n### parent\n\nParent body.\n\n#### child\n\nChild body.\n"
+        chunks = _split_by_comments(md)
+        assert len(chunks) == 3  # post + parent + child
+        assert "### parent" in chunks[1][1]
+        assert "#### child" in chunks[2][1]
+        # Parent chunk should not contain child
+        assert "child" not in chunks[1][1].lower()
+
+    def test_no_comments_returns_single_chunk(self):
+        md = "# Title\n\nJust a listing, no comments.\n"
+        chunks = _split_by_comments(md)
+        assert len(chunks) == 1
+        assert chunks[0] == (0, md)
+
+    def test_offsets_are_correct(self):
+        md = "# Title\n\nBody.\n\n### abc\n\nComment.\n"
+        chunks = _split_by_comments(md)
+        for offset, text in chunks:
+            assert md[offset:].startswith(text[:20])

@@ -17,9 +17,16 @@ Requirements:
 import asyncio
 import logging
 
+import httpx
+import respx
+
 from kagi_research_mcp.fetch_direct import web_fetch_direct, web_fetch_sections
 from kagi_research_mcp.semantic_scholar import semantic_scholar
 from kagi_research_mcp.arxiv import arxiv
+
+# Disable Reddit rate limiter for fixture-based generation
+import kagi_research_mcp.reddit as _reddit_mod
+_reddit_mod._reddit_limiter.min_interval = 0.0
 
 # ── URLs used across examples ───────────────────────────────────────────────
 MDN_UA = "https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/User-Agent"
@@ -33,6 +40,89 @@ S2_ATTN_URL = (
 )
 S2_ATTN_ID = "204e3073870fae3d05bcbc2f6a8e263d9b72e776"
 HTTPBIN_JSON = "https://httpbin.org/json"
+
+# ── Reddit fixture (offline — no network) ───────────────────────────────────
+REDDIT_THREAD_URL = "https://www.reddit.com/r/Python/comments/1abc234/trusted_publishers_discussion/"
+
+def _reddit_comment(
+    *, id: str, author: str, body: str, score: int,
+    created_utc: float = 1774500000.0, replies: object = "",
+) -> dict:
+    return {"kind": "t1", "data": {
+        "id": id, "author": author, "body": body, "score": score,
+        "created_utc": created_utc, "replies": replies,
+    }}
+
+REDDIT_FIXTURE = [
+    # Post listing
+    {"data": {"children": [{"kind": "t3", "data": {
+        "title": "Don't make your package repos trusted publishers",
+        "author": "syllogism_",
+        "selftext": (
+            "A lot of Python projects have a GitHub Action that's configured as a "
+            "trusted publisher. Some action such as a tag push triggers the release "
+            "process, and ultimately leads to publication to PyPI.\n\n"
+            "If your project repo is a trusted publisher, it's a single point of "
+            "failure with a huge attack surface. It's much safer to have a wholly "
+            "separate private repo that you register as the trusted publisher."
+        ),
+        "score": 31,
+        "num_comments": 24,
+        "subreddit": "Python",
+        "created_utc": 1774481422.0,
+        "is_self": True,
+        "url": "https://old.reddit.com/r/Python/comments/1abc234/trusted_publishers_discussion/",
+        "link_flair_text": "Discussion",
+        "upvote_ratio": 0.68,
+    }}]}},
+    # Comment listing
+    {"data": {"children": [
+        _reddit_comment(
+            id="ochpsln", author="ManyInterests", score=54,
+            body=(
+                "It's definitely hazard-prone, but if you follow PyPI's guidance "
+                "on how to configure this, you should be fine.\n\n"
+                "Just configure a dedicated PyPI release environment in the "
+                "GitHub settings, add yourself as a required approver."
+            ),
+            replies={"data": {"children": [
+                _reddit_comment(
+                    id="oci19t7", author="dan_ohn", score=11,
+                    body="I was going to say this, PyPI even have a clear message "
+                         "explaining this when you set the environment to (any).",
+                ),
+                _reddit_comment(
+                    id="ocjbfsz", author="syllogism_", score=-6,
+                    body="Even with the environment configured that way, if your "
+                         "GitHub is configured to trigger a release once a tag is "
+                         "pushed, then people just need to compromise the repo.",
+                ),
+            ]}},
+        ),
+        _reddit_comment(
+            id="ochlh3a", author="latkde", score=48,
+            body=(
+                "There are different aspects of security. A hyper secure airgapped "
+                "workflow is pointless if it's so cumbersome that I don't use it.\n\n"
+                "The \"trusted publisher\" approach is a big improvement over the "
+                "previous best practices: there are no credentials to manage, thus "
+                "no credentials that could be compromised."
+            ),
+            replies={"data": {"children": [
+                _reddit_comment(
+                    id="ocjbq9t", author="syllogism_", score=-4,
+                    body="You can build completely fine ergonomics around this. "
+                         "Have a script on your machine that triggers the release.",
+                ),
+            ]}},
+        ),
+        _reddit_comment(
+            id="ochqajo", author="denehoffman", score=11,
+            body="None of this matters if your GitHub gets hacked. Just don't be "
+                 "an idiot with Actions.",
+        ),
+    ]}},
+]
 
 
 def _banner(label: str, note: str = "") -> str:
@@ -157,6 +247,47 @@ async def main() -> None:
         'README line ~391',
         out,
     ))
+
+    # ── Reddit examples (fixture-based, no network) ──────────────────
+    json_url = "https://old.reddit.com/r/Python/comments/1abc234/trusted_publishers_discussion/.json"
+    async with respx.MockRouter() as router:
+        router.get(json_url).mock(
+            return_value=httpx.Response(200, json=REDDIT_FIXTURE),
+        )
+
+        # 15. web_fetch_sections — Reddit comment tree
+        out = await web_fetch_sections(REDDIT_THREAD_URL)
+        results.append((
+            'web_fetch_sections(REDDIT_THREAD_URL)',
+            'README: Reddit comment tree discovery',
+            out,
+        ))
+
+    async with respx.MockRouter() as router:
+        router.get(json_url).mock(
+            return_value=httpx.Response(200, json=REDDIT_FIXTURE),
+        )
+
+        # 16. web_fetch_direct — Reddit comment extraction
+        out = await web_fetch_direct(REDDIT_THREAD_URL, section="ochpsln")
+        results.append((
+            'web_fetch_direct(REDDIT_THREAD_URL, section="ochpsln")',
+            'README: Reddit comment extraction by ID',
+            out,
+        ))
+
+    async with respx.MockRouter() as router:
+        router.get(json_url).mock(
+            return_value=httpx.Response(200, json=REDDIT_FIXTURE),
+        )
+
+        # 17. web_fetch_direct — Reddit BM25 search
+        out = await web_fetch_direct(REDDIT_THREAD_URL, search="trusted publisher")
+        results.append((
+            'web_fetch_direct(REDDIT_THREAD_URL, search="trusted publisher")',
+            'README: Reddit BM25 search across comments',
+            out,
+        ))
 
     # ── Print all results ───────────────────────────────────────────────
     for label, note, output in results:

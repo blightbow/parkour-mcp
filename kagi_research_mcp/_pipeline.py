@@ -25,6 +25,7 @@ from .mediawiki import _detect_mediawiki, _fetch_mediawiki_page, _mediawiki_html
 from .semantic_scholar import _detect_s2_url, _fetch_s2_paper
 from .arxiv import _detect_arxiv_url, _fetch_arxiv_paper
 from .doi import _detect_doi_url, _fetch_doi_paper
+from .reddit import _detect_reddit_url, _fetch_reddit_content, _split_by_comments
 
 logger = logging.getLogger(__name__)
 
@@ -111,15 +112,35 @@ class _PageCache:
             return self
         return None
 
-    def store(self, url: str, title: str, markdown: str, renderer: Optional[str] = None):
-        """Slice markdown, build BM25 index, and cache results."""
+    def store(
+        self,
+        url: str,
+        title: str,
+        markdown: str,
+        renderer: Optional[str] = None,
+        presplit: Optional[list[tuple[int, str]]] = None,
+    ):
+        """Slice markdown, build BM25 index, and cache results.
+
+        When *presplit* is provided it is used directly instead of running
+        ``MarkdownSplitter``.  Each element is ``(char_offset, text)`` —
+        the offset is used for section-ancestry computation.  This lets
+        callers supply domain-aware chunks (e.g. one chunk per Reddit
+        comment) while still getting BM25 indexing and ancestry breadcrumbs.
+        """
         self.url = url
         self.title = title
         self.markdown = markdown
         self.renderer = renderer
-        chunks = self._SPLITTER.chunk_indices(markdown)
-        self.slices = [text for _, text in chunks]
-        offsets = [offset for offset, _ in chunks]
+
+        if presplit is not None:
+            self.slices = [text for _, text in presplit]
+            offsets = [offset for offset, _ in presplit]
+        else:
+            chunks = self._SPLITTER.chunk_indices(markdown)
+            self.slices = [text for _, text in chunks]
+            offsets = [offset for offset, _ in chunks]
+
         sections = _extract_sections_from_markdown(markdown)
         self.slice_ancestry = _compute_slice_ancestry(sections, offsets)
 
@@ -294,6 +315,47 @@ async def _doi_fast_path(url: str) -> Optional[str]:
         return None
 
     return await _fetch_doi_paper(doi)
+
+
+# ---------------------------------------------------------------------------
+# Reddit fast path
+# ---------------------------------------------------------------------------
+
+async def _reddit_fast_path(url: str, max_tokens: int = 5000) -> Optional[str]:
+    """Attempt to fetch a Reddit page via the old.reddit.com .json endpoint.
+
+    Returns formatted content on success, or None if not a Reddit URL.
+    Once matched, always returns a string (even errors) to prevent
+    fallback to generic HTTP fetch (which hits Reddit's login wall).
+
+    Populates ``_page_cache`` so the caller can dispatch slicing.
+    """
+    reddit_url = _detect_reddit_url(url)
+    if not reddit_url:
+        return None
+
+    title, full_markdown = await _fetch_reddit_content(reddit_url)
+
+    # Populate cache with comment-aware splitting (one slice per comment)
+    comment_chunks = _split_by_comments(full_markdown)
+    _page_cache.store(
+        url, title, full_markdown,
+        renderer="reddit", presplit=comment_chunks,
+    )
+
+    truncated, trunc_hint = _apply_semantic_truncation(full_markdown, max_tokens)
+
+    fm_entries: dict[str, object] = {
+        "title": title,
+        "source": url,
+        "api": "Reddit (.json)",
+        "trust": _TRUST_ADVISORY,
+    }
+    if trunc_hint:
+        fm_entries["truncated"] = trunc_hint
+
+    fm = _build_frontmatter(fm_entries)
+    return fm + "\n\n" + _fence_content(truncated)
 
 
 # ---------------------------------------------------------------------------

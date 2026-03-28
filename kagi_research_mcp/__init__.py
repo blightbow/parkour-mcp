@@ -224,7 +224,7 @@ def main():
     async def shelf_resource() -> str:
         """Current research shelf contents."""
         shelf = _get_shelf()
-        records = shelf.list_all()
+        records = await shelf.list_all()
         if not records:
             return "Research shelf is empty."
         from .shelf import _format_shelf_list
