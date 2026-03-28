@@ -516,14 +516,14 @@ hint: Use WebFetchDirect with section=#comment_id to extract a specific comment
 ---
 
 ┌─ untrusted content
-│ # Don't make your package repos trusted publishers
+│ # Don't make your package repos trusted publishers (2026-03-25 23:30 UTC)
 │
-│ - #ochpsln — u/ManyInterests (54 pts, 223 chars)
-│   - #oci19t7 — u/dan_ohn (11 pts, 110 chars)
-│   - #ocjbfsz — u/syllogism_ (-6 pts, 164 chars)
-│ - #ochlh3a — u/latkde (48 pts, 302 chars)
-│   - #ocjbq9t — u/syllogism_ (-4 pts, 110 chars)
-│ - #ochqajo — u/denehoffman (11 pts, 85 chars)
+│ - #ochpsln — u/ManyInterests (54 pts, 223 chars, T+00:40:00)
+│   - #oci19t7 — u/dan_ohn (11 pts, 110 chars, T+01:42:48)
+│   - #ocjbfsz — u/syllogism_ (-6 pts, 164 chars, T+07:10:00)
+│ - #ochlh3a — u/latkde (48 pts, 302 chars, T+00:16:18)
+│   - #ocjbq9t — u/syllogism_ (-4 pts, 110 chars, T+07:08:00)
+│ - #ochqajo — u/denehoffman (11 pts, 85 chars, T+00:43:00)
 └─ untrusted content
 ```
 

@@ -356,13 +356,25 @@ def _split_by_comments(markdown: str) -> list[tuple[int, str]]:
 # Section tree for web_fetch_sections
 # ---------------------------------------------------------------------------
 
+def _format_relative_time(comment_utc: float, post_utc: float) -> str:
+    """Format a comment timestamp as T+HH:MM:SS relative to the post time."""
+    delta = max(0, int(comment_utc - post_utc))
+    hours, remainder = divmod(delta, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"T+{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+
 def _build_comment_section_tree(data: list) -> tuple[str, str]:
     """Build a custom section listing from comment thread JSON.
 
     Returns ``(title, section_body)`` where section_body has lines like::
 
-        - #ochpsln — u/ManyInterests (53 pts, 287 chars)
-          - #oci19t7 — u/dan_ohn (11 pts, 142 chars)
+        - #ochpsln — u/ManyInterests (54 pts, 223 chars, T+00:40:00)
+          - #oci19t7 — u/dan_ohn (11 pts, 110 chars, T+01:42:00)
+
+    The post title includes its absolute timestamp.  Comment times are
+    relative to the post (``T+HH:MM:SS``), which conveys conversation
+    pacing without cluttering the listing with absolute dates.
 
     This is used by ``web_fetch_sections`` to show the comment tree as
     navigable sections instead of the generic heading-based listing.
@@ -372,16 +384,17 @@ def _build_comment_section_tree(data: list) -> tuple[str, str]:
 
     post_data = post_listing["data"]["children"][0]["data"]
     title = post_data.get("title", "Untitled")
+    post_utc = post_data.get("created_utc", 0.0)
 
-    lines: list[str] = [f"# {title}\n"]
+    lines: list[str] = [f"# {title} ({_format_timestamp(post_utc)})\n"]
     comment_children = comment_listing["data"]["children"]
-    _walk_comment_tree(comment_children, depth=0, lines=lines)
+    _walk_comment_tree(comment_children, depth=0, post_utc=post_utc, lines=lines)
 
     return title, "\n".join(lines)
 
 
 def _walk_comment_tree(
-    children: list[dict], depth: int, lines: list[str],
+    children: list[dict], depth: int, post_utc: float, lines: list[str],
 ) -> None:
     """Recursively build indented section lines for the comment tree."""
     if depth >= _MAX_COMMENT_DEPTH:
@@ -399,16 +412,18 @@ def _walk_comment_tree(
         score = cdata.get("score", 0)
         body = cdata.get("body", "")
         char_len = len(body)
+        comment_utc = cdata.get("created_utc", 0.0)
+        reltime = _format_relative_time(comment_utc, post_utc)
 
         lines.append(
-            f"{indent}- #{comment_id} — u/{author} ({score} pts, {char_len} chars)"
+            f"{indent}- #{comment_id} — u/{author} ({score} pts, {char_len} chars, {reltime})"
         )
 
         replies = cdata.get("replies")
         if replies and isinstance(replies, dict):
             reply_children = replies.get("data", {}).get("children", [])
             if reply_children:
-                _walk_comment_tree(reply_children, depth + 1, lines=lines)
+                _walk_comment_tree(reply_children, depth + 1, post_utc=post_utc, lines=lines)
 
 
 # ---------------------------------------------------------------------------

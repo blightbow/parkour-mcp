@@ -76,9 +76,12 @@ REDDIT_FIXTURE = [
         "upvote_ratio": 0.68,
     }}]}},
     # Comment listing
+    # Post is at 1774481422 (2026-03-25 23:30 UTC).
+    # Comment timestamps are offsets from post time for realistic T+ values.
     {"data": {"children": [
         _reddit_comment(
             id="ochpsln", author="ManyInterests", score=54,
+            created_utc=1774481422.0 + 2400,  # T+00:40:00
             body=(
                 "It's definitely hazard-prone, but if you follow PyPI's guidance "
                 "on how to configure this, you should be fine.\n\n"
@@ -88,11 +91,13 @@ REDDIT_FIXTURE = [
             replies={"data": {"children": [
                 _reddit_comment(
                     id="oci19t7", author="dan_ohn", score=11,
+                    created_utc=1774481422.0 + 6168,  # T+01:42:48
                     body="I was going to say this, PyPI even have a clear message "
                          "explaining this when you set the environment to (any).",
                 ),
                 _reddit_comment(
                     id="ocjbfsz", author="syllogism_", score=-6,
+                    created_utc=1774481422.0 + 25800,  # T+07:10:00
                     body="Even with the environment configured that way, if your "
                          "GitHub is configured to trigger a release once a tag is "
                          "pushed, then people just need to compromise the repo.",
@@ -101,6 +106,7 @@ REDDIT_FIXTURE = [
         ),
         _reddit_comment(
             id="ochlh3a", author="latkde", score=48,
+            created_utc=1774481422.0 + 978,  # T+00:16:18
             body=(
                 "There are different aspects of security. A hyper secure airgapped "
                 "workflow is pointless if it's so cumbersome that I don't use it.\n\n"
@@ -111,6 +117,7 @@ REDDIT_FIXTURE = [
             replies={"data": {"children": [
                 _reddit_comment(
                     id="ocjbq9t", author="syllogism_", score=-4,
+                    created_utc=1774481422.0 + 25680,  # T+07:08:00
                     body="You can build completely fine ergonomics around this. "
                          "Have a script on your machine that triggers the release.",
                 ),
@@ -118,6 +125,7 @@ REDDIT_FIXTURE = [
         ),
         _reddit_comment(
             id="ochqajo", author="denehoffman", score=11,
+            created_utc=1774481422.0 + 2580,  # T+00:43:00
             body="None of this matters if your GitHub gets hacked. Just don't be "
                  "an idiot with Actions.",
         ),

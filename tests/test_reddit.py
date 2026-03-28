@@ -12,6 +12,7 @@ from kagi_research_mcp.reddit import (
     _format_listing,
     _render_comments,
     _format_timestamp,
+    _format_relative_time,
     _build_comment_section_tree,
     _split_by_comments,
     _MAX_COMMENT_DEPTH,
@@ -365,6 +366,20 @@ class TestBuildCommentSectionTree:
         _, body = _build_comment_section_tree(data)
         assert "11 chars" in body
 
+    def test_includes_post_timestamp(self):
+        data = _make_thread_json()
+        _, body = _build_comment_section_tree(data)
+        # Post absolute timestamp in the title line
+        assert "2023-11-14" in body
+        assert "UTC" in body
+
+    def test_includes_relative_time(self):
+        # Post at T=1700000000, comment at T=1700000100 → T+00:01:40
+        comment = _make_comment(id="cmt1", body="test", created_utc=1700000100.0)
+        data = _make_thread_json(comments=[comment])
+        _, body = _build_comment_section_tree(data)
+        assert "T+00:01:40" in body
+
     def test_indents_replies(self):
         reply = _make_comment(id="child", body="reply", score=1)
         parent = _make_comment(
@@ -378,6 +393,31 @@ class TestBuildCommentSectionTree:
         child_line = [l for l in lines if "#child" in l][0]
         # Child should be indented more than parent
         assert len(child_line) - len(child_line.lstrip()) > len(parent_line) - len(parent_line.lstrip())
+
+
+# ---------------------------------------------------------------------------
+# Relative time formatting
+# ---------------------------------------------------------------------------
+
+class TestFormatRelativeTime:
+    def test_zero_delta(self):
+        assert _format_relative_time(100.0, 100.0) == "T+00:00:00"
+
+    def test_seconds(self):
+        assert _format_relative_time(145.0, 100.0) == "T+00:00:45"
+
+    def test_minutes_and_seconds(self):
+        assert _format_relative_time(200.0, 100.0) == "T+00:01:40"
+
+    def test_hours(self):
+        assert _format_relative_time(7300.0, 0.0) == "T+02:01:40"
+
+    def test_large_delta(self):
+        # 25 hours
+        assert _format_relative_time(90000.0, 0.0) == "T+25:00:00"
+
+    def test_negative_clamped_to_zero(self):
+        assert _format_relative_time(50.0, 100.0) == "T+00:00:00"
 
 
 # ---------------------------------------------------------------------------
