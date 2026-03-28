@@ -23,7 +23,7 @@ class TextOnlyConverter(MarkdownConverter):
         if stripped.startswith('[Image:') or not stripped:
             return stripped
         # Otherwise use default link conversion
-        return super().convert_a(el, text, parent_tags)  # type: ignore[reportAttributeAccessIssue]
+        return super().convert_a(el, text, parent_tags)  # ty: ignore[unresolved-attribute]
 
 
 def md(html, **options):

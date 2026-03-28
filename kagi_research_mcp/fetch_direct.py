@@ -120,7 +120,7 @@ async def web_fetch_direct(
                 selected = [c for c in all_footnotes if c["n"] in requested]
                 not_found = sorted(set(requested) - {c["n"] for c in selected})
                 title = wiki_page["title"]
-                fm_entries = {
+                fm_entries: dict[str, str | bool | list[int]] = {
                     "source": source_url,
                     "trust": _TRUST_ADVISORY,
                     "footnotes_only": True,

@@ -3,7 +3,7 @@
 import logging
 import os
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from kagiapi import KagiClient
 
@@ -19,7 +19,7 @@ _LOW_BALANCE_THRESHOLD = 1.00  # dollars
 
 # In-memory state: set True when any Kagi response shows balance < threshold.
 # Locks out summarize (expensive) until a non-summarize call sees balance recovered.
-_summarize_locked = False
+_summarize_locked: bool = False
 
 
 def _extract_balance(response: dict) -> Optional[float]:
@@ -162,7 +162,7 @@ async def search(query: str, limit: int = 5) -> str:
 async def summarize(
     url: Optional[str] = None,
     text: Optional[str] = None,
-    summary_type: str = "summary"
+    summary_type: Literal["summary", "takeaway"] = "summary"
 ) -> str:
     """Summarize content from a URL or text using Kagi's Universal Summarizer.
 
