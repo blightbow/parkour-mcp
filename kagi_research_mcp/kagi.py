@@ -95,8 +95,18 @@ async def search(query: str, limit: int = 5) -> str:
     resistant to SEO spam, and may surface different sources. Returns raw search
     results with snippets and timestamps, plus related search suggestions.
 
+    Supports search operators in the query string:
+    - site:example.com — restrict to a domain
+    - filetype:pdf — restrict to a file type
+    - intitle:term — match in page title
+    - inurl:term — match in URL
+    - "exact phrase" — exact match
+    - +term / -term — require / exclude a term
+    - (A AND B), (A OR B) — boolean grouping, e.g. recipes (szechuan OR cantonese)
+    - * — wildcard word substitution, e.g. best * ever
+
     Args:
-        query: The search query
+        query: The search query (supports operators above)
         limit: Maximum number of results to return (default 5)
     """
     client = get_client()

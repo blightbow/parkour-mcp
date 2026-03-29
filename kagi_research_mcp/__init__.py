@@ -47,7 +47,17 @@ TOOL_DESCRIPTION_TEMPLATES = {
 Use this as an alternative to {search} when it returns few or poor quality
 results. Kagi's index is independently curated, resistant to SEO spam, and
 may surface different sources. Returns search results with snippets and
-timestamps, plus related search suggestions.""",
+timestamps, plus related search suggestions.
+
+Supports search operators in the query string:
+- site:example.com — restrict to a domain
+- filetype:pdf — restrict to a file type
+- intitle:term — match in page title
+- inurl:term — match in URL
+- "exact phrase" — exact match
+- +term / -term — require / exclude a term
+- (A AND B), (A OR B) — boolean grouping, e.g. recipes (szechuan OR cantonese)
+- * — wildcard word substitution, e.g. best * ever""",
 
     "web_fetch_sections": """Understand a document's composition by listing its section headings.
 
