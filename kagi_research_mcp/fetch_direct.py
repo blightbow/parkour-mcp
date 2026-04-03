@@ -7,7 +7,8 @@ import httpx
 
 from .common import _FETCH_HEADERS
 from .markdown import (
-    html_to_markdown, _extract_sections_from_markdown, _build_section_list,
+    html_to_markdown, _detect_js_dependent,
+    _extract_sections_from_markdown, _build_section_list,
     _filter_markdown_by_sections, _build_frontmatter, _apply_hard_truncation,
     _fence_content, _TRUST_ADVISORY,
 )
@@ -283,6 +284,13 @@ async def web_fetch_direct(
     title, markdown_content = html_to_markdown(response.text)
 
     if not markdown_content:
+        if _detect_js_dependent(response.text):
+            fm = _build_frontmatter({
+                "source": source_url,
+                "warning": fragment_warning,
+                "see_also": "WebFetchJS — this page requires JavaScript to render content",
+            })
+            return fm
         return f"Error: No content extracted from {url}"
 
     fm_entries = {"title": title, "source": source_url, "warning": fragment_warning}
@@ -425,6 +433,12 @@ async def web_fetch_sections(url: str) -> str:
     title, markdown_content = html_to_markdown(response.text)
 
     if not markdown_content:
+        if _detect_js_dependent(response.text):
+            fm = _build_frontmatter({
+                "source": original_url,
+                "see_also": "WebFetchJS — this page requires JavaScript to render content",
+            })
+            return fm
         return f"Error: No content extracted from {url}"
 
     return _sections_response(title, original_url, markdown_content, section_names)
