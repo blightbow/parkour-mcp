@@ -34,6 +34,32 @@ def md(html, **options):
 # Noise tags removed before markdown conversion
 _NOISE_TAGS = ["script", "style", "nav", "header", "footer", "aside", "noscript"]
 
+# SPA framework root container IDs — empty containers indicate JS-rendered content
+_SPA_ROOT_IDS = ("root", "app", "__next", "__nuxt", "__svelte", "__gatsby")
+
+
+def _detect_js_dependent(html: str) -> bool:
+    """Detect if an HTML page likely requires JavaScript to render content.
+
+    Only called when html_to_markdown() returned empty/minimal content, so the
+    bar for a positive signal is low — we just need to distinguish JS-dependent
+    pages from genuinely empty or broken HTML.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+
+    # Signal 1: <noscript> tag mentioning JavaScript
+    for ns in soup.find_all("noscript"):
+        if "javascript" in ns.get_text().lower():
+            return True
+
+    # Signal 2: Known SPA framework root containers that are empty
+    for spa_id in _SPA_ROOT_IDS:
+        el = soup.find(id=spa_id)
+        if el and not el.get_text(strip=True):
+            return True
+
+    return False
+
 
 _HEADING_TAGS = ["h1", "h2", "h3", "h4", "h5", "h6"]
 
