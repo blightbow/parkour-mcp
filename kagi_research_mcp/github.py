@@ -493,13 +493,13 @@ def _extract_name_text(node, source: bytes) -> str:
     if node.type in ("function_declarator", "pointer_declarator"):
         for child in node.children:
             if child.type == "identifier":
-                return source[child.start_byte:child.end_byte].decode()
+                return source[child.start_byte:child.end_byte].decode(errors="replace")
         # Recurse one level for pointer_declarator → function_declarator → identifier
         for child in node.children:
             result = _extract_name_text(child, source)
             if result != "?":
                 return result
-    return source[node.start_byte:node.end_byte].decode()
+    return source[node.start_byte:node.end_byte].decode(errors="replace")
 
 
 def _extract_python_docstring(node, source: bytes) -> Optional[str]:
@@ -511,7 +511,7 @@ def _extract_python_docstring(node, source: bytes) -> Optional[str]:
         if child.type == "expression_statement":
             for sc in child.children:
                 if sc.type == "string":
-                    raw = source[sc.start_byte:sc.end_byte].decode()
+                    raw = source[sc.start_byte:sc.end_byte].decode(errors="replace")
                     # Strip triple quotes and whitespace
                     content = raw.strip("\"'").strip()
                     return content.split("\n")[0].strip() if content else None
@@ -527,7 +527,7 @@ def _extract_preceding_comment(node, source: bytes) -> Optional[str]:
         return None
 
     if prev.type == "comment":
-        text = source[prev.start_byte:prev.end_byte].decode().strip()
+        text = source[prev.start_byte:prev.end_byte].decode(errors="replace").strip()
         # Strip comment markers: //, /*, */, /**, ///, //!
         for prefix in ("/**", "///", "//!", "/*", "//"):
             if text.startswith(prefix):
@@ -573,7 +573,12 @@ def extract_code_definitions(
 
     results: list[CodeDefinition] = []
 
-    def walk(node, depth: int = 0):
+    # Iterative DFS to avoid stack overflow on deeply nested ASTs.
+    # Stack entries: (node, definition_depth).
+    stack: list[tuple] = [(tree.root_node, 0)]
+    while stack:
+        node, depth = stack.pop()
+
         if node.type in type_map:
             name_field = type_map[node.type]
             name_node = node.child_by_field_name(name_field)
@@ -601,10 +606,10 @@ def extract_code_definitions(
             ))
 
         child_depth = depth + (1 if node.type in type_map else 0)
-        for child in node.children:
-            walk(child, child_depth)
+        # Reverse so left-to-right children are processed in order
+        for child in reversed(node.children):
+            stack.append((child, child_depth))
 
-    walk(tree.root_node)
     return results
 
 

@@ -470,6 +470,24 @@ async def web_fetch_js(
             # Wait for load event - gives JS time to create framework elements
             await page.goto(url, wait_until="load", timeout=timeout)
 
+            # Block cross-origin navigations after initial load to prevent
+            # JS redirects from steering the browser to internal services.
+            from urllib.parse import urlparse as _urlparse
+            _initial_host = _urlparse(url).hostname
+
+            async def _block_cross_origin_nav(route):
+                if (route.request.is_navigation_request()
+                        and _urlparse(route.request.url).hostname != _initial_host):
+                    logger.debug(
+                        "Blocked cross-origin navigation: %s -> %s",
+                        _initial_host, route.request.url,
+                    )
+                    await route.abort("blockedbyclient")
+                else:
+                    await route.continue_()
+
+            await page.route("**/*", _block_cross_origin_nav)
+
             # Check for live app frameworks that use persistent connections
             for marker in LIVE_APP_MARKERS:
                 element = await page.query_selector(marker["detect"])
@@ -516,8 +534,11 @@ async def web_fetch_js(
             # Extract title
             title = await page.title() or "Untitled"
 
-            # Get rendered HTML from main page
+            # Get rendered HTML from main page (cap at 10MB to prevent OOM)
             html = await page.content()
+            _MAX_HTML_BYTES = 10 * 1024 * 1024
+            if len(html) > _MAX_HTML_BYTES:
+                html = html[:_MAX_HTML_BYTES]
             iframe_source = None  # Track if we extracted from iframe
 
             # Check if main content is sparse but iframe exists
