@@ -10,6 +10,7 @@ from .fetch_js import web_fetch_js
 from .fetch_direct import web_fetch_direct, web_fetch_sections
 from .semantic_scholar import semantic_scholar
 from .arxiv import arxiv
+from .github import github
 from .shelf import research_shelf, _get_shelf
 
 logging.basicConfig(level=logging.INFO)
@@ -29,6 +30,7 @@ TOOL_NAMES = {
     "semantic_scholar": {"code": "SemanticScholar", "desktop": "semantic_scholar"},
     "arxiv": {"code": "ArXiv", "desktop": "arxiv"},
     "research_shelf": {"code": "ResearchShelf", "desktop": "research_shelf"},
+    "github": {"code": "GitHub", "desktop": "github"},
 }
 
 # Per-profile template variables — tool names and description overrides.
@@ -167,6 +169,24 @@ Use paper_id to scope to a single paper, or omit for corpus-wide search.
 Example: action="snippets", query="multi-head attention",
 paper_id="204e3073870fae3d05bcbc2f6a8e263d9b72e776".""",
 
+    "github": """Search and retrieve code, issues, and pull requests from GitHub.
+
+Use this for GitHub lookups: search issues/PRs across repositories, search code,
+get issue or PR details with comments, fetch file content from a specific ref, or
+get repo metadata with README. GitHub URLs are also handled automatically by
+{fetch_direct} — this tool is for structured queries by owner/repo/number.
+
+Actions: search_issues, search_code, issue, pull_request, file, repo, tree.
+
+Query formats vary by action:
+- search_issues/search_code: GitHub search query with qualifiers (repo:, is:, label:, language:, path:)
+- issue/pull_request: "owner/repo#number" (e.g. "pallets/flask#5618")
+- file/tree: "owner/repo/path" (e.g. "pallets/flask/src/flask/app.py") — use ref= for branch/tag
+- repo: "owner/repo" (e.g. "pallets/flask")
+
+Authentication: Set GITHUB_TOKEN env var or create ~/.config/kagi/github_token
+for 5000 req/hr (vs 60/hr unauthenticated). No special scopes needed for public repos.""",
+
     "research_shelf": """Manage the research shelf — an in-memory tracker for papers inspected during research.
 
 Papers are automatically added when you use ArXiv, SemanticScholar, or DOI
@@ -205,6 +225,7 @@ def main():
         ("semantic_scholar", semantic_scholar),
         ("arxiv", arxiv),
         ("research_shelf", research_shelf),
+        ("github", github),
     ]
     for internal_name, func in tools:
         name = TOOL_NAMES[internal_name][args.profile]

@@ -9,7 +9,7 @@ import httpx
 from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
 
-from .common import _FETCH_HEADERS
+from .common import _FETCH_HEADERS, check_url_ssrf
 from .markdown import (
     html_to_markdown, _build_frontmatter, _apply_hard_truncation,
     _fence_content, _TRUST_ADVISORY,
@@ -17,7 +17,7 @@ from .markdown import (
 from .mediawiki import _extract_citations, _format_citations
 from ._pipeline import (
     _extract_fragment, _normalize_sections, _resolve_fragment_source,
-    _mediawiki_fast_path, _arxiv_fast_path, _s2_fast_path, _doi_fast_path,
+    _mediawiki_fast_path, _arxiv_fast_path, _s2_fast_path, _doi_fast_path, _github_fast_path,
     _process_markdown_sections,
     _cached_mediawiki_fetch,
     _page_cache, _dispatch_slicing,
@@ -299,7 +299,7 @@ async def web_fetch_js(
     # or "wiki" (MediaWiki API, identical regardless of calling tool) are safe.
     if want_slicing:
         cached = _page_cache.get(url)
-        if cached and cached.renderer in ("js", "wiki"):
+        if cached and cached.renderer in ("js", "wiki", "github"):
             return _dispatch_slicing(
                 url, search, slices, slices_list if slices is not None else [],
                 max_tokens, source_url, warning=fragment_warning,
@@ -364,6 +364,22 @@ async def web_fetch_js(
     except Exception:
         pass
 
+    # --- GitHub fast path (after DOI, before MediaWiki) ---
+    try:
+        from .github import _detect_github_url
+        if _detect_github_url(url):
+            result = await _github_fast_path(url, max_tokens)
+            if result is not None:
+                if want_slicing:
+                    return _dispatch_slicing(
+                        url, search, slices,
+                        slices_list if slices is not None else [],
+                        max_tokens, source_url, warning=fragment_warning,
+                    )
+                return result
+    except Exception:
+        pass
+
     # --- MediaWiki fast path (before launching browser) ---
     try:
         result = await _mediawiki_fast_path(
@@ -380,6 +396,11 @@ async def web_fetch_js(
             return result
     except Exception:
         pass  # Fall through to browser path
+
+    # --- SSRF check ---
+    ssrf_error = check_url_ssrf(url)
+    if ssrf_error:
+        return ssrf_error
 
     # --- Content-type pre-check (skip browser for non-HTML) ---
     if not actions and not wait_for:
@@ -449,6 +470,24 @@ async def web_fetch_js(
             # Wait for load event - gives JS time to create framework elements
             await page.goto(url, wait_until="load", timeout=timeout)
 
+            # Block cross-origin navigations after initial load to prevent
+            # JS redirects from steering the browser to internal services.
+            from urllib.parse import urlparse as _urlparse
+            _initial_host = _urlparse(url).hostname
+
+            async def _block_cross_origin_nav(route):
+                if (route.request.is_navigation_request()
+                        and _urlparse(route.request.url).hostname != _initial_host):
+                    logger.debug(
+                        "Blocked cross-origin navigation: %s -> %s",
+                        _initial_host, route.request.url,
+                    )
+                    await route.abort("blockedbyclient")
+                else:
+                    await route.continue_()
+
+            await page.route("**/*", _block_cross_origin_nav)
+
             # Check for live app frameworks that use persistent connections
             for marker in LIVE_APP_MARKERS:
                 element = await page.query_selector(marker["detect"])
@@ -495,8 +534,11 @@ async def web_fetch_js(
             # Extract title
             title = await page.title() or "Untitled"
 
-            # Get rendered HTML from main page
+            # Get rendered HTML from main page (cap at 10MB to prevent OOM)
             html = await page.content()
+            _MAX_HTML_BYTES = 10 * 1024 * 1024
+            if len(html) > _MAX_HTML_BYTES:
+                html = html[:_MAX_HTML_BYTES]
             iframe_source = None  # Track if we extracted from iframe
 
             # Check if main content is sparse but iframe exists
@@ -550,7 +592,6 @@ async def web_fetch_js(
 
     # Section handling, truncation, and frontmatter via shared pipeline
     frontmatter_entries = {
-        "title": title,
         "source": source_url,
         "warning": fragment_warning,
         "browser": browser_name,
@@ -559,7 +600,7 @@ async def web_fetch_js(
     }
     output = _process_markdown_sections(
         markdown_content, section_names, max_tokens, frontmatter_entries,
-        cache_url=url, renderer="js",
+        title=title, cache_url=url, renderer="js",
     )
 
     # If search/slices was requested, cache is now populated — dispatch

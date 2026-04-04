@@ -575,7 +575,9 @@ class TestRedditFastPath:
         ).mock(return_value=httpx.Response(200, json=THREAD_JSON))
 
         await _reddit_fast_path(url)
-        indices = _page_cache.search("post body")
+        cached = _page_cache.get(url)
+        assert cached is not None
+        indices = cached.search("post body")
         assert len(indices) > 0
 
     @respx.mock

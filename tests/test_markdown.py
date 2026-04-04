@@ -665,9 +665,11 @@ class TestFenceContent:
         result = _fence_content("Body text", title="Page Title")
         lines = result.split("\n")
         assert lines[0] == _FENCE_OPEN
-        assert lines[1] == "│ # Page Title"
-        assert lines[2] == "│ "
-        assert lines[3] == "│ Body text"
+        assert lines[1] == "│"  # separator after open fence
+        assert lines[2] == "│ # Page Title"
+        assert lines[3] == "│ "
+        assert lines[4] == "│ Body text"
+        assert lines[-2] == "│"  # separator before close fence
         assert lines[-1] == _FENCE_CLOSE
 
     def test_multiline_content(self):
@@ -678,7 +680,8 @@ class TestFenceContent:
 
     def test_no_title(self):
         result = _fence_content("Content only")
-        assert "# " not in result.split("\n")[1]
+        lines = result.split("\n")
+        assert lines[1] == "│"  # separator after open fence
         assert "│ Content only" in result
 
     def test_empty_content_with_title(self):

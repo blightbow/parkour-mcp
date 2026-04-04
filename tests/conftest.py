@@ -13,6 +13,9 @@ _doi_mod = sys.modules["kagi_research_mcp.doi"]
 import kagi_research_mcp.reddit  # noqa: E402, F401
 _reddit_mod = sys.modules["kagi_research_mcp.reddit"]
 
+import kagi_research_mcp.github  # noqa: E402, F401
+_github_mod = sys.modules["kagi_research_mcp.github"]
+
 
 @pytest.fixture(autouse=True)
 def _disable_s2_rate_limit(monkeypatch):
@@ -31,6 +34,12 @@ def _disable_doi_rate_limit(monkeypatch):
 def _disable_reddit_rate_limit(monkeypatch):
     """Disable the 2s Reddit rate limiter in unit tests."""
     monkeypatch.setattr(_reddit_mod._reddit_limiter, "min_interval", 0.0)
+
+
+@pytest.fixture(autouse=True)
+def _disable_github_rate_limit(monkeypatch):
+    """Disable the 1s GitHub rate limiter in unit tests."""
+    monkeypatch.setattr(_github_mod._github_limiter, "min_interval", 0.0)
 
 
 # Sample markdown document used across multiple test modules

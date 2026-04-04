@@ -5,6 +5,7 @@ assembly that is common to both web_fetch_js and web_fetch_direct.
 """
 
 import logging
+from collections import OrderedDict
 from typing import Optional
 from urllib.parse import urldefrag
 
@@ -30,51 +31,95 @@ from .reddit import _detect_reddit_url, _fetch_reddit_content, _split_by_comment
 logger = logging.getLogger(__name__)
 
 
+def _fmt_bytes(n: int) -> str:
+    """Format a byte count as a human-readable string for log messages."""
+    if n < 1024:
+        return f"{n} B"
+    if n < 1024 * 1024:
+        return f"{n / 1024:.1f} KB"
+    return f"{n / (1024 * 1024):.1f} MB"
+
+
+# Default maximum entries for caches.  Each page-cache entry holds a tantivy
+# in-memory index + slices + full markdown, so memory is proportional to page
+# size.  8 entries across probation+protected is enough for comparing several
+# pages while keeping recently drilled-into ones warm.
+PAGE_CACHE_MAX_ENTRIES = 8
+WIKI_CACHE_MAX_ENTRIES = 5
+
+
 # ---------------------------------------------------------------------------
-# Single-entry MediaWiki page cache
+# LRU MediaWiki page cache
 # ---------------------------------------------------------------------------
 # Avoids redundant API calls for the common workflow:
 #   web_fetch_sections(url) → web_fetch_direct(url, section=...) → citation
 # Keyed on canonical URL (no fragment). Stores detect + full-page results.
-# Invalidates automatically when a different URL is requested.
 
-class _WikiCache:
-    """Single-entry cache for the most recently fetched MediaWiki page."""
+class _WikiCacheEntry:
+    """A single cached MediaWiki page."""
 
     __slots__ = ("url", "wiki_info", "wiki_page")
 
-    def __init__(self):
-        self.url: Optional[str] = None
-        self.wiki_info: Optional[dict] = None
-        self.wiki_page: Optional[dict] = None
-
-    def get(self, url: str) -> tuple[Optional[dict], Optional[dict]]:
-        """Return (wiki_info, wiki_page) if url matches, else (None, None)."""
-        if self.url == url:
-            return self.wiki_info, self.wiki_page
-        return None, None
-
-    def store(self, url: str, wiki_info: dict, wiki_page: Optional[dict]):
+    def __init__(self, url: str, wiki_info: dict, wiki_page: Optional[dict]):
         self.url = url
         self.wiki_info = wiki_info
         self.wiki_page = wiki_page
+
+
+class _WikiCache:
+    """LRU cache for MediaWiki API results."""
+
+    def __init__(self, max_entries: int = WIKI_CACHE_MAX_ENTRIES):
+        self._entries: OrderedDict[str, _WikiCacheEntry] = OrderedDict()
+        self._max_entries = max_entries
+
+    def get(self, url: str) -> tuple[Optional[dict], Optional[dict]]:
+        """Return (wiki_info, wiki_page) if url is cached, else (None, None)."""
+        entry = self._entries.get(url)
+        if entry is not None:
+            self._entries.move_to_end(url)
+            return entry.wiki_info, entry.wiki_page
+        return None, None
+
+    def store(self, url: str, wiki_info: dict, wiki_page: Optional[dict]):
+        """Cache a MediaWiki page, evicting the LRU entry if at capacity."""
+        if url in self._entries:
+            self._entries[url] = _WikiCacheEntry(url, wiki_info, wiki_page)
+            self._entries.move_to_end(url)
+        else:
+            if len(self._entries) >= self._max_entries:
+                self._entries.popitem(last=False)
+            self._entries[url] = _WikiCacheEntry(url, wiki_info, wiki_page)
+
+    @property
+    def stats(self) -> dict:
+        """Return cache diagnostics for developer inspection."""
+        return {
+            "max_entries": self._max_entries,
+            "total_entries": len(self._entries),
+            "urls": list(self._entries.keys()),
+        }
+
+    def clear(self):
+        """Evict all entries."""
+        self._entries.clear()
 
 
 _wiki_cache = _WikiCache()
 
 
 # ---------------------------------------------------------------------------
-# Single-entry page cache (post-markdown-conversion)
+# LRU page cache (post-markdown-conversion)
 # ---------------------------------------------------------------------------
-# Caches the most recently fetched page as pre-sliced content for keyword
-# search and index-based retrieval.  Populated by _process_markdown_sections
-# (all HTML paths feed through it).  Evicts automatically on a new URL.
+# Caches recently fetched pages as pre-sliced content for keyword search and
+# index-based retrieval.  Populated by _process_markdown_sections (all HTML
+# paths feed through it) and by fast-path handlers (Reddit, etc.).
 
-class _PageCache:
-    """Single-entry cache for sliced page content with BM25 search index."""
+class _CacheEntry:
+    """A single cached page with sliced content and BM25 search index."""
 
     __slots__ = ("url", "title", "markdown", "slices", "slice_ancestry",
-                 "_tantivy_index", "renderer")
+                 "_tantivy_index", "renderer", "group")
 
     _SPLITTER = MarkdownSplitter((1600, 2000))
 
@@ -90,51 +135,23 @@ class _PageCache:
             cls._SCHEMA = builder.build()
         return cls._SCHEMA
 
-    def __init__(self):
-        self.url: Optional[str] = None
-        self.title: Optional[str] = None
-        self.markdown: Optional[str] = None
-        self.slices: Optional[list[str]] = None
-        self.slice_ancestry: Optional[list[str]] = None
-        self._tantivy_index = None
-        self.renderer: Optional[str] = None  # "direct" or "js"
-
-    def get(self, url: str, renderer: Optional[str] = None):
-        """Return self if url matches, else None.
-
-        When renderer is specified, only returns a hit if the cached entry
-        was produced by the same renderer.  This prevents WebFetchJS from
-        reusing sparse content that WebFetchDirect cached from a JS-heavy page.
-        """
-        if self.url == url:
-            if renderer is not None and self.renderer != renderer:
-                return None
-            return self
-        return None
-
-    def store(
+    def __init__(
         self,
         url: str,
         title: str,
         markdown: str,
         renderer: Optional[str] = None,
+        group: Optional[str] = None,
         presplit: Optional[list[tuple[int, str]]] = None,
     ):
-        """Slice markdown, build BM25 index, and cache results.
-
-        When *presplit* is provided it is used directly instead of running
-        ``MarkdownSplitter``.  Each element is ``(char_offset, text)`` —
-        the offset is used for section-ancestry computation.  This lets
-        callers supply domain-aware chunks (e.g. one chunk per Reddit
-        comment) while still getting BM25 indexing and ancestry breadcrumbs.
-        """
         self.url = url
         self.title = title
         self.markdown = markdown
         self.renderer = renderer
+        self.group = group
 
         if presplit is not None:
-            self.slices = [text for _, text in presplit]
+            self.slices: list[str] = [text for _, text in presplit]
             offsets = [offset for offset, _ in presplit]
         else:
             chunks = self._SPLITTER.chunk_indices(markdown)
@@ -142,7 +159,7 @@ class _PageCache:
             offsets = [offset for offset, _ in chunks]
 
         sections = _extract_sections_from_markdown(markdown)
-        self.slice_ancestry = _compute_slice_ancestry(sections, offsets)
+        self.slice_ancestry: list[str] = _compute_slice_ancestry(sections, offsets)
 
         # Build tantivy in-memory search index over slices
         schema = self._get_schema()
@@ -152,6 +169,24 @@ class _PageCache:
             writer.add_document(tantivy.Document(body=text, idx=i))
         writer.commit()
         self._tantivy_index.reload()
+
+    @property
+    def estimated_bytes(self) -> int:
+        """Estimate memory usage of this entry's Python-side data.
+
+        Counts the markdown source, slices (which duplicate most of the
+        markdown text), and ancestry strings.  The tantivy index lives in
+        Rust heap memory and cannot be measured from Python; a 0.7x
+        multiplier on the indexed text approximates the compressed store +
+        inverted index overhead (empirically 0.65-0.72x across 10-200
+        slices via disk-write measurement of equivalent RAM indexes).
+        """
+        md_bytes = len(self.markdown.encode("utf-8")) if self.markdown else 0
+        slices_bytes = sum(len(s.encode("utf-8")) for s in self.slices)
+        ancestry_bytes = sum(len(a.encode("utf-8")) for a in self.slice_ancestry)
+        # Tantivy index heuristic: stored fields + inverted index ≈ 0.7× text
+        tantivy_est = int(slices_bytes * 0.7)
+        return md_bytes + slices_bytes + ancestry_bytes + tantivy_est
 
     def search(self, query_str: str, limit: int = 50) -> list[int]:
         """BM25 search over cached slices. Returns matching slice indices ranked by relevance."""
@@ -163,11 +198,188 @@ class _PageCache:
         return [searcher.doc(addr)["idx"][0] for _score, addr in results.hits]
 
 
+class _PageCache:
+    """2Q (two-queue) cache for sliced page content with BM25 search indexes.
+
+    New entries land in the **probation** queue (FIFO).  When a probation
+    entry is accessed again via ``get()``, it is **promoted** to the
+    **protected** queue (LRU).  Eviction prefers probation (cheap one-hit
+    pages) before falling back to the protected LRU tail.
+
+    This is scan-resistant: pages fetched once during browsing stay in
+    probation and get evicted first, while pages the user drills into
+    (search, section, slices) get promoted and persist.
+
+    The optional ``group`` field on entries enables entity linking: entries
+    sharing a group tag are evicted together (e.g. a PR's comments and code
+    as separate but linked cache entries).
+    """
+
+    def __init__(self, max_entries: int = PAGE_CACHE_MAX_ENTRIES):
+        self._probation: OrderedDict[str, _CacheEntry] = OrderedDict()
+        self._protected: OrderedDict[str, _CacheEntry] = OrderedDict()
+        self._max_entries = max_entries
+
+    def _total(self) -> int:
+        return len(self._probation) + len(self._protected)
+
+    @property
+    def stats(self) -> dict:
+        """Return cache diagnostics for developer inspection.
+
+        Includes queue distribution, per-entry size estimates, and totals.
+        This is a developer tool — not exposed to the LLM via tool output.
+        """
+        def _entry_info(entry: _CacheEntry, queue: str) -> dict:
+            return {
+                "url": entry.url,
+                "title": entry.title,
+                "renderer": entry.renderer,
+                "group": entry.group,
+                "slices": len(entry.slices),
+                "estimated_bytes": entry.estimated_bytes,
+                "queue": queue,
+            }
+
+        entries = []
+        for e in self._probation.values():
+            entries.append(_entry_info(e, "probation"))
+        for e in self._protected.values():
+            entries.append(_entry_info(e, "protected"))
+
+        total_bytes = sum(e["estimated_bytes"] for e in entries)
+        return {
+            "max_entries": self._max_entries,
+            "total_entries": self._total(),
+            "probation_entries": len(self._probation),
+            "protected_entries": len(self._protected),
+            "total_estimated_bytes": total_bytes,
+            "entries": entries,
+        }
+
+    def get(self, url: str, renderer: Optional[str] = None) -> Optional[_CacheEntry]:
+        """Return the cached entry for *url*, or None on miss.
+
+        Accessing a **probation** entry promotes it to **protected** (proving
+        it is part of the working set, not a scan).  Accessing a
+        **protected** entry refreshes its LRU position.
+
+        When *renderer* is specified, only returns a hit if the cached entry
+        was produced by the same renderer.  This prevents WebFetchJS from
+        reusing sparse content that WebFetchDirect cached from a JS-heavy page.
+        """
+        # Check protected first (most likely for active pages)
+        entry = self._protected.get(url)
+        if entry is not None:
+            if renderer is not None and entry.renderer != renderer:
+                return None
+            self._protected.move_to_end(url)
+            return entry
+
+        # Check probation — hit here triggers promotion
+        entry = self._probation.get(url)
+        if entry is not None:
+            if renderer is not None and entry.renderer != renderer:
+                return None
+            # Promote: move from probation to protected
+            del self._probation[url]
+            self._protected[url] = entry
+            self._protected.move_to_end(url)
+            logger.debug(
+                "cache promote %s → protected (%d probation, %d protected, ~%s)",
+                url, len(self._probation), len(self._protected),
+                _fmt_bytes(entry.estimated_bytes),
+            )
+            return entry
+
+        return None
+
+    def store(
+        self,
+        url: str,
+        title: str,
+        markdown: str,
+        renderer: Optional[str] = None,
+        presplit: Optional[list[tuple[int, str]]] = None,
+        group: Optional[str] = None,
+    ):
+        """Slice markdown, build BM25 index, and cache the entry.
+
+        New URLs enter **probation**.  If the URL already exists (in either
+        queue), the entry is replaced in-place without evicting others.
+
+        When *presplit* is provided it is used directly instead of running
+        ``MarkdownSplitter``.  Each element is ``(char_offset, text)`` —
+        the offset is used for section-ancestry computation.  This lets
+        callers supply domain-aware chunks (e.g. one chunk per Reddit
+        comment) while still getting BM25 indexing and ancestry breadcrumbs.
+
+        The *group* tag enables entity linking: entries sharing a group are
+        evicted together when any member is the eviction victim.
+        """
+        entry = _CacheEntry(
+            url, title, markdown,
+            renderer=renderer, group=group, presplit=presplit,
+        )
+
+        # Update in-place if URL already cached (in either queue)
+        if url in self._protected:
+            self._protected[url] = entry
+            self._protected.move_to_end(url)
+            return
+        if url in self._probation:
+            self._probation[url] = entry
+            self._probation.move_to_end(url)
+            return
+
+        # New entry → probation (FIFO)
+        while self._total() >= self._max_entries:
+            self._evict()
+        self._probation[url] = entry
+        logger.debug(
+            "cache store %s → probation (%d probation, %d protected, ~%s)",
+            url, len(self._probation), len(self._protected),
+            _fmt_bytes(entry.estimated_bytes),
+        )
+
+    def _evict(self):
+        """Evict one entry, preferring probation over protected.
+
+        Group-aware: if the victim has a group tag, all entries sharing
+        that group are evicted together from both queues.
+        """
+        # Prefer evicting from probation (cheap one-hit pages)
+        victim_queue = self._probation if self._probation else self._protected
+        if not victim_queue:
+            return
+
+        oldest_url = next(iter(victim_queue))
+        oldest = victim_queue[oldest_url]
+
+        if oldest.group is not None:
+            group = oldest.group
+            evicted: list[str] = []
+            for q in (self._probation, self._protected):
+                to_remove = [u for u, e in q.items() if e.group == group]
+                for u in to_remove:
+                    evicted.append(u)
+                    del q[u]
+            logger.debug("cache evict group %s: %s", group, evicted)
+        else:
+            logger.debug("cache evict %s (~%s)", oldest_url, _fmt_bytes(oldest.estimated_bytes))
+            del victim_queue[oldest_url]
+
+    def clear(self):
+        """Evict all entries from both queues."""
+        self._probation.clear()
+        self._protected.clear()
+
+
 _page_cache = _PageCache()
 
 
 async def _cached_mediawiki_fetch(url: str) -> tuple[Optional[dict], Optional[dict]]:
-    """Detect and fetch a MediaWiki page, using the single-entry cache.
+    """Detect and fetch a MediaWiki page, using the LRU cache.
 
     Returns (wiki_info, wiki_page) or (None, None) if not a MediaWiki site.
     Always fetches the full page (no section filtering) for cacheability.
@@ -238,7 +450,7 @@ async def _mediawiki_fast_path(
     """Attempt to fetch a MediaWiki page via the API, bypassing browser/httpx.
 
     Returns formatted output string on success, or None to signal fallback.
-    Uses the single-entry cache so repeated calls for the same page are free.
+    Uses the wiki cache so repeated calls for the same page are free.
     """
     wiki_info, wiki_page = await _cached_mediawiki_fetch(url)
     if not wiki_info or not wiki_page:
@@ -246,8 +458,8 @@ async def _mediawiki_fast_path(
 
     markdown_content = _mediawiki_html_to_markdown(wiki_page["html"])
 
+    title = wiki_page["title"]
     frontmatter_entries = {
-        "title": wiki_page["title"],
         "source": url,
         "site": wiki_info["sitename"] or None,
         "generator": wiki_info["generator"] or None,
@@ -257,7 +469,7 @@ async def _mediawiki_fast_path(
 
     return _process_markdown_sections(
         markdown_content, section_names, max_tokens, frontmatter_entries,
-        cache_url=cache_url, renderer="wiki",
+        title=title, cache_url=cache_url, renderer="wiki",
     )
 
 
@@ -346,7 +558,6 @@ async def _reddit_fast_path(url: str, max_tokens: int = 5000) -> Optional[str]:
     truncated, trunc_hint = _apply_semantic_truncation(full_markdown, max_tokens)
 
     fm_entries: dict[str, object] = {
-        "title": title,
         "source": url,
         "api": "Reddit (.json)",
         "trust": _TRUST_ADVISORY,
@@ -355,7 +566,214 @@ async def _reddit_fast_path(url: str, max_tokens: int = 5000) -> Optional[str]:
         fm_entries["truncated"] = trunc_hint
 
     fm = _build_frontmatter(fm_entries)
-    return fm + "\n\n" + _fence_content(truncated)
+    return fm + "\n\n" + _fence_content(truncated, title=title)
+
+
+# ---------------------------------------------------------------------------
+# GitHub fast path
+# ---------------------------------------------------------------------------
+
+async def _github_fast_path(url: str, max_tokens: int = 5000) -> Optional[str]:
+    """Attempt to handle a GitHub URL via the API or raw.githubusercontent.com.
+
+    Returns formatted content on success, or None if not a GitHub URL.
+    Once matched, always returns a string (even errors) to prevent
+    fallback to generic HTTP fetch (which hits GitHub's JS-heavy SPA).
+
+    Populates ``_page_cache`` for slicing/search support.
+    """
+    from .github import (
+        _detect_github_url, _action_repo, _action_tree,
+        _build_issue_markdown, _build_pr_markdown,
+        _sectionize_code, _split_github_comments,
+        _rate_limit_warning,
+    )
+    from pathlib import Path
+
+    match = _detect_github_url(url)
+    if match is None:
+        return None
+
+    # --- Blob: raw file fetch (single request, shared between cache and response) ---
+    if match.kind == "blob" and match.ref and match.path:
+        from .github import _get_github_token
+        from .common import _FETCH_HEADERS
+        import httpx
+
+        raw_url = f"https://raw.githubusercontent.com/{match.owner}/{match.repo}/{match.ref}/{match.path}"
+        headers = dict(_FETCH_HEADERS)
+        token = _get_github_token()
+        if token:
+            headers["Authorization"] = f"token {token}"
+
+        try:
+            async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+                resp = await client.get(raw_url, headers=headers)
+        except httpx.TimeoutException:
+            return f"Error: Request timed out for {raw_url}"
+        except httpx.RequestError as e:
+            return f"Error: Request failed - {type(e).__name__}"
+
+        if resp.status_code == 404:
+            if not token:
+                return "Error: File not found. If this is a private repo, set GITHUB_TOKEN."
+            return "Error: File not found."
+        if resp.status_code != 200:
+            return f"Error: HTTP {resp.status_code} for {raw_url}"
+
+        raw_content = resp.text
+
+        # Binary detection
+        if "\x00" in raw_content[:8192]:
+            return f"Error: Binary file ({match.path}). Use the GitHub web UI to view this file."
+
+        # Cache with code-aware presplit
+        ext = Path(match.path).suffix.lower()
+        presplit = _sectionize_code(raw_content, ext)
+        _page_cache.store(
+            url, match.path, raw_content,
+            renderer="github", presplit=presplit,
+        )
+
+        # Format response (same as _action_file but without a second fetch)
+        from .common import _LANGUAGE_MAP
+        lang = _LANGUAGE_MAP.get(ext, "")
+
+        char_budget = max_tokens * 4
+        content = raw_content
+        truncated = False
+        if len(content) > char_budget:
+            content = content[:char_budget]
+            truncated = True
+
+        source = f"https://github.com/{match.owner}/{match.repo}/blob/{match.ref}/{match.path}"
+        fm_entries: dict[str, object] = {"source": source, "api": "GitHub (raw)"}
+        if lang:
+            fm_entries["language"] = lang
+        if truncated:
+            fm_entries["truncated"] = f"Content truncated to ~{max_tokens} tokens"
+        rl_warn = _rate_limit_warning()
+        if rl_warn:
+            fm_entries["warning"] = rl_warn
+        fm = _build_frontmatter(fm_entries)
+
+        lines = content.split("\n")
+        width = len(str(len(lines)))
+        numbered = "\n".join(f"{i + 1:>{width}} | {line}" for i, line in enumerate(lines))
+
+        fenced_code = f"```{lang}\n{numbered}\n```"
+        return fm + "\n\n" + _fence_content(fenced_code, title=match.path)
+
+    # --- Tree: directory listing ---
+    if match.kind == "tree" and match.path:
+        query = f"{match.owner}/{match.repo}/{match.path}"
+        return await _action_tree(query, match.ref)
+
+    # --- Issue ---
+    if match.kind == "issue" and match.number:
+        built = await _build_issue_markdown(
+            match.owner, match.repo, match.number, limit=100, page=1,
+        )
+        if isinstance(built, str):
+            return built  # error string
+        title, raw_md, state, extra_fm = built
+
+        # Cache raw markdown with comment-boundary presplit for BM25 search
+        comment_chunks = _split_github_comments(raw_md)
+        _page_cache.store(
+            url, title, raw_md,
+            renderer="github", presplit=comment_chunks,
+        )
+
+        # Format truncated output
+        fm_entries: dict[str, object] = {
+            "source": f"https://github.com/{match.owner}/{match.repo}/issues/{match.number}",
+            "api": "GitHub", "trust": _TRUST_ADVISORY,
+        }
+        fm_entries.update(extra_fm)
+        rl_warn = _rate_limit_warning()
+        if rl_warn:
+            fm_entries["warning"] = rl_warn
+        content, trunc_hint = _apply_semantic_truncation(raw_md, 5000)
+        if trunc_hint:
+            fm_entries["truncated"] = trunc_hint
+            fm_entries["hint"] = (
+                "Use search= for BM25 keyword search across comments, "
+                "or section= with a comment ID (e.g. section='ic_12345') "
+                "to extract a specific comment."
+            )
+        fm = _build_frontmatter(fm_entries)
+        return fm + "\n\n" + _fence_content(content, title=title)
+
+    # --- Pull request ---
+    if match.kind == "pull" and match.number:
+        built = await _build_pr_markdown(
+            match.owner, match.repo, match.number, limit=100, page=1,
+        )
+        if isinstance(built, str):
+            return built
+        title, raw_md, display_state, extra_fm = built
+
+        # Cache raw markdown with comment-boundary presplit for BM25 search
+        comment_chunks = _split_github_comments(raw_md)
+        _page_cache.store(
+            url, title, raw_md,
+            renderer="github", presplit=comment_chunks,
+        )
+
+        fm_entries = {
+            "source": f"https://github.com/{match.owner}/{match.repo}/pull/{match.number}",
+            "api": "GitHub", "trust": _TRUST_ADVISORY,
+        }
+        fm_entries.update(extra_fm)
+        rl_warn = _rate_limit_warning()
+        if rl_warn:
+            fm_entries["warning"] = rl_warn
+        content, trunc_hint = _apply_semantic_truncation(raw_md, 5000)
+        if trunc_hint:
+            fm_entries["truncated"] = trunc_hint
+            fm_entries["hint"] = (
+                "Use search= for BM25 keyword search across comments and review threads, "
+                "or section= with a file path or comment ID to extract specific content."
+            )
+        fm = _build_frontmatter(fm_entries)
+        return fm + "\n\n" + _fence_content(content, title=title)
+
+    # --- Repo root ---
+    if match.kind == "repo":
+        query = f"{match.owner}/{match.repo}"
+        return await _action_repo(query)
+
+    # --- Gist ---
+    if match.kind == "gist" and match.gist_id:
+        from .github import _github_request
+        gist_result = await _github_request("GET", f"/gists/{match.gist_id}")
+        if isinstance(gist_result, str):
+            return gist_result
+        assert isinstance(gist_result, dict)
+
+        gist_desc = gist_result.get("description") or "Untitled gist"
+        files = gist_result.get("files", {})
+
+        fm = _build_frontmatter({
+            "source": url,
+            "api": "GitHub",
+            "trust": _TRUST_ADVISORY,
+        })
+
+        parts = []
+        for filename, fdata in files.items():
+            lang = fdata.get("language", "").lower()
+            content = fdata.get("content", "")
+            parts.append(f"## {filename}\n")
+            parts.append(f"```{lang}\n{content}\n```\n")
+
+        body = "\n".join(parts)
+        _page_cache.store(url, gist_desc, body, renderer="github")
+        return fm + "\n\n" + _fence_content(body, title=gist_desc)
+
+    # Matched but unhandled kind (e.g. discussion without implementation)
+    return f"Error: GitHub URL type '{match.kind}' is not yet supported."
 
 
 # ---------------------------------------------------------------------------
@@ -367,6 +785,7 @@ def _process_markdown_sections(
     section_names: Optional[list[str]],
     max_tokens: int,
     frontmatter_entries: dict,
+    title: Optional[str] = None,
     cache_url: Optional[str] = None,
     renderer: Optional[str] = None,
 ) -> str:
@@ -375,15 +794,20 @@ def _process_markdown_sections(
     Common post-processing for both browser-rendered and httpx-fetched HTML.
     Returns the complete formatted output string.
 
-    When cache_url is provided, populates the page cache with the full
-    (pre-filtered) markdown so subsequent search/slices calls can use it.
-    The renderer tag ("direct" or "js") is stored with the cache entry so
-    that WebFetchJS won't reuse sparse content cached by WebFetchDirect.
+    Args:
+        title: Page title for display inside the content fence (untrusted).
+            Kept separate from frontmatter_entries because it is untrusted
+            content that must never appear in server-generated metadata.
+        cache_url: When provided, populates the page cache with the full
+            (pre-filtered) markdown so subsequent search/slices calls can
+            use it.
+        renderer: Tag stored with the cache entry ("direct" or "js") so
+            that WebFetchJS won't reuse sparse content cached by
+            WebFetchDirect.
     """
     # Populate the page cache before any filtering/truncation
     if cache_url and markdown_content:
-        title = frontmatter_entries.get("title", "Untitled")
-        _page_cache.store(cache_url, title, markdown_content, renderer=renderer)
+        _page_cache.store(cache_url, title or "Untitled", markdown_content, renderer=renderer)
 
     all_sections = _extract_sections_from_markdown(markdown_content)
     sections_requested_meta = None
@@ -410,9 +834,6 @@ def _process_markdown_sections(
     if truncation_hint and all_sections and not section_names:
         sections_available = _build_section_list(all_sections)
 
-    # Move title out of frontmatter — it goes inside the fence
-    title = frontmatter_entries.pop("title", None)
-
     frontmatter_entries["trust"] = _TRUST_ADVISORY
     frontmatter_entries["truncated"] = truncation_hint
     fm = _build_frontmatter(
@@ -433,22 +854,23 @@ def _process_markdown_sections(
 # ---------------------------------------------------------------------------
 
 def _slice_output(
-    cache: _PageCache,
+    cache: _CacheEntry,
     indices: list[int],
     max_tokens: int,
     fm_entries: dict,
+    title: Optional[str] = None,
     search_term: Optional[str] = None,
 ) -> str:
     """Assemble sliced output with YAML frontmatter and --- dividers.
 
     Each slice is preceded by a ``--- slice N (Ancestry) ---`` header.
     Respects max_tokens budget — stops emitting slices when exhausted.
+
+    Args:
+        title: Page title for display inside the content fence (untrusted).
     """
     assert cache.slices is not None
     assert cache.slice_ancestry is not None
-
-    # Move title out of frontmatter — it goes inside the fence
-    title = fm_entries.pop("title", None)
 
     fm_entries["trust"] = _TRUST_ADVISORY
     fm_entries["total_slices"] = len(cache.slices)
@@ -484,6 +906,7 @@ def _search_slices(
     search: str,
     max_tokens: int,
     fm_entries: dict,
+    title: Optional[str] = None,
 ) -> Optional[str]:
     """BM25 search over cached page slices.
 
@@ -503,7 +926,7 @@ def _search_slices(
         fm = _build_frontmatter(fm_entries)
         return fm + "\n\nNo matching slices found."
 
-    return _slice_output(cached, matched, max_tokens, fm_entries, search_term=search)
+    return _slice_output(cached, matched, max_tokens, fm_entries, title=title, search_term=search)
 
 
 def _get_slices(
@@ -511,6 +934,7 @@ def _get_slices(
     indices: list[int],
     max_tokens: int,
     fm_entries: dict,
+    title: Optional[str] = None,
 ) -> Optional[str]:
     """Retrieve specific slices by index from the page cache.
 
@@ -533,7 +957,7 @@ def _get_slices(
     if invalid:
         fm_entries["slices_not_found"] = invalid
 
-    return _slice_output(cached, valid, max_tokens, fm_entries)
+    return _slice_output(cached, valid, max_tokens, fm_entries, title=title)
 
 
 def _dispatch_slicing(
@@ -549,10 +973,11 @@ def _dispatch_slicing(
     cached = _page_cache.get(url)
     if not cached:
         return "Error: Page cache could not be populated for this URL."
-    fm_base = {"title": cached.title, "source": source_url, "warning": warning}
+    title = cached.title
+    fm_base = {"source": source_url, "warning": warning}
     if search is not None:
-        return _search_slices(url, search, max_tokens, fm_base) or \
+        return _search_slices(url, search, max_tokens, fm_base, title=title) or \
             "Error: Page cache unavailable."
     else:
-        return _get_slices(url, slices_list, max_tokens, fm_base) or \
+        return _get_slices(url, slices_list, max_tokens, fm_base, title=title) or \
             "Error: Page cache unavailable."

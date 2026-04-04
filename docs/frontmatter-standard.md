@@ -35,6 +35,73 @@ Frontmatter serves three roles:
   allows them to inherit the trust of tool-generated metadata and
   opens a frontmatter injection vector.  See the trust boundary
   discussion in *Purpose* above.
+- **Frontmatter dicts are not transport vehicles.**  Only values that
+  belong in the final frontmatter output should be placed in the
+  `fm_entries` dict.  Do not use the dict to shuttle data (e.g. page
+  titles) to downstream functions that will pop it out for other
+  purposes.  If a value needs to reach multiple consumers, pass it
+  as a separate parameter.  This prevents accidental leakage of
+  untrusted data into frontmatter when a pop step is missed.
+
+## Content Fencing
+
+Untrusted content (fetched web pages, API responses, user-generated text)
+is wrapped by `_fence_content()` (`markdown.py`) with box-drawing
+delimiters and per-line `│` provenance marking.  This is a datamarking
+defense (see Microsoft Spotlighting) that provides a continuous trust
+signal throughout the content.
+
+### Protections
+
+- **Separator lines** — empty `│` lines are inserted immediately inside
+  both fence boundaries (`┌─` and `└─`).  This prevents content that
+  contains fence marker strings from visually connecting to the real
+  fence delimiters.
+- **Label sanitization** — page titles and section names rendered inside
+  fences are passed through `_sanitize_label()`, which replaces
+  non-printable characters (newlines, tabs, control codes) with spaces
+  using `str.isprintable()`.  This prevents structure injection via
+  crafted headings.  Applied at two choke points:
+  - `_fence_content(title=)` — sanitizes before rendering as `# {title}`
+  - `_extract_sections_from_markdown()` — sanitizes heading names at
+    extraction time, protecting all downstream consumers (section lists,
+    ancestry breadcrumbs)
+- **Title outside frontmatter** — page titles are passed as a separate
+  `title` parameter to `_process_markdown_sections()` and rendered
+  inside the fenced zone, never in frontmatter.  Functions that build
+  frontmatter must not include untrusted titles in the `fm_entries` dict.
+
+### Fenced output structure
+
+```
+┌─ untrusted content
+│
+│ # Page Title (sanitized)
+│
+│ content line 1
+│ content line 2
+│
+└─ untrusted content
+```
+
+## SSRF Protection
+
+Outbound HTTP fetches in `fetch_direct.py` and `fetch_js.py` are guarded
+by `check_url_ssrf()` (`common.py`), which resolves hostnames and checks
+all addresses against private/loopback/reserved/link-local ranges (IPv4
+and IPv6).  This prevents the MCP server from being used to probe
+internal networks or cloud metadata endpoints.
+
+- Applied before all generic HTTP fetches (after fast-path detection, so
+  API-backed sources like GitHub and arXiv are unaffected)
+- Set `MCP_ALLOW_PRIVATE_IPS=1` to disable for local network crawling
+- DNS resolution uses `socket.getaddrinfo()` with `AF_UNSPEC` to cover
+  both IPv4 and IPv6
+- DNS failures pass through — httpx reports the error naturally
+
+Playwright (`fetch_js.py`) additionally blocks cross-origin navigation
+after the initial page load via `page.route()`, preventing JavaScript
+redirects from steering the browser to internal services.
 
 ## Hint Field Types
 
@@ -81,7 +148,7 @@ rejecting the request outright.  This avoids wasting a round-trip.
 
 ## Required Fields by Tool
 
-### Fetch tools (`web_fetch_direct`, `web_fetch_sections`, `web_fetch_js`)
+### Fetch tools (`web_fetch_direct`, `web_fetch_sections`, `web_fetch_js`, GitHub fast path)
 
 Always present:
 
@@ -111,6 +178,11 @@ Conditional:
 | `hint`             | BM25 search, slice retrieval, and `web_fetch_sections` |
 | `note`             | Section extraction depth warning (when subsections exist) |
 | `shelf`            | Research shelf tracking status (auto-tracked papers) |
+| `api`              | API origin identifier (e.g. `GitHub`, `GitHub (raw)`, `Reddit (.json)`, `arXiv`) |
+| `language`         | GitHub blob: file extension (e.g. `py`, `ts`) |
+| `definitions`      | GitHub blob via `web_fetch_sections`: count of extracted code definitions |
+| `type`             | GitHub issue/PR: `issue` or `pull_request` |
+| `state`            | GitHub issue/PR: `open`, `closed`, or `merged` |
 
 ### Kagi tools (`kagi_search`, `kagi_summarize`)
 
@@ -207,3 +279,71 @@ Conditional:
 | `query` | Search terms |
 | `paper` | Scoped paper ID (omitted for corpus-wide) |
 | `hint`  | Guidance to use `paper` action for metadata |
+
+### GitHub tool
+
+**`repo` action:**
+
+| Field    | Description |
+|----------|-------------|
+| `source` | GitHub repo URL |
+| `api`    | `GitHub` |
+| `hint`   | README truncation drill-in guidance (when README exceeds ~2000 tokens) |
+| `shelf`  | Research shelf tracking status (from CITATION.cff or repo metadata) |
+
+**`issue` and `pull_request` actions:**
+
+| Field       | Description |
+|-------------|-------------|
+| `source`    | GitHub issue/PR URL |
+| `api`       | `GitHub` |
+| `type`      | `issue` or `pull_request` |
+| `state`     | `open`, `closed`, or `merged` |
+| `truncated` | When comment body exceeds ~5000 tokens |
+| `hint`      | Pagination and search/section guidance |
+| `trust`     | Trust advisory for fenced content |
+
+**`file` action:**
+
+| Field      | Description |
+|------------|-------------|
+| `source`   | GitHub blob URL |
+| `api`      | `GitHub (raw)` |
+| `language` | Detected language from file extension |
+| `truncated`| When file exceeds `max_tokens` |
+
+**`search_issues` and `search_code` actions:**
+
+| Field   | Description |
+|---------|-------------|
+| `source`| GitHub search URL |
+| `api`   | `GitHub` |
+| `total` | Total result count |
+| `hint`  | Pagination guidance (when more pages exist) |
+
+**`tree` action:**
+
+| Field   | Description |
+|---------|-------------|
+| `source`| GitHub tree URL |
+| `api`   | `GitHub` |
+| `hint`  | Guidance for file action drill-in |
+
+**GitHub fast path (via fetch tools):**
+
+GitHub URLs intercepted by `web_fetch_direct` and `web_fetch_js` produce
+the same frontmatter as the corresponding GitHub tool actions. The fast
+path additionally populates the 2Q page cache with presplit content:
+
+- **Blob URLs**: cached with CodeSplitter presplit (AST-aware function/class
+  boundaries) for BM25 search within source code
+- **Issue/PR URLs**: cached with comment-boundary presplit (one slice per
+  `ic_*` or `rc_*` heading) for per-comment BM25 search
+- **Repo/tree/gist URLs**: served directly, no cache population needed
+
+`web_fetch_sections` on GitHub URLs returns:
+
+- **Blob**: tree-sitter code definition tree (kind, name, line range, docstrings)
+- **Issue**: comment tree with IDs, authors, role badges, timestamps
+- **PR**: review comments grouped by file + regular comments
+- **Repo/tree/gist**: redirect hint to the GitHub tool

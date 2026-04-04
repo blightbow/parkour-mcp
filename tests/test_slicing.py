@@ -15,15 +15,8 @@ from kagi_research_mcp._pipeline import _page_cache, _wiki_cache
 def clear_caches():
     """Ensure each test starts with empty caches."""
     yield
-    _wiki_cache.url = None
-    _wiki_cache.wiki_info = None
-    _wiki_cache.wiki_page = None
-    _page_cache.url = None
-    _page_cache.title = None
-    _page_cache.markdown = None
-    _page_cache.slices = None
-    _page_cache.slice_ancestry = None
-    _page_cache.renderer = None
+    _wiki_cache.clear()
+    _page_cache.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -152,6 +145,38 @@ class TestComputeSliceAncestry:
 
 
 # ---------------------------------------------------------------------------
+# _WikiCache unit tests
+# ---------------------------------------------------------------------------
+
+class TestWikiCache:
+    def test_store_and_get(self):
+        _wiki_cache.store("https://en.wikipedia.org/wiki/Test", {"api_base": "x"}, {"html": "<p>hi</p>"})
+        info, page = _wiki_cache.get("https://en.wikipedia.org/wiki/Test")
+        assert info == {"api_base": "x"}
+        assert page == {"html": "<p>hi</p>"}
+
+    def test_miss(self):
+        _wiki_cache.store("https://en.wikipedia.org/wiki/A", {}, {})
+        info, page = _wiki_cache.get("https://en.wikipedia.org/wiki/B")
+        assert info is None
+        assert page is None
+
+    def test_multi_entry(self):
+        _wiki_cache.store("https://en.wikipedia.org/wiki/A", {"a": 1}, None)
+        _wiki_cache.store("https://en.wikipedia.org/wiki/B", {"b": 2}, None)
+        info_a, _ = _wiki_cache.get("https://en.wikipedia.org/wiki/A")
+        info_b, _ = _wiki_cache.get("https://en.wikipedia.org/wiki/B")
+        assert info_a == {"a": 1}
+        assert info_b == {"b": 2}
+
+    def test_clear(self):
+        _wiki_cache.store("https://en.wikipedia.org/wiki/A", {}, {})
+        _wiki_cache.clear()
+        info, page = _wiki_cache.get("https://en.wikipedia.org/wiki/A")
+        assert info is None
+
+
+# ---------------------------------------------------------------------------
 # _PageCache unit tests
 # ---------------------------------------------------------------------------
 
@@ -171,13 +196,202 @@ class TestPageCache:
         _page_cache.store("https://example.com", "Title", "# Content")
         assert _page_cache.get("https://other.com") is None
 
-    def test_eviction_on_new_url(self):
+    def test_multi_entry_coexistence(self):
+        """Multiple URLs coexist in the cache."""
         _page_cache.store("https://first.com", "First", "# First")
         _page_cache.store("https://second.com", "Second", "# Second")
-        assert _page_cache.get("https://first.com") is None
-        cached = _page_cache.get("https://second.com")
+        first = _page_cache.get("https://first.com")
+        second = _page_cache.get("https://second.com")
+        assert first is not None
+        assert first.title == "First"
+        assert second is not None
+        assert second.title == "Second"
+
+    def test_new_entries_land_in_probation(self):
+        """A freshly stored entry is in probation, not protected."""
+        from kagi_research_mcp._pipeline import _PageCache
+        cache = _PageCache(max_entries=3)
+        cache.store("https://a.com", "A", "# A")
+        assert "https://a.com" in cache._probation
+        assert "https://a.com" not in cache._protected
+
+    def test_get_promotes_to_protected(self):
+        """Accessing a probation entry promotes it to protected."""
+        from kagi_research_mcp._pipeline import _PageCache
+        cache = _PageCache(max_entries=3)
+        cache.store("https://a.com", "A", "# A")
+        cache.get("https://a.com")
+        assert "https://a.com" not in cache._probation
+        assert "https://a.com" in cache._protected
+
+    def test_eviction_prefers_probation(self):
+        """Probation entries are evicted before protected entries."""
+        from kagi_research_mcp._pipeline import _PageCache
+        cache = _PageCache(max_entries=3)
+        cache.store("https://a.com", "A", "# A")
+        cache.get("https://a.com")  # promote A to protected
+        cache.store("https://b.com", "B", "# B")  # probation
+        cache.store("https://c.com", "C", "# C")  # probation
+        # Full at 3. Storing D should evict B (oldest probation), not A (protected).
+        cache.store("https://d.com", "D", "# D")
+        assert cache.get("https://a.com") is not None  # protected, safe
+        assert cache.get("https://b.com") is None      # evicted from probation
+        assert cache.get("https://c.com") is not None
+        assert cache.get("https://d.com") is not None
+
+    def test_protected_lru_eviction(self):
+        """When probation is empty, the oldest protected entry is evicted."""
+        from kagi_research_mcp._pipeline import _PageCache
+        cache = _PageCache(max_entries=3)
+        # Fill with all-promoted entries
+        cache.store("https://a.com", "A", "# A")
+        cache.get("https://a.com")  # promote
+        cache.store("https://b.com", "B", "# B")
+        cache.get("https://b.com")  # promote
+        cache.store("https://c.com", "C", "# C")
+        cache.get("https://c.com")  # promote
+        # All 3 in protected, probation empty. Storing D evicts oldest protected (A).
+        cache.store("https://d.com", "D", "# D")
+        assert cache.get("https://a.com") is None
+        assert cache.get("https://b.com") is not None
+        assert cache.get("https://c.com") is not None
+        assert cache.get("https://d.com") is not None
+
+    def test_scan_resistance(self):
+        """One-hit pages in probation don't evict drilled-into protected pages."""
+        from kagi_research_mcp._pipeline import _PageCache
+        cache = _PageCache(max_entries=4)
+        # Two pages the user drills into (promoted to protected)
+        cache.store("https://working-a.com", "A", "# A")
+        cache.get("https://working-a.com")
+        cache.store("https://working-b.com", "B", "# B")
+        cache.get("https://working-b.com")
+        # Scan: browse through several one-hit pages
+        cache.store("https://scan-1.com", "S1", "# S1")
+        cache.store("https://scan-2.com", "S2", "# S2")
+        # Full at 4. Another scan page should evict scan-1 (probation), not working pages.
+        cache.store("https://scan-3.com", "S3", "# S3")
+        assert cache.get("https://working-a.com") is not None
+        assert cache.get("https://working-b.com") is not None
+        assert cache.get("https://scan-1.com") is None  # evicted from probation
+
+    def test_renderer_filter(self):
+        """get() with renderer filter only returns matching entries."""
+        _page_cache.store("https://example.com", "Title", "# Content", renderer="direct")
+        assert _page_cache.get("https://example.com") is not None
+        assert _page_cache.get("https://example.com", renderer="direct") is not None
+        assert _page_cache.get("https://example.com", renderer="js") is None
+
+    def test_renderer_filter_no_promotion(self):
+        """get() with non-matching renderer does not promote the entry."""
+        from kagi_research_mcp._pipeline import _PageCache
+        cache = _PageCache(max_entries=5)
+        cache.store("https://example.com", "Title", "# Content", renderer="direct")
+        # This should return None (renderer mismatch) and NOT promote
+        assert cache.get("https://example.com", renderer="js") is None
+        assert "https://example.com" in cache._probation
+        assert "https://example.com" not in cache._protected
+
+    def test_store_same_url_updates_in_place(self):
+        """Storing the same URL replaces the entry without evicting others."""
+        from kagi_research_mcp._pipeline import _PageCache
+        cache = _PageCache(max_entries=3)
+        cache.store("https://a.com", "A", "# A")
+        cache.store("https://b.com", "B", "# B")
+        cache.store("https://a.com", "A-updated", "# A updated")
+        # Both should exist, A should have the updated title
+        assert cache.get("https://b.com") is not None
+        a = cache.get("https://a.com")
+        assert a is not None
+        assert a.title == "A-updated"
+
+    def test_store_updates_protected_in_place(self):
+        """Re-storing a URL that was already promoted keeps it in protected."""
+        from kagi_research_mcp._pipeline import _PageCache
+        cache = _PageCache(max_entries=3)
+        cache.store("https://a.com", "A", "# A")
+        cache.get("https://a.com")  # promote to protected
+        cache.store("https://a.com", "A-v2", "# A v2")
+        assert "https://a.com" in cache._protected
+        entry = cache.get("https://a.com")
+        assert entry is not None
+        assert entry.title == "A-v2"
+
+    def test_group_eviction(self):
+        """Evicting one entry evicts all entries in its group."""
+        from kagi_research_mcp._pipeline import _PageCache
+        cache = _PageCache(max_entries=4)
+        cache.store("https://pr/1/comments", "PR comments", "# Comments", group="pr:1")
+        cache.store("https://pr/1/code", "PR code", "# Code", group="pr:1")
+        cache.store("https://other.com", "Other", "# Other")
+        cache.store("https://another.com", "Another", "# Another")
+        # Full at 4. Storing a 5th evicts the oldest probation group —
+        # both pr:1 entries — freeing 2 slots.
+        cache.store("https://new.com", "New", "# New")
+        assert cache.get("https://pr/1/comments") is None
+        assert cache.get("https://pr/1/code") is None
+        assert cache.get("https://other.com") is not None
+        assert cache.get("https://another.com") is not None
+        assert cache.get("https://new.com") is not None
+
+    def test_group_eviction_across_queues(self):
+        """Group eviction removes members from both probation and protected."""
+        from kagi_research_mcp._pipeline import _PageCache
+        cache = _PageCache(max_entries=4)
+        cache.store("https://pr/1/a", "A", "# A", group="pr:1")
+        cache.get("https://pr/1/a")  # promote to protected
+        cache.store("https://pr/1/b", "B", "# B", group="pr:1")  # stays in probation
+        cache.store("https://x.com", "X", "# X")
+        cache.get("https://x.com")  # promote
+        cache.store("https://y.com", "Y", "# Y")
+        # Full at 4. pr/1/b is oldest in probation. Evicting it should
+        # also evict pr/1/a from protected (same group).
+        cache.store("https://z.com", "Z", "# Z")
+        assert cache.get("https://pr/1/a") is None
+        assert cache.get("https://pr/1/b") is None
+        assert cache.get("https://x.com") is not None
+
+    def test_clear(self):
+        """clear() empties all entries from both queues."""
+        from kagi_research_mcp._pipeline import _PageCache
+        cache = _PageCache(max_entries=5)
+        cache.store("https://a.com", "A", "# A")
+        cache.get("https://a.com")  # promote to protected
+        cache.store("https://b.com", "B", "# B")  # stays in probation
+        cache.clear()
+        assert cache.get("https://a.com") is None
+        assert cache.get("https://b.com") is None
+        assert len(cache._probation) == 0
+        assert len(cache._protected) == 0
+
+    def test_entry_estimated_bytes(self):
+        """_CacheEntry.estimated_bytes returns a positive size estimate."""
+        md = "# Title\n\n" + "Some content. " * 100
+        _page_cache.store("https://example.com", "Title", md)
+        cached = _page_cache.get("https://example.com")
         assert cached is not None
-        assert cached.title == "Second"
+        assert cached.estimated_bytes > len(md)  # slices + ancestry + tantivy estimate
+
+    def test_stats_structure(self):
+        """stats property returns queue distribution and per-entry info."""
+        from kagi_research_mcp._pipeline import _PageCache
+        cache = _PageCache(max_entries=5)
+        cache.store("https://a.com", "A", "# A content here")
+        cache.store("https://b.com", "B", "# B content here")
+        cache.get("https://a.com")  # promote to protected
+        stats = cache.stats
+        assert stats["max_entries"] == 5
+        assert stats["total_entries"] == 2
+        assert stats["probation_entries"] == 1
+        assert stats["protected_entries"] == 1
+        assert stats["total_estimated_bytes"] > 0
+        assert len(stats["entries"]) == 2
+        # Check per-entry info
+        urls = {e["url"] for e in stats["entries"]}
+        assert urls == {"https://a.com", "https://b.com"}
+        queues = {e["url"]: e["queue"] for e in stats["entries"]}
+        assert queues["https://a.com"] == "protected"
+        assert queues["https://b.com"] == "probation"
 
     def test_slices_cover_content(self):
         md = "# Title\n\nParagraph one.\n\n## Section\n\nParagraph two."

@@ -1,10 +1,14 @@
 """Shared constants and utilities for kagi-research-mcp."""
 
 import asyncio
+import ipaddress
+import logging
 import os
 import platform
+import socket
 import time
 from importlib.metadata import version as _pkg_version
+from urllib.parse import urlparse
 
 # ---------------------------------------------------------------------------
 # Package / runtime versions (used in User-Agent strings)
@@ -45,6 +49,22 @@ _API_HEADERS = {
     "Accept": "application/json",
 }
 
+# ---------------------------------------------------------------------------
+# File extension → syntax highlight language
+# ---------------------------------------------------------------------------
+_LANGUAGE_MAP: dict[str, str] = {
+    ".py": "python", ".js": "javascript", ".ts": "typescript",
+    ".jsx": "javascript", ".tsx": "typescript",
+    ".go": "go", ".rs": "rust", ".rb": "ruby",
+    ".java": "java", ".kt": "kotlin", ".scala": "scala",
+    ".c": "c", ".h": "c", ".cpp": "cpp", ".hpp": "cpp", ".cc": "cpp",
+    ".sh": "bash", ".bash": "bash", ".zsh": "zsh",
+    ".yaml": "yaml", ".yml": "yaml", ".json": "json",
+    ".toml": "toml", ".xml": "xml", ".html": "html", ".css": "css",
+    ".md": "markdown", ".sql": "sql", ".r": "r",
+    ".swift": "swift", ".m": "objectivec",
+}
+
 
 # ---------------------------------------------------------------------------
 # Rate limiter
@@ -64,3 +84,63 @@ class RateLimiter:
             if elapsed < self.min_interval:
                 await asyncio.sleep(self.min_interval - elapsed)
             self._last = time.monotonic()
+
+
+# ---------------------------------------------------------------------------
+# SSRF protection
+# ---------------------------------------------------------------------------
+
+_logger = logging.getLogger(__name__)
+
+# Set MCP_ALLOW_PRIVATE_IPS=1 to allow fetching from private/internal networks.
+_ALLOW_PRIVATE_IPS = os.environ.get("MCP_ALLOW_PRIVATE_IPS", "").strip() in ("1", "true", "yes")
+
+
+def _is_private_ip(addr: str) -> bool:
+    """Check whether an IP address string is private, loopback, or reserved."""
+    try:
+        ip = ipaddress.ip_address(addr)
+    except ValueError:
+        return False
+    return ip.is_private or ip.is_loopback or ip.is_reserved or ip.is_link_local
+
+
+def check_url_ssrf(url: str) -> str | None:
+    """Validate a URL against SSRF risks before fetching.
+
+    Resolves the hostname to IP addresses and checks each against
+    private/loopback/reserved/link-local ranges (IPv4 and IPv6).
+
+    Returns an error string if the URL is blocked, or None if it is safe.
+    Disabled when MCP_ALLOW_PRIVATE_IPS=1 is set in the environment.
+    """
+    if _ALLOW_PRIVATE_IPS:
+        return None
+
+    parsed = urlparse(url)
+    hostname = parsed.hostname
+    if not hostname:
+        return None  # let httpx handle malformed URLs
+
+    # Fast check: if hostname is already an IP literal
+    try:
+        ip = ipaddress.ip_address(hostname)
+        if _is_private_ip(str(ip)):
+            return f"Error: Blocked request to private/reserved address ({hostname})."
+        return None
+    except ValueError:
+        pass  # hostname is a DNS name, resolve it
+
+    # Resolve hostname and check all addresses
+    try:
+        addrinfos = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+    except socket.gaierror:
+        return None  # DNS failure — let httpx handle and report the error
+
+    for family, _, _, _, sockaddr in addrinfos:
+        addr = sockaddr[0]
+        if _is_private_ip(addr):
+            _logger.debug("SSRF block: %s resolved to private address %s", hostname, addr)
+            return f"Error: Blocked request to private/reserved address ({hostname} -> {addr})."
+
+    return None
