@@ -160,7 +160,11 @@ async def _github_request(
 
         # Success
         if response.status_code in (200, 201):
-            return response.json()
+            ct = response.headers.get("content-type", "")
+            if "json" in ct:
+                return response.json()
+            # Raw content (e.g. application/vnd.github.raw+json returns text)
+            return response.text
         if response.status_code == 204:
             return {}
 
