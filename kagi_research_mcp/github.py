@@ -10,6 +10,7 @@ the codebase.  Authentication is optional: unauthenticated requests get
 """
 
 import asyncio
+import base64
 import logging
 import os
 import re
@@ -736,6 +737,21 @@ def _fmt_labels(labels: list[dict]) -> str:
     return ", ".join(lb["name"] for lb in labels) if labels else ""
 
 
+_REACTION_EMOJIS = [
+    ("+1", "👍"), ("-1", "👎"), ("laugh", "😄"), ("hooray", "🎉"),
+    ("confused", "😕"), ("heart", "❤️"), ("rocket", "🚀"), ("eyes", "👀"),
+]
+
+
+def _fmt_reactions(reactions: dict) -> str:
+    """Format reaction counts as emoji+count pairs."""
+    parts = []
+    for api_key, emoji in _REACTION_EMOJIS:
+        if count := reactions.get(api_key, 0):
+            parts.append(f"{emoji} {count}")
+    return " ".join(parts)
+
+
 def _fm_base(source: str, api: str = "GitHub") -> dict:
     """Build common frontmatter entries."""
     entries: dict = {"source": source, "api": api}
@@ -1002,16 +1018,14 @@ async def _action_repo(query: str) -> str:
         parts.append(f"Topics: {', '.join(topics)}")
 
     # Fetch README (as JSON for path metadata) and CITATION.cff concurrently
-    readme_task = asyncio.create_task(_github_request(
-        "GET", f"/repos/{owner}/{repo}/readme",
-    ))
-    citation_task = asyncio.create_task(_fetch_citation_cff(owner, repo, default_branch))
+    readme_result, citation_cff = await asyncio.gather(
+        _github_request("GET", f"/repos/{owner}/{repo}/readme"),
+        _fetch_citation_cff(owner, repo, default_branch),
+    )
 
     readme_text = None
     readme_path = "README.md"  # fallback
-    readme_result = await readme_task
     if isinstance(readme_result, dict):
-        import base64
         readme_path = readme_result.get("path", readme_path)
         content = readme_result.get("content", "")
         if content:
@@ -1034,9 +1048,6 @@ async def _action_repo(query: str) -> str:
                 f"'{owner}/{repo}/{readme_path}' for full content, "
                 f"or WebFetchDirect('{readme_url}', section=...) for specific sections."
             )
-
-    # Shelf tracking from CITATION.cff (or bare repo metadata)
-    citation_cff = await citation_task
     fm_entries["shelf"] = await _track_repo_on_shelf(
         owner, repo, name, desc, result, citation_cff,
     )
@@ -1145,16 +1156,9 @@ async def _build_issue_markdown(
     if labels:
         parts.append(f"Labels: {labels}")
 
-    reaction_parts = []
-    for emoji, key in [
-        ("+1", "👍"), ("-1", "👎"), ("laugh", "😄"), ("hooray", "🎉"),
-        ("confused", "😕"), ("heart", "❤️"), ("rocket", "🚀"), ("eyes", "👀"),
-    ]:
-        count = reactions.get(emoji, 0)
-        if count:
-            reaction_parts.append(f"{key} {count}")
-    if reaction_parts:
-        parts.append(" ".join(reaction_parts))
+    reaction_str = _fmt_reactions(reactions)
+    if reaction_str:
+        parts.append(reaction_str)
 
     parts.append("")
     if body:
@@ -1179,16 +1183,9 @@ async def _build_issue_markdown(
                 parts.append(f"### ic_{cid}\n")
                 parts.append(f"**@{cauthor}**{assoc_tag} — {_fmt_relative_time(ccreated)}")
 
-                cr_parts = []
-                for emoji, key in [
-                    ("+1", "👍"), ("-1", "👎"), ("laugh", "😄"),
-                    ("heart", "❤️"), ("rocket", "🚀"), ("eyes", "👀"),
-                ]:
-                    count = creactions.get(emoji, 0)
-                    if count:
-                        cr_parts.append(f"{key} {count}")
-                if cr_parts:
-                    parts.append(" ".join(cr_parts))
+                cr_str = _fmt_reactions(creactions)
+                if cr_str:
+                    parts.append(cr_str)
 
                 parts.append("")
                 parts.append(cbody)
@@ -1412,19 +1409,8 @@ async def _action_file(
 
     # Detect language from extension for code fencing
     ext = Path(path).suffix.lower() if "." in path else ""
-    lang_map = {
-        ".py": "python", ".js": "javascript", ".ts": "typescript",
-        ".jsx": "javascript", ".tsx": "typescript",
-        ".go": "go", ".rs": "rust", ".rb": "ruby",
-        ".java": "java", ".kt": "kotlin", ".scala": "scala",
-        ".c": "c", ".h": "c", ".cpp": "cpp", ".hpp": "cpp", ".cc": "cpp",
-        ".sh": "bash", ".bash": "bash", ".zsh": "zsh",
-        ".yaml": "yaml", ".yml": "yaml", ".json": "json",
-        ".toml": "toml", ".xml": "xml", ".html": "html", ".css": "css",
-        ".md": "markdown", ".sql": "sql", ".r": "r",
-        ".swift": "swift", ".m": "objectivec",
-    }
-    lang = lang_map.get(ext, "")
+    from .common import _LANGUAGE_MAP
+    lang = _LANGUAGE_MAP.get(ext, "")
 
     # Truncate if needed
     char_budget = max_tokens * 4

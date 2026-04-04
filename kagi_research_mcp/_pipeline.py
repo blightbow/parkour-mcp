@@ -587,6 +587,7 @@ async def _github_fast_path(url: str, max_tokens: int = 5000) -> Optional[str]:
         _detect_github_url, _action_repo, _action_tree,
         _build_issue_markdown, _build_pr_markdown,
         _sectionize_code, _split_github_comments,
+        _rate_limit_warning,
     )
     from pathlib import Path
 
@@ -636,20 +637,8 @@ async def _github_fast_path(url: str, max_tokens: int = 5000) -> Optional[str]:
         )
 
         # Format response (same as _action_file but without a second fetch)
-        from .github import _rate_limit_warning
-        lang_map = {
-            ".py": "python", ".js": "javascript", ".ts": "typescript",
-            ".jsx": "javascript", ".tsx": "typescript",
-            ".go": "go", ".rs": "rust", ".rb": "ruby",
-            ".java": "java", ".kt": "kotlin", ".scala": "scala",
-            ".c": "c", ".h": "c", ".cpp": "cpp", ".hpp": "cpp", ".cc": "cpp",
-            ".sh": "bash", ".bash": "bash", ".zsh": "zsh",
-            ".yaml": "yaml", ".yml": "yaml", ".json": "json",
-            ".toml": "toml", ".xml": "xml", ".html": "html", ".css": "css",
-            ".md": "markdown", ".sql": "sql", ".r": "r",
-            ".swift": "swift", ".m": "objectivec",
-        }
-        lang = lang_map.get(ext, "")
+        from .common import _LANGUAGE_MAP
+        lang = _LANGUAGE_MAP.get(ext, "")
 
         char_budget = max_tokens * 4
         content = raw_content
@@ -703,8 +692,7 @@ async def _github_fast_path(url: str, max_tokens: int = 5000) -> Optional[str]:
             "api": "GitHub", "trust": _TRUST_ADVISORY,
         }
         fm_entries.update(extra_fm)
-        from .github import _rate_limit_warning as _gh_rl_warn
-        rl_warn = _gh_rl_warn()
+        rl_warn = _rate_limit_warning()
         if rl_warn:
             fm_entries["warning"] = rl_warn
         content, trunc_hint = _apply_semantic_truncation(raw_md, 5000)
@@ -739,8 +727,7 @@ async def _github_fast_path(url: str, max_tokens: int = 5000) -> Optional[str]:
             "api": "GitHub", "trust": _TRUST_ADVISORY,
         }
         fm_entries.update(extra_fm)
-        from .github import _rate_limit_warning as _gh_rl_warn2
-        rl_warn = _gh_rl_warn2()
+        rl_warn = _rate_limit_warning()
         if rl_warn:
             fm_entries["warning"] = rl_warn
         content, trunc_hint = _apply_semantic_truncation(raw_md, 5000)

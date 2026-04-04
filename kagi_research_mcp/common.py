@@ -45,6 +45,22 @@ _API_HEADERS = {
     "Accept": "application/json",
 }
 
+# ---------------------------------------------------------------------------
+# File extension → syntax highlight language
+# ---------------------------------------------------------------------------
+_LANGUAGE_MAP: dict[str, str] = {
+    ".py": "python", ".js": "javascript", ".ts": "typescript",
+    ".jsx": "javascript", ".tsx": "typescript",
+    ".go": "go", ".rs": "rust", ".rb": "ruby",
+    ".java": "java", ".kt": "kotlin", ".scala": "scala",
+    ".c": "c", ".h": "c", ".cpp": "cpp", ".hpp": "cpp", ".cc": "cpp",
+    ".sh": "bash", ".bash": "bash", ".zsh": "zsh",
+    ".yaml": "yaml", ".yml": "yaml", ".json": "json",
+    ".toml": "toml", ".xml": "xml", ".html": "html", ".css": "css",
+    ".md": "markdown", ".sql": "sql", ".r": "r",
+    ".swift": "swift", ".m": "objectivec",
+}
+
 
 # ---------------------------------------------------------------------------
 # Rate limiter
