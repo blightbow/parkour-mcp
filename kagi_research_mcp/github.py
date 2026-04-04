@@ -21,7 +21,10 @@ import httpx
 from pydantic import Field
 
 from .common import _API_USER_AGENT, _FETCH_HEADERS, RateLimiter
-from .markdown import _build_frontmatter, _fence_content, _TRUST_ADVISORY
+from .markdown import (
+    _build_frontmatter, _fence_content, _TRUST_ADVISORY,
+    _apply_semantic_truncation,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -967,19 +970,29 @@ async def _action_repo(query: str) -> str:
     ))
     citation_task = asyncio.create_task(_fetch_citation_cff(owner, repo, default_branch))
 
+    readme_text = None
     readme_result = await readme_task
     if isinstance(readme_result, str) and not readme_result.startswith("Error"):
-        parts.append(f"\n## README\n\n{readme_result}")
+        readme_text = readme_result
     elif isinstance(readme_result, dict):
-        # API returned JSON instead of raw — decode content
         import base64
         content = readme_result.get("content", "")
         if content:
             try:
-                decoded = base64.b64decode(content).decode("utf-8")
-                parts.append(f"\n## README\n\n{decoded}")
+                readme_text = base64.b64decode(content).decode("utf-8")
             except Exception:
                 pass
+
+    if readme_text:
+        # Truncate README to ~2000 tokens — repos are an entry point, not a full read
+        truncated, trunc_hint = _apply_semantic_truncation(readme_text, 2000)
+        parts.append(f"\n## README\n\n{truncated}")
+        if trunc_hint:
+            fm_entries["hint"] = (
+                f"README truncated. Use GitHub file action with "
+                f"'{owner}/{repo}/README.md' for full content, "
+                f"or WebFetchDirect with section= for specific sections."
+            )
 
     # Shelf tracking from CITATION.cff (or bare repo metadata)
     citation_cff = await citation_task
@@ -1151,6 +1164,11 @@ async def _action_issue(
                 parts.append("")
 
     content = "\n".join(parts)
+    content, trunc_hint = _apply_semantic_truncation(content, 5000)
+    if trunc_hint:
+        fm_entries["truncated"] = trunc_hint
+        fm_entries["hint"] = f"Use page= to load more comments (page {page + 1})"
+        fm = _build_frontmatter(fm_entries)
     return fm + "\n\n" + _fence_content(content, title=title)
 
 
@@ -1284,6 +1302,11 @@ async def _action_pull_request(
                 parts.append("")
 
     content = "\n".join(parts)
+    content, trunc_hint = _apply_semantic_truncation(content, 5000)
+    if trunc_hint:
+        fm_entries["truncated"] = trunc_hint
+        fm_entries["hint"] = f"Use page= to load more comments (page {page + 1})"
+        fm = _build_frontmatter(fm_entries)
     return fm + "\n\n" + _fence_content(content, title=title)
 
 
