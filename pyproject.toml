@@ -33,6 +33,9 @@ Issues = "https://github.com/blightbow/kagi-research-mcp/issues"
 [project.scripts]
 kagi-research-mcp = "kagi_research_mcp:main"
 
+[tool.setuptools.packages.find]
+exclude = ["tmp*", "tests*", "scripts*"]
+
 [tool.uv]
 package = true
 
@@ -53,4 +56,6 @@ dev = [
     "pytest-asyncio>=1.3.0",
     "pytest-ruff>=0.5",
     "respx>=0.22.0",
+    "tree-sitter>=0.24",
+    "tree-sitter-python>=0.23",
 ]
