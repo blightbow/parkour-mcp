@@ -857,7 +857,7 @@ web_fetch_direct   | WebFetchDirect        | Fetch a Markdown rendered version a
 web_fetch_js       | WebFetchJS            | Use Playwright to render a headless version of the website in Markdown (extracting documents from a JavaScript cage)
 semantic_scholar   | SemanticScholar       | Search and retrieve academic paper data from Semantic Scholar (search, paper details, references, authors, body text snippets)
 arxiv              | ArXiv                 | Search and retrieve academic papers from arXiv (search with field-prefix syntax, paper details, category browsing)
-github             | GitHub                | Search and retrieve code, issues, and pull requests from GitHub (7 actions: search_issues, search_code, repo, tree, issue, pull_request, file)
+github             | GitHub                | Search and retrieve code, issues, pull requests, commits, and comparisons from GitHub (7 actions: search_issues, search_code, repo, tree, issue, pull_request, file)
 kagi_summarize     | KagiSummarize         | Summarize URLs or text (supports PDFs, YouTube, audio)
 
 ### fetch tool capabilities (common)
@@ -872,7 +872,15 @@ The fetch tools share the following features:
 - **arXiv fast path** - `arxiv.org/abs/` and `arxiv.org/pdf/` URLs are intercepted and served via the arXiv Atom API, returning structured metadata (authors with affiliations, categories, DOI, journal refs, version history). `/html/` URLs are deliberately excluded so they fall through to HTTP fetch for full paper text with BM25 slicing support. Frontmatter includes hints to the `/html/` URL and SemanticScholar cross-reference.
 - **Semantic Scholar fast path** - `semanticscholar.org/paper/` URLs are intercepted and served via the S2 Graph API, bypassing CAPTCHA-blocked web pages. Returns structured paper data with YAML frontmatter.
 - **Reddit fast path** - `reddit.com`, `old.reddit.com`, and `redd.it` URLs are rewritten to `old.reddit.com` and fetched via the unauthenticated `.json` endpoint, bypassing Reddit's login wall and monetised API. Comment threads are rendered with comment IDs as section headings, enabling `section=` extraction of individual comments and BM25 search across the full thread. `web_fetch_sections` returns the comment tree with author, score, and content length metadata.
-- **GitHub fast path** - `github.com` URLs are intercepted and served via the GitHub REST API, bypassing GitHub's JavaScript-heavy SPA. Blob URLs are fetched from `raw.githubusercontent.com` and cached with AST-aware presplit via tree-sitter [CodeSplitter](https://docs.rs/text-splitter/latest/text_splitter/struct.CodeSplitter.html) (splitting at function/class boundaries). Issues and PRs are cached with comment-boundary presplit for per-comment BM25 search. `web_fetch_sections` returns code definition trees (via tree-sitter AST walk) for source files, and comment trees for issues/PRs. Repos with a `CITATION.cff` are auto-tracked on the research shelf.
+- **GitHub fast path** - `github.com` and `raw.githubusercontent.com` URLs are intercepted and served via the GitHub REST API, bypassing GitHub's JavaScript-heavy SPA. Supported URL types:
+  - **Blob** (`/blob/{ref}/{path}`) — fetched from `raw.githubusercontent.com` with line numbers, cached with AST-aware presplit via tree-sitter [CodeSplitter](https://docs.rs/text-splitter/latest/text_splitter/struct.CodeSplitter.html). Line anchor fragments (`#L45`, `#L45-L100`) slice the output to just those lines.
+  - **Issue/PR** (`/issues/N`, `/pull/N`) — rendered via REST API with comment-boundary presplit for per-comment BM25 search.
+  - **Wiki** (`/wiki/{page}`) — fetched as raw markdown from the wiki git repo. Root URL defaults to the Home page.
+  - **Commit** (`/commit/{sha}`) — rendered via Commits API with message, stats, and file list.
+  - **Compare** (`/compare/{base}...{head}`) — rendered via Compare API with commit log and diff summary.
+  - **Repo/tree/gist** — served via REST API as before.
+  - **Unsupported paths** (`/blame`, `/releases`, `/actions`, `/projects`) return descriptive errors instead of falling through to broken HTML scrapes.
+  - `web_fetch_sections` returns code definition trees (via tree-sitter AST walk) for source files, and comment trees for issues/PRs. Repos with a `CITATION.cff` are auto-tracked on the research shelf.
 - **MediaWiki fast path** - Wiki URLs (`/wiki/...`) are detected and fetched via the MediaWiki API with a [Wikimedia-compliant User-Agent](https://meta.wikimedia.org/wiki/User-Agent_policy), bypassing  HTTP entirely. Returns clean markdown with YAML frontmatter including site name and generator metadata. A dedicated multi-entry LRU wiki cache avoids redundant API calls when multiple tools access the same page.
 - **Footnote extraction** (MediaWiki) - Inline footnotes appear as `[^N]` markers in the markdown output. The `footnotes` parameter retrieves specific numbered entries. Author-date shorthand (e.g. "Simpson 2003, p. 8") is automatically resolved against the article's bibliography via `#CITEREF` links.
 
