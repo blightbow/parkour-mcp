@@ -329,17 +329,52 @@ Conditional:
 | `api`   | `GitHub` |
 | `hint`  | Guidance for file action drill-in |
 
+**`commit` (fast path only):**
+
+| Field    | Description |
+|----------|-------------|
+| `source` | GitHub commit URL |
+| `api`    | `GitHub` |
+| `type`   | `commit` |
+| `trust`  | Trust advisory for fenced content |
+
+**`compare` (fast path only):**
+
+| Field    | Description |
+|----------|-------------|
+| `source` | GitHub compare URL |
+| `api`    | `GitHub` |
+| `type`   | `compare` |
+| `status` | `ahead`, `behind`, `diverged`, or `identical` |
+| `trust`  | Trust advisory for fenced content |
+
+**`wiki` (fast path only):**
+
+| Field    | Description |
+|----------|-------------|
+| `source` | GitHub wiki page URL |
+| `api`    | `GitHub (wiki)` |
+| `trust`  | Trust advisory for fenced content |
+
 **GitHub fast path (via fetch tools):**
 
 GitHub URLs intercepted by `web_fetch_direct` and `web_fetch_js` produce
 the same frontmatter as the corresponding GitHub tool actions. The fast
 path additionally populates the 2Q page cache with presplit content:
 
-- **Blob URLs**: cached with CodeSplitter presplit (AST-aware function/class
-  boundaries) for BM25 search within source code
+- **Blob URLs** (`/blob/`, `raw.githubusercontent.com`): cached with
+  CodeSplitter presplit (AST-aware function/class boundaries) for BM25
+  search within source code. Line anchor fragments (`#L45`, `#L45-L100`)
+  slice output to the requested range with a `lines:` frontmatter field.
 - **Issue/PR URLs**: cached with comment-boundary presplit (one slice per
   `ic_*` or `rc_*` heading) for per-comment BM25 search
+- **Wiki URLs** (`/wiki/{page}`): raw markdown fetched from the wiki git
+  repo; root URL defaults to the Home page
+- **Commit/compare URLs**: rendered via Commits/Compare API with stats
+  and file lists
 - **Repo/tree/gist URLs**: served directly, no cache population needed
+- **Unsupported paths** (`/blame`, `/releases`, `/actions`, `/projects`):
+  return descriptive errors instead of falling through to HTML
 
 `web_fetch_sections` on GitHub URLs returns:
 
