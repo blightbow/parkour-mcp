@@ -81,7 +81,7 @@ rejecting the request outright.  This avoids wasting a round-trip.
 
 ## Required Fields by Tool
 
-### Fetch tools (`web_fetch_direct`, `web_fetch_sections`, `web_fetch_js`)
+### Fetch tools (`web_fetch_direct`, `web_fetch_sections`, `web_fetch_js`, GitHub fast path)
 
 Always present:
 
@@ -111,6 +111,11 @@ Conditional:
 | `hint`             | BM25 search, slice retrieval, and `web_fetch_sections` |
 | `note`             | Section extraction depth warning (when subsections exist) |
 | `shelf`            | Research shelf tracking status (auto-tracked papers) |
+| `api`              | API origin identifier (e.g. `GitHub`, `GitHub (raw)`, `Reddit (.json)`, `arXiv`) |
+| `language`         | GitHub blob: file extension (e.g. `py`, `ts`) |
+| `definitions`      | GitHub blob via `web_fetch_sections`: count of extracted code definitions |
+| `type`             | GitHub issue/PR: `issue` or `pull_request` |
+| `state`            | GitHub issue/PR: `open`, `closed`, or `merged` |
 
 ### Kagi tools (`kagi_search`, `kagi_summarize`)
 
@@ -207,3 +212,71 @@ Conditional:
 | `query` | Search terms |
 | `paper` | Scoped paper ID (omitted for corpus-wide) |
 | `hint`  | Guidance to use `paper` action for metadata |
+
+### GitHub tool
+
+**`repo` action:**
+
+| Field    | Description |
+|----------|-------------|
+| `source` | GitHub repo URL |
+| `api`    | `GitHub` |
+| `hint`   | README truncation drill-in guidance (when README exceeds ~2000 tokens) |
+| `shelf`  | Research shelf tracking status (from CITATION.cff or repo metadata) |
+
+**`issue` and `pull_request` actions:**
+
+| Field       | Description |
+|-------------|-------------|
+| `source`    | GitHub issue/PR URL |
+| `api`       | `GitHub` |
+| `type`      | `issue` or `pull_request` |
+| `state`     | `open`, `closed`, or `merged` |
+| `truncated` | When comment body exceeds ~5000 tokens |
+| `hint`      | Pagination and search/section guidance |
+| `trust`     | Trust advisory for fenced content |
+
+**`file` action:**
+
+| Field      | Description |
+|------------|-------------|
+| `source`   | GitHub blob URL |
+| `api`      | `GitHub (raw)` |
+| `language` | Detected language from file extension |
+| `truncated`| When file exceeds `max_tokens` |
+
+**`search_issues` and `search_code` actions:**
+
+| Field   | Description |
+|---------|-------------|
+| `source`| GitHub search URL |
+| `api`   | `GitHub` |
+| `total` | Total result count |
+| `hint`  | Pagination guidance (when more pages exist) |
+
+**`tree` action:**
+
+| Field   | Description |
+|---------|-------------|
+| `source`| GitHub tree URL |
+| `api`   | `GitHub` |
+| `hint`  | Guidance for file action drill-in |
+
+**GitHub fast path (via fetch tools):**
+
+GitHub URLs intercepted by `web_fetch_direct` and `web_fetch_js` produce
+the same frontmatter as the corresponding GitHub tool actions. The fast
+path additionally populates the 2Q page cache with presplit content:
+
+- **Blob URLs**: cached with CodeSplitter presplit (AST-aware function/class
+  boundaries) for BM25 search within source code
+- **Issue/PR URLs**: cached with comment-boundary presplit (one slice per
+  `ic_*` or `rc_*` heading) for per-comment BM25 search
+- **Repo/tree/gist URLs**: served directly, no cache population needed
+
+`web_fetch_sections` on GitHub URLs returns:
+
+- **Blob**: tree-sitter code definition tree (kind, name, line range, docstrings)
+- **Issue**: comment tree with IDs, authors, role badges, timestamps
+- **PR**: review comments grouped by file + regular comments
+- **Repo/tree/gist**: redirect hint to the GitHub tool
