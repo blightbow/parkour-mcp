@@ -456,6 +456,49 @@ class TestWebFetchDirectGitHubLineAnchors:
 
     @pytest.mark.asyncio
     @respx.mock
+    async def test_line_range_beyond_file_returns_error(self):
+        """#L9000-L9999 on a short file should return an error."""
+        respx.get(
+            "https://raw.githubusercontent.com/owner/repo/main/app.py"
+        ).mock(return_value=httpx.Response(200, text=SAMPLE_PYTHON_FILE))
+
+        result = await web_fetch_direct(
+            "https://github.com/owner/repo/blob/main/app.py#L9000-L9999"
+        )
+        assert "Error:" in result
+        assert "9000" in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_line_range_partial_overlap_warns(self):
+        """#L20-L100 on a 23-line file should clamp with a warning."""
+        respx.get(
+            "https://raw.githubusercontent.com/owner/repo/main/app.py"
+        ).mock(return_value=httpx.Response(200, text=SAMPLE_PYTHON_FILE))
+
+        result = await web_fetch_direct(
+            "https://github.com/owner/repo/blob/main/app.py#L20-L100"
+        )
+        assert "lines: 20-23 of" in result
+        assert "warning:" in result
+        assert "file ends at line 23" in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_line_range_reversed_returns_error(self):
+        """#L100-L50 should return an error for reversed range."""
+        respx.get(
+            "https://raw.githubusercontent.com/owner/repo/main/app.py"
+        ).mock(return_value=httpx.Response(200, text=SAMPLE_PYTHON_FILE))
+
+        result = await web_fetch_direct(
+            "https://github.com/owner/repo/blob/main/app.py#L100-L50"
+        )
+        assert "Error:" in result
+        assert "Invalid line range" in result
+
+    @pytest.mark.asyncio
+    @respx.mock
     async def test_line_anchor_not_treated_as_section(self):
         """#L45 should not produce sections_not_found."""
         respx.get(

@@ -662,12 +662,27 @@ async def _github_fast_path(
 
         # Apply line range if specified (1-based inclusive)
         if line_range:
-            start, end = line_range
-            start = max(1, min(start, total_lines))
-            end = max(start, min(end, total_lines))
+            req_start, req_end = line_range
+            if req_start > req_end:
+                return (
+                    f"Error: Invalid line range L{req_start}-L{req_end} "
+                    f"(start must not exceed end)."
+                )
+            if req_start > total_lines:
+                return (
+                    f"Error: Requested lines {req_start}-{req_end} "
+                    f"but file has only {total_lines} lines."
+                )
+            start = max(1, req_start)
+            end = min(req_end, total_lines)
             display_lines = all_lines[start - 1:end]
             line_offset = start
             fm_entries["lines"] = f"{start}-{end} of {total_lines}"
+            if req_end > total_lines:
+                fm_entries["warning"] = (
+                    f"Requested lines {req_start}-{req_end} "
+                    f"but file ends at line {total_lines}"
+                )
         else:
             if truncated:
                 fm_entries["truncated"] = f"Content truncated to ~{max_tokens} tokens"
