@@ -342,6 +342,292 @@ def _rate_limit_warning() -> Optional[str]:
 
 
 # ---------------------------------------------------------------------------
+# Source code sectionization (tree-sitter + CodeSplitter)
+# ---------------------------------------------------------------------------
+
+# Extension → (tree-sitter module name, language function name)
+# Grammar packages are optional deps — missing grammars fall back gracefully.
+_EXT_TO_GRAMMAR: dict[str, tuple[str, str]] = {
+    ".py": ("tree_sitter_python", "language"),
+    ".js": ("tree_sitter_javascript", "language"),
+    ".jsx": ("tree_sitter_javascript", "language"),
+    ".ts": ("tree_sitter_typescript", "language_typescript"),
+    ".tsx": ("tree_sitter_typescript", "language_tsx"),
+    ".go": ("tree_sitter_go", "language"),
+    ".rs": ("tree_sitter_rust", "language"),
+    ".java": ("tree_sitter_java", "language"),
+    ".c": ("tree_sitter_c", "language"),
+    ".h": ("tree_sitter_c", "language"),
+    ".cpp": ("tree_sitter_cpp", "language"),
+    ".hpp": ("tree_sitter_cpp", "language"),
+    ".cc": ("tree_sitter_cpp", "language"),
+    ".kt": ("tree_sitter_kotlin", "language"),
+    ".scala": ("tree_sitter_scala", "language"),
+}
+
+# Node types that represent definitions, per tree-sitter grammar.
+# Each entry: grammar module → list of (node_type, name_field) tuples.
+_DEFINITION_TYPES: dict[str, list[tuple[str, str]]] = {
+    "tree_sitter_python": [
+        ("function_definition", "name"),
+        ("class_definition", "name"),
+    ],
+    "tree_sitter_javascript": [
+        ("function_declaration", "name"),
+        ("class_declaration", "name"),
+        ("method_definition", "name"),
+        ("lexical_declaration", "name"),  # const/let
+    ],
+    "tree_sitter_typescript": [
+        ("function_declaration", "name"),
+        ("class_declaration", "name"),
+        ("method_definition", "name"),
+        ("lexical_declaration", "name"),
+        ("interface_declaration", "name"),
+        ("type_alias_declaration", "name"),
+    ],
+    "tree_sitter_go": [
+        ("function_declaration", "name"),
+        ("method_declaration", "name"),
+        ("type_declaration", "name"),
+    ],
+    "tree_sitter_rust": [
+        ("function_item", "name"),
+        ("struct_item", "name"),
+        ("enum_item", "name"),
+        ("trait_item", "name"),
+        ("impl_item", "type"),
+    ],
+    "tree_sitter_java": [
+        ("class_declaration", "name"),
+        ("interface_declaration", "name"),
+        ("method_declaration", "name"),
+        ("enum_declaration", "name"),
+    ],
+    "tree_sitter_c": [
+        ("function_definition", "declarator"),
+        ("struct_specifier", "name"),
+        ("enum_specifier", "name"),
+    ],
+    "tree_sitter_cpp": [
+        ("function_definition", "declarator"),
+        ("class_specifier", "name"),
+        ("struct_specifier", "name"),
+        ("enum_specifier", "name"),
+    ],
+    "tree_sitter_kotlin": [
+        ("function_declaration", "name"),
+        ("class_declaration", "name"),
+        ("object_declaration", "name"),
+    ],
+    "tree_sitter_scala": [
+        ("function_definition", "name"),
+        ("class_definition", "name"),
+        ("object_definition", "name"),
+        ("trait_definition", "name"),
+    ],
+}
+
+# Python docstring: first expression_statement > string in body
+# JSDoc/Javadoc: comment node immediately preceding the definition
+_DOC_COMMENT_GRAMMARS = {
+    "tree_sitter_python",  # uses body-first-string pattern
+}
+_PRECEDING_COMMENT_GRAMMARS = {
+    "tree_sitter_javascript", "tree_sitter_typescript",
+    "tree_sitter_java", "tree_sitter_go",
+    "tree_sitter_rust", "tree_sitter_c", "tree_sitter_cpp",
+    "tree_sitter_kotlin", "tree_sitter_scala",
+}
+
+
+@dataclass
+class CodeDefinition:
+    """A function, class, or type definition extracted from source code."""
+    kind: str       # "function", "class", "struct", etc.
+    name: str
+    start_line: int
+    end_line: int
+    depth: int      # nesting level (0 = top-level)
+    docstring: Optional[str] = None  # first line only
+
+
+def _get_code_splitter(ext: str):
+    """Return a CodeSplitter for the given file extension, or None.
+
+    Lazily imports the tree-sitter grammar package. Returns None if the
+    grammar is not installed.
+    """
+    from semantic_text_splitter import CodeSplitter
+    import importlib
+
+    grammar_info = _EXT_TO_GRAMMAR.get(ext)
+    if not grammar_info:
+        return None
+
+    module_name, func_name = grammar_info
+    try:
+        mod = importlib.import_module(module_name)
+        lang_fn = getattr(mod, func_name)
+        return CodeSplitter(lang_fn(), (100, 1000))
+    except (ImportError, AttributeError):
+        logger.debug("tree-sitter grammar %s not available", module_name)
+        return None
+
+
+def _extract_name_text(node, source: bytes) -> str:
+    """Extract the name text from a definition node, handling nested declarators."""
+    if node is None:
+        return "?"
+    # C/C++ declarators can be nested: function_declarator → identifier
+    if node.type in ("function_declarator", "pointer_declarator"):
+        for child in node.children:
+            if child.type == "identifier":
+                return source[child.start_byte:child.end_byte].decode()
+        # Recurse one level for pointer_declarator → function_declarator → identifier
+        for child in node.children:
+            result = _extract_name_text(child, source)
+            if result != "?":
+                return result
+    return source[node.start_byte:node.end_byte].decode()
+
+
+def _extract_python_docstring(node, source: bytes) -> Optional[str]:
+    """Extract first line of a Python docstring from a function/class body."""
+    body = node.child_by_field_name("body")
+    if not body:
+        return None
+    for child in body.children:
+        if child.type == "expression_statement":
+            for sc in child.children:
+                if sc.type == "string":
+                    raw = source[sc.start_byte:sc.end_byte].decode()
+                    # Strip triple quotes and whitespace
+                    content = raw.strip("\"'").strip()
+                    return content.split("\n")[0].strip() if content else None
+            break  # only check first statement
+    return None
+
+
+def _extract_preceding_comment(node, source: bytes) -> Optional[str]:
+    """Extract first line of a doc comment preceding a definition node."""
+    # Walk backward through siblings to find a comment
+    prev = node.prev_sibling
+    if prev is None:
+        return None
+
+    if prev.type == "comment":
+        text = source[prev.start_byte:prev.end_byte].decode().strip()
+        # Strip comment markers: //, /*, */, /**, ///, //!
+        for prefix in ("/**", "///", "//!", "/*", "//"):
+            if text.startswith(prefix):
+                text = text[len(prefix):]
+                break
+        text = text.rstrip("*/").strip()
+        return text.split("\n")[0].strip() if text else None
+
+    return None
+
+
+def extract_code_definitions(
+    source: str, ext: str,
+) -> list[CodeDefinition]:
+    """Extract function/class definitions with docstrings from source code.
+
+    Uses tree-sitter for AST parsing. Returns an empty list if the grammar
+    for the given file extension is not installed.
+    """
+    import importlib
+
+    grammar_info = _EXT_TO_GRAMMAR.get(ext)
+    if not grammar_info:
+        return []
+
+    module_name, func_name = grammar_info
+    try:
+        import tree_sitter
+        mod = importlib.import_module(module_name)
+        lang_fn = getattr(mod, func_name)
+        lang = tree_sitter.Language(lang_fn())
+        parser = tree_sitter.Parser(lang)
+    except (ImportError, AttributeError):
+        return []
+
+    source_bytes = source.encode("utf-8")
+    tree = parser.parse(source_bytes)
+
+    def_types = _DEFINITION_TYPES.get(module_name, [])
+    type_map = {node_type: name_field for node_type, name_field in def_types}
+    uses_body_docstring = module_name in _DOC_COMMENT_GRAMMARS
+    uses_preceding_comment = module_name in _PRECEDING_COMMENT_GRAMMARS
+
+    results: list[CodeDefinition] = []
+
+    def walk(node, depth: int = 0):
+        if node.type in type_map:
+            name_field = type_map[node.type]
+            name_node = node.child_by_field_name(name_field)
+            name = _extract_name_text(name_node, source_bytes)
+
+            # Kind: strip _definition, _declaration, _item, _specifier suffixes
+            kind = node.type
+            for suffix in ("_definition", "_declaration", "_item", "_specifier"):
+                kind = kind.replace(suffix, "")
+
+            # Docstring extraction
+            docstring = None
+            if uses_body_docstring:
+                docstring = _extract_python_docstring(node, source_bytes)
+            elif uses_preceding_comment:
+                docstring = _extract_preceding_comment(node, source_bytes)
+
+            results.append(CodeDefinition(
+                kind=kind,
+                name=name,
+                start_line=node.start_point.row + 1,
+                end_line=node.end_point.row + 1,
+                depth=depth,
+                docstring=docstring,
+            ))
+
+        child_depth = depth + (1 if node.type in type_map else 0)
+        for child in node.children:
+            walk(child, child_depth)
+
+    walk(tree.root_node)
+    return results
+
+
+def _sectionize_code(source: str, ext: str) -> Optional[list[tuple[int, str]]]:
+    """Split source code at AST boundaries for presplit cache storage.
+
+    Returns (char_offset, chunk_text) tuples suitable for
+    _PageCache.store(presplit=...), or None if the grammar is unavailable.
+    """
+    splitter = _get_code_splitter(ext)
+    if splitter is None:
+        return None
+
+    try:
+        return splitter.chunk_indices(source)
+    except Exception:
+        logger.debug("CodeSplitter failed for extension %s", ext, exc_info=True)
+        return None
+
+
+def format_code_sections(defs: list[CodeDefinition]) -> str:
+    """Format extracted definitions as a section listing for web_fetch_sections."""
+    if not defs:
+        return ""
+    lines = []
+    for d in defs:
+        indent = "  " * d.depth
+        doc = f" — {d.docstring}" if d.docstring else ""
+        lines.append(f"{indent}- {d.kind} {d.name} (L{d.start_line}-{d.end_line}){doc}")
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
 # Query parsing helpers
 # ---------------------------------------------------------------------------
 
