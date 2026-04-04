@@ -390,6 +390,7 @@ dependencies = [
     { name = "pyyaml" },
     { name = "semantic-text-splitter" },
     { name = "tantivy" },
+    { name = "tree-sitter" },
 ]
 
 [package.dev-dependencies]
@@ -398,7 +399,6 @@ dev = [
     { name = "pytest-asyncio" },
     { name = "pytest-ruff" },
     { name = "respx" },
-    { name = "tree-sitter" },
     { name = "tree-sitter-python" },
 ]
 
@@ -413,6 +413,7 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "semantic-text-splitter", specifier = ">=0.29.0" },
     { name = "tantivy", specifier = ">=0.25.1" },
+    { name = "tree-sitter", specifier = ">=0.24" },
 ]
 
 [package.metadata.requires-dev]
@@ -421,7 +422,6 @@ dev = [
     { name = "pytest-asyncio", specifier = ">=1.3.0" },
     { name = "pytest-ruff", specifier = ">=0.5" },
     { name = "respx", specifier = ">=0.22.0" },
-    { name = "tree-sitter", specifier = ">=0.24" },
     { name = "tree-sitter-python", specifier = ">=0.23" },
 ]
 

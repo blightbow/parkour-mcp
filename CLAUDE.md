@@ -27,8 +27,8 @@ uv run python3 scripts/regenerate_readme_examples.py
 
 ### Module Layout (`kagi_research_mcp/`)
 
-- **`__init__.py`** — MCP server entry point. Registers 8 tools with profile-specific names (PascalCase for `code`, snake_case for `desktop`). Description templates have placeholders replaced at registration time.
-- **`_pipeline.py`** — Shared processing layer. Owns the fast-path detection chain, single-entry caching (`_WikiCache`, `_PageCache`), slicing, BM25 search, and section filtering.
+- **`__init__.py`** — MCP server entry point. Registers 9 tools with profile-specific names (PascalCase for `code`, snake_case for `desktop`). Description templates have placeholders replaced at registration time.
+- **`_pipeline.py`** — Shared processing layer. Owns the fast-path detection chain, multi-entry caching (`_WikiCache` LRU, `_PageCache` 2Q), slicing, BM25 search, and section filtering.
 - **`markdown.py`** — HTML→markdown conversion via custom `TextOnlyConverter`. Section extraction with fuzzy slug matching. Content fencing. Semantic truncation for markdown, hard truncation for structured formats.
 - **`shelf.py`** — Research shelf implementation. All public methods guarded by `asyncio.Lock`.
 
@@ -41,11 +41,12 @@ API integration modules (each ~300-650 LOC, self-contained):
 - **`doi.py`** — DOI resolution via content negotiation. Registration agency detection. DataCite enrichment (ORCID, affiliations, licenses).
 - **`mediawiki.py`** — Wikipedia/MediaWiki API. Probes for api.php endpoint. Full-page fetch with downstream section filtering.
 - **`reddit.py`** — Reddit fast path via `old.reddit.com` `.json` endpoint. URL rewriting, comment tree parsing, section-based comment navigation. 2s rate limit.
-- **`common.py`** — Shared constants: dual User-Agent strategy (browser UA for HTML, API UA for structured endpoints), `RateLimiter` class.
+- **`github.py`** — GitHub REST API integration. 7 actions (search_issues, search_code, repo, tree, issue, pull_request, file). Three-tier auth (env → config file → unauthenticated). Per-resource rate limit tracking. URL detection for fast-path chain. Source code sectionization via tree-sitter CodeSplitter. CITATION.cff parsing for research shelf integration. ~1500 LOC.
+- **`common.py`** — Shared constants: dual User-Agent strategy (browser UA for HTML, API UA for structured endpoints), `RateLimiter` class, `_LANGUAGE_MAP` for file extension → syntax highlight language.
 
 ### Key Concepts
 
-**Fast paths**: When a URL belongs to a known API-backed source (Wikipedia, arXiv, Semantic Scholar, DOI, Reddit), the server can skip the generic HTTP-fetch-and-convert path and instead call the source's structured API directly. This is faster, yields richer metadata, and avoids scraping. The detection chain in `fetch_direct.py` tests URLs in priority order: arXiv → Semantic Scholar → DOI → Reddit → MediaWiki → generic HTTP fallback.
+**Fast paths**: When a URL belongs to a known API-backed source (Wikipedia, arXiv, Semantic Scholar, DOI, Reddit, GitHub), the server can skip the generic HTTP-fetch-and-convert path and instead call the source's structured API directly. This is faster, yields richer metadata, and avoids scraping. The detection chain in `fetch_direct.py` tests URLs in priority order: arXiv → Semantic Scholar → DOI → Reddit → GitHub → MediaWiki → generic HTTP fallback.
 
 **Slicing**: Long pages are split into chunks (~1600-2000 chars) at semantic boundaries (headings, paragraph breaks) using `semantic-text-splitter`. Each slice records its "ancestry" — which heading hierarchy it belongs to. The slices are indexed with tantivy for BM25 keyword search, so callers can search within a cached page or request specific slices by index rather than re-fetching the whole document.
 
@@ -53,11 +54,11 @@ API integration modules (each ~300-650 LOC, self-contained):
 
 **Frontmatter**: Tool responses begin with a YAML `---` block containing structured metadata — source URL, API origin, pagination state, and actionable hints for the calling agent. Frontmatter lives *outside* the content fence (it's trusted, server-generated metadata, never external data). `hint` suggests a same-tool follow-up, `see_also` points to a different tool, `note` is explanatory. `_build_frontmatter()` is the sole producer of `---` blocks.
 
-**Research shelf**: An in-memory citation tracker that accumulates papers passively as the agent inspects them through arXiv, Semantic Scholar, or DOI tools. Keyed by DOI with cross-DOI deduplication (preprint vs. journal versions). Supports scoring, notes, and export to BibTeX/RIS/JSON. Session-scoped — it resets when the MCP server restarts.
+**Research shelf**: An in-memory citation tracker that accumulates papers passively as the agent inspects them through arXiv, Semantic Scholar, DOI, or GitHub tools. GitHub repos with a `CITATION.cff` are tracked using the DOI from the preferred-citation block; repos without a CFF or DOI use a synthetic `github:owner/repo` key. Keyed by DOI with cross-DOI deduplication (preprint vs. journal versions). Supports scoring, notes, and export to BibTeX/RIS/JSON. Session-scoped — it resets when the MCP server restarts.
 
 ### Other Patterns
 
-**Single-entry caching**: Only one URL is cached at a time (auto-evicts on new URL). This keeps memory bounded while supporting the common workflow of fetching a page's table of contents, then drilling into specific sections or searching within it.
+**2Q page cache**: `_PageCache` uses a scan-resistant two-queue eviction policy (probation FIFO + protected LRU, default 8 entries). New URLs land in probation; a second access (search, section, slices) promotes them to protected. Eviction prefers probation, so one-hit pages are evicted cheaply while drilled-into pages persist. Group-aware eviction removes all entries sharing a group key (e.g. gist files) when any member is the eviction victim. `_WikiCache` uses a simpler multi-entry LRU (default 5 entries).
 
 **Profiles**: The server registers its tools under different naming conventions depending on the `--profile` flag. `code` uses PascalCase (`WebFetchDirect`), `desktop` uses snake_case (`web_fetch_direct`). Tool descriptions also adapt — they reference sibling tools by their profile-appropriate names.
 
@@ -68,7 +69,9 @@ API integration modules (each ~300-650 LOC, self-contained):
 | `KAGI_API_KEY` | Kagi API key (fallback: `~/.config/kagi/api_key`) |
 | `S2_API_KEY` | Semantic Scholar API key (fallback: `~/.config/kagi/s2_api_key`) |
 | `MCP_CONTACT_EMAIL` | Enables CrossRef "polite pool" (10 req/s vs 5 req/s) |
+| `GITHUB_TOKEN` | GitHub personal access token (fallback: `~/.config/kagi/github_token`). 5000 req/hr vs 60/hr unauthenticated |
 | `PLAYWRIGHT_BROWSER` | Override browser for JS rendering |
+| `MCP_ALLOW_PRIVATE_IPS` | Set to `1` to allow fetching from private/loopback/link-local IPs (default: blocked) |
 
 ## Testing
 
