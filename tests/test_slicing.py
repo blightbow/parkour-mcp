@@ -313,7 +313,9 @@ class TestPageCache:
         cache.get("https://a.com")  # promote to protected
         cache.store("https://a.com", "A-v2", "# A v2")
         assert "https://a.com" in cache._protected
-        assert cache.get("https://a.com").title == "A-v2"
+        entry = cache.get("https://a.com")
+        assert entry is not None
+        assert entry.title == "A-v2"
 
     def test_group_eviction(self):
         """Evicting one entry evicts all entries in its group."""

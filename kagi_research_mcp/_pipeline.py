@@ -751,6 +751,7 @@ async def _github_fast_path(url: str, max_tokens: int = 5000) -> Optional[str]:
         gist_result = await _github_request("GET", f"/gists/{match.gist_id}")
         if isinstance(gist_result, str):
             return gist_result
+        assert isinstance(gist_result, dict)
 
         gist_desc = gist_result.get("description") or "Untitled gist"
         files = gist_result.get("files", {})

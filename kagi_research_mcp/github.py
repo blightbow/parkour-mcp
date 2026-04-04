@@ -775,6 +775,7 @@ async def _action_search_issues(
     )
     if isinstance(result, str):
         return result
+    assert isinstance(result, dict)
 
     items = result.get("items", [])
     total = result.get("total_count", 0)
@@ -823,6 +824,7 @@ async def _action_search_code(
     )
     if isinstance(result, str):
         return result
+    assert isinstance(result, dict)
 
     items = result.get("items", [])
     total = result.get("total_count", 0)
@@ -994,6 +996,7 @@ async def _action_repo(query: str) -> str:
     result = await _github_request("GET", f"/repos/{owner}/{repo}")
     if isinstance(result, str):
         return result
+    assert isinstance(result, dict)
 
     name = result["full_name"]
     desc = result.get("description") or "No description"
@@ -1132,6 +1135,7 @@ async def _build_issue_markdown(
     )
     if isinstance(result, str):
         return result
+    assert isinstance(result, dict)
 
     title = result["title"]
     state = result["state"]
@@ -1237,6 +1241,7 @@ async def _build_pr_markdown(
     )
     if isinstance(result, str):
         return result
+    assert isinstance(result, dict)
 
     title = result["title"]
     state = result["state"]
