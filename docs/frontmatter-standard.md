@@ -35,6 +35,73 @@ Frontmatter serves three roles:
   allows them to inherit the trust of tool-generated metadata and
   opens a frontmatter injection vector.  See the trust boundary
   discussion in *Purpose* above.
+- **Frontmatter dicts are not transport vehicles.**  Only values that
+  belong in the final frontmatter output should be placed in the
+  `fm_entries` dict.  Do not use the dict to shuttle data (e.g. page
+  titles) to downstream functions that will pop it out for other
+  purposes.  If a value needs to reach multiple consumers, pass it
+  as a separate parameter.  This prevents accidental leakage of
+  untrusted data into frontmatter when a pop step is missed.
+
+## Content Fencing
+
+Untrusted content (fetched web pages, API responses, user-generated text)
+is wrapped by `_fence_content()` (`markdown.py`) with box-drawing
+delimiters and per-line `│` provenance marking.  This is a datamarking
+defense (see Microsoft Spotlighting) that provides a continuous trust
+signal throughout the content.
+
+### Protections
+
+- **Separator lines** — empty `│` lines are inserted immediately inside
+  both fence boundaries (`┌─` and `└─`).  This prevents content that
+  contains fence marker strings from visually connecting to the real
+  fence delimiters.
+- **Label sanitization** — page titles and section names rendered inside
+  fences are passed through `_sanitize_label()`, which replaces
+  non-printable characters (newlines, tabs, control codes) with spaces
+  using `str.isprintable()`.  This prevents structure injection via
+  crafted headings.  Applied at two choke points:
+  - `_fence_content(title=)` — sanitizes before rendering as `# {title}`
+  - `_extract_sections_from_markdown()` — sanitizes heading names at
+    extraction time, protecting all downstream consumers (section lists,
+    ancestry breadcrumbs)
+- **Title outside frontmatter** — page titles are passed as a separate
+  `title` parameter to `_process_markdown_sections()` and rendered
+  inside the fenced zone, never in frontmatter.  Functions that build
+  frontmatter must not include untrusted titles in the `fm_entries` dict.
+
+### Fenced output structure
+
+```
+┌─ untrusted content
+│
+│ # Page Title (sanitized)
+│
+│ content line 1
+│ content line 2
+│
+└─ untrusted content
+```
+
+## SSRF Protection
+
+Outbound HTTP fetches in `fetch_direct.py` and `fetch_js.py` are guarded
+by `check_url_ssrf()` (`common.py`), which resolves hostnames and checks
+all addresses against private/loopback/reserved/link-local ranges (IPv4
+and IPv6).  This prevents the MCP server from being used to probe
+internal networks or cloud metadata endpoints.
+
+- Applied before all generic HTTP fetches (after fast-path detection, so
+  API-backed sources like GitHub and arXiv are unaffected)
+- Set `MCP_ALLOW_PRIVATE_IPS=1` to disable for local network crawling
+- DNS resolution uses `socket.getaddrinfo()` with `AF_UNSPEC` to cover
+  both IPv4 and IPv6
+- DNS failures pass through — httpx reports the error naturally
+
+Playwright (`fetch_js.py`) additionally blocks cross-origin navigation
+after the initial page load via `page.route()`, preventing JavaScript
+redirects from steering the browser to internal services.
 
 ## Hint Field Types
 

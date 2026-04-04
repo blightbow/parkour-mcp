@@ -27,6 +27,20 @@ classifiers = [
     "Topic :: Internet :: WWW/HTTP",
 ]
 
+[project.optional-dependencies]
+grammars = [
+    "tree-sitter-python>=0.23",
+    "tree-sitter-javascript>=0.23",
+    "tree-sitter-typescript>=0.23",
+    "tree-sitter-go>=0.23",
+    "tree-sitter-rust>=0.23",
+    "tree-sitter-java>=0.23",
+    "tree-sitter-c>=0.23",
+    "tree-sitter-cpp>=0.23",
+    "tree-sitter-kotlin>=0.23",
+    "tree-sitter-scala>=0.23",
+]
+
 [project.urls]
 Homepage = "https://github.com/blightbow/kagi-research-mcp"
 Repository = "https://github.com/blightbow/kagi-research-mcp"
