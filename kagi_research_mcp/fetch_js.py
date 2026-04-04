@@ -17,7 +17,7 @@ from .markdown import (
 from .mediawiki import _extract_citations, _format_citations
 from ._pipeline import (
     _extract_fragment, _normalize_sections, _resolve_fragment_source,
-    _mediawiki_fast_path, _arxiv_fast_path, _s2_fast_path, _doi_fast_path,
+    _mediawiki_fast_path, _arxiv_fast_path, _s2_fast_path, _doi_fast_path, _github_fast_path,
     _process_markdown_sections,
     _cached_mediawiki_fetch,
     _page_cache, _dispatch_slicing,
@@ -360,6 +360,22 @@ async def web_fetch_js(
                 return "Error: search/slices not supported for DOI resolver URLs."
             result = await _doi_fast_path(url)
             if result is not None:
+                return result
+    except Exception:
+        pass
+
+    # --- GitHub fast path (after DOI, before MediaWiki) ---
+    try:
+        from .github import _detect_github_url
+        if _detect_github_url(url):
+            result = await _github_fast_path(url, max_tokens)
+            if result is not None:
+                if want_slicing:
+                    return _dispatch_slicing(
+                        url, search, slices,
+                        slices_list if slices is not None else [],
+                        max_tokens, source_url, warning=fragment_warning,
+                    )
                 return result
     except Exception:
         pass

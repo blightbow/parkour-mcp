@@ -571,6 +571,173 @@ async def _reddit_fast_path(url: str, max_tokens: int = 5000) -> Optional[str]:
 
 
 # ---------------------------------------------------------------------------
+# GitHub fast path
+# ---------------------------------------------------------------------------
+
+async def _github_fast_path(url: str, max_tokens: int = 5000) -> Optional[str]:
+    """Attempt to handle a GitHub URL via the API or raw.githubusercontent.com.
+
+    Returns formatted content on success, or None if not a GitHub URL.
+    Once matched, always returns a string (even errors) to prevent
+    fallback to generic HTTP fetch (which hits GitHub's JS-heavy SPA).
+
+    Populates ``_page_cache`` for slicing/search support.
+    """
+    from .github import (
+        _detect_github_url, _action_repo, _action_tree,
+        _action_issue, _action_pull_request, _sectionize_code,
+    )
+    from pathlib import Path
+
+    match = _detect_github_url(url)
+    if match is None:
+        return None
+
+    # --- Blob: raw file fetch (single request, shared between cache and response) ---
+    if match.kind == "blob" and match.ref and match.path:
+        from .github import _get_github_token
+        from .common import _FETCH_HEADERS
+        import httpx
+
+        raw_url = f"https://raw.githubusercontent.com/{match.owner}/{match.repo}/{match.ref}/{match.path}"
+        headers = dict(_FETCH_HEADERS)
+        token = _get_github_token()
+        if token:
+            headers["Authorization"] = f"token {token}"
+
+        try:
+            async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+                resp = await client.get(raw_url, headers=headers)
+        except httpx.TimeoutException:
+            return f"Error: Request timed out for {raw_url}"
+        except httpx.RequestError as e:
+            return f"Error: Request failed - {type(e).__name__}"
+
+        if resp.status_code == 404:
+            if not token:
+                return "Error: File not found. If this is a private repo, set GITHUB_TOKEN."
+            return "Error: File not found."
+        if resp.status_code != 200:
+            return f"Error: HTTP {resp.status_code} for {raw_url}"
+
+        raw_content = resp.text
+
+        # Binary detection
+        if "\x00" in raw_content[:8192]:
+            return f"Error: Binary file ({match.path}). Use the GitHub web UI to view this file."
+
+        # Cache with code-aware presplit
+        ext = Path(match.path).suffix.lower()
+        presplit = _sectionize_code(raw_content, ext)
+        _page_cache.store(
+            url, match.path, raw_content,
+            renderer="github", presplit=presplit,
+        )
+
+        # Format response (same as _action_file but without a second fetch)
+        from .github import _rate_limit_warning
+        lang_map = {
+            ".py": "python", ".js": "javascript", ".ts": "typescript",
+            ".jsx": "javascript", ".tsx": "typescript",
+            ".go": "go", ".rs": "rust", ".rb": "ruby",
+            ".java": "java", ".kt": "kotlin", ".scala": "scala",
+            ".c": "c", ".h": "c", ".cpp": "cpp", ".hpp": "cpp", ".cc": "cpp",
+            ".sh": "bash", ".bash": "bash", ".zsh": "zsh",
+            ".yaml": "yaml", ".yml": "yaml", ".json": "json",
+            ".toml": "toml", ".xml": "xml", ".html": "html", ".css": "css",
+            ".md": "markdown", ".sql": "sql", ".r": "r",
+            ".swift": "swift", ".m": "objectivec",
+        }
+        lang = lang_map.get(ext, "")
+
+        char_budget = max_tokens * 4
+        content = raw_content
+        truncated = False
+        if len(content) > char_budget:
+            content = content[:char_budget]
+            truncated = True
+
+        source = f"https://github.com/{match.owner}/{match.repo}/blob/{match.ref}/{match.path}"
+        fm_entries: dict[str, object] = {"source": source, "api": "GitHub (raw)"}
+        if lang:
+            fm_entries["language"] = lang
+        if truncated:
+            fm_entries["truncated"] = f"Content truncated to ~{max_tokens} tokens"
+        rl_warn = _rate_limit_warning()
+        if rl_warn:
+            fm_entries["warning"] = rl_warn
+        fm = _build_frontmatter(fm_entries)
+
+        lines = content.split("\n")
+        width = len(str(len(lines)))
+        numbered = "\n".join(f"{i + 1:>{width}} | {line}" for i, line in enumerate(lines))
+
+        fenced_code = f"```{lang}\n{numbered}\n```"
+        return fm + "\n\n" + _fence_content(fenced_code, title=match.path)
+
+    # --- Tree: directory listing ---
+    if match.kind == "tree" and match.path:
+        query = f"{match.owner}/{match.repo}/{match.path}"
+        return await _action_tree(query, match.ref)
+
+    # --- Issue ---
+    if match.kind == "issue" and match.number:
+        query = f"{match.owner}/{match.repo}#{match.number}"
+        result = await _action_issue(query, limit=100, page=1)
+
+        # Cache issue markdown for search/slicing
+        if not isinstance(result, str) or not result.startswith("Error"):
+            _page_cache.store(url, f"Issue #{match.number}", result, renderer="github")
+
+        return result
+
+    # --- Pull request ---
+    if match.kind == "pull" and match.number:
+        query = f"{match.owner}/{match.repo}#{match.number}"
+        result = await _action_pull_request(query, limit=100, page=1)
+
+        if not isinstance(result, str) or not result.startswith("Error"):
+            _page_cache.store(url, f"PR #{match.number}", result, renderer="github")
+
+        return result
+
+    # --- Repo root ---
+    if match.kind == "repo":
+        query = f"{match.owner}/{match.repo}"
+        return await _action_repo(query)
+
+    # --- Gist ---
+    if match.kind == "gist" and match.gist_id:
+        from .github import _github_request
+        gist_result = await _github_request("GET", f"/gists/{match.gist_id}")
+        if isinstance(gist_result, str):
+            return gist_result
+
+        gist_desc = gist_result.get("description") or "Untitled gist"
+        files = gist_result.get("files", {})
+
+        fm = _build_frontmatter({
+            "source": url,
+            "api": "GitHub",
+            "trust": _TRUST_ADVISORY,
+        })
+
+        parts = []
+        for filename, fdata in files.items():
+            lang = fdata.get("language", "").lower()
+            content = fdata.get("content", "")
+            parts.append(f"## {filename}\n")
+            parts.append(f"```{lang}\n{content}\n```\n")
+
+        body = "\n".join(parts)
+        _page_cache.store(url, gist_desc, body, renderer="github")
+        return fm + "\n\n" + _fence_content(body, title=gist_desc)
+
+    # Matched but unhandled kind (e.g. discussion without implementation)
+    return f"Error: GitHub URL type '{match.kind}' is not yet supported."
+
+
+# ---------------------------------------------------------------------------
 # Shared post-processing
 # ---------------------------------------------------------------------------
 

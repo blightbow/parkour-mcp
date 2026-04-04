@@ -14,7 +14,7 @@ from .markdown import (
 )
 from ._pipeline import (
     _extract_fragment, _normalize_sections, _resolve_fragment_source,
-    _mediawiki_fast_path, _arxiv_fast_path, _s2_fast_path, _doi_fast_path, _reddit_fast_path,
+    _mediawiki_fast_path, _arxiv_fast_path, _s2_fast_path, _doi_fast_path, _reddit_fast_path, _github_fast_path,
     _process_markdown_sections,
     _cached_mediawiki_fetch,
     _page_cache, _search_slices, _get_slices,
@@ -204,6 +204,34 @@ async def web_fetch_direct(
                             frontmatter_entries={
                                 "source": source_url,
                                 "api": "Reddit (.json)",
+                                "warning": fragment_warning,
+                            },
+                            cache_url=url,
+                        )
+                return result
+    except Exception:
+        pass
+
+    # --- GitHub fast path (after Reddit, before MediaWiki) ---
+    try:
+        from .github import _detect_github_url
+        if _detect_github_url(url):
+            result = await _github_fast_path(url, max_tokens)
+            if result is not None:
+                if want_slicing:
+                    return _dispatch_slicing(
+                        url, search, slices,
+                        slices_list if slices is not None else [],
+                        max_tokens, source_url, warning=fragment_warning,
+                    )
+                if section_names:
+                    cached = _page_cache.get(url)
+                    if cached and cached.markdown:
+                        return _process_markdown_sections(
+                            cached.markdown, section_names, max_tokens,
+                            frontmatter_entries={
+                                "source": source_url,
+                                "api": "GitHub",
                                 "warning": fragment_warning,
                             },
                             cache_url=url,
