@@ -352,6 +352,177 @@ async def web_fetch_direct(
     return output
 
 
+async def _github_sections(
+    match, original_url: str, section_names: Optional[list[str]],
+) -> Optional[str]:
+    """Build section listing for GitHub URLs.
+
+    Returns a formatted section list, or None if the URL kind
+    isn't supported for section listing.
+    """
+    from .github import (
+        extract_code_definitions, format_code_sections,
+        _build_issue_markdown, _build_pr_markdown,
+        _get_github_token,
+    )
+    from .common import _FETCH_HEADERS
+    from pathlib import Path
+
+    # --- Blob: code definition tree via tree-sitter ---
+    if match.kind == "blob" and match.ref and match.path:
+        ext = Path(match.path).suffix.lower()
+
+        # Check cache first
+        cached = _page_cache.get(original_url, renderer="github")
+        if cached:
+            source_text = cached.markdown
+        else:
+            # Fetch raw content
+            raw_url = (
+                f"https://raw.githubusercontent.com/"
+                f"{match.owner}/{match.repo}/{match.ref}/{match.path}"
+            )
+            headers = dict(_FETCH_HEADERS)
+            token = _get_github_token()
+            if token:
+                headers["Authorization"] = f"token {token}"
+
+            try:
+                async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+                    resp = await client.get(raw_url, headers=headers)
+                if resp.status_code != 200:
+                    return None
+                source_text = resp.text
+            except Exception:
+                return None
+
+        defs = extract_code_definitions(source_text, ext)
+        if not defs:
+            fm = _build_frontmatter({
+                "source": original_url,
+                "api": "GitHub (raw)",
+                "note": f"No code definitions extracted for {ext} file. "
+                        "Grammar may not be installed, or file has no function/class definitions.",
+                "hint": "Use WebFetchDirect to view the file content directly",
+            })
+            return fm
+
+        section_body = format_code_sections(defs)
+        fm = _build_frontmatter({
+            "source": original_url,
+            "api": "GitHub (raw)",
+            "language": ext.lstrip("."),
+            "definitions": len(defs),
+            "trust": _TRUST_ADVISORY,
+            "hint": "Use WebFetchDirect with section= to extract a specific "
+                    "definition, or search= for BM25 keyword search within the file",
+        })
+        return fm + "\n\n" + _fence_content(section_body, title=match.path)
+
+    # --- Issue: comment tree ---
+    if match.kind == "issue" and match.number:
+        built = await _build_issue_markdown(
+            match.owner, match.repo, match.number, limit=100, page=1,
+        )
+        if isinstance(built, str):
+            return built
+        title, raw_md, state, _ = built
+
+        # Extract comment headings as section tree
+        lines = []
+        for line in raw_md.split("\n"):
+            if line.startswith("### ic_"):
+                lines.append(f"- {line.lstrip('#').strip()}")
+            elif line.startswith("**@") and lines:
+                # Append author info to last entry
+                lines[-1] += f" {line}"
+
+        if not lines:
+            lines.append("(no comments)")
+
+        section_body = "\n".join(lines)
+        fm = _build_frontmatter({
+            "source": f"https://github.com/{match.owner}/{match.repo}/issues/{match.number}",
+            "api": "GitHub",
+            "type": "issue",
+            "state": state,
+            "trust": _TRUST_ADVISORY,
+            "hint": "Use WebFetchDirect with section='ic_<id>' to extract a "
+                    "specific comment, or search= for BM25 keyword search",
+        })
+        return fm + "\n\n" + _fence_content(section_body, title=title)
+
+    # --- Pull request: comment tree ---
+    if match.kind == "pull" and match.number:
+        built = await _build_pr_markdown(
+            match.owner, match.repo, match.number, limit=100, page=1,
+        )
+        if isinstance(built, str):
+            return built
+        title, raw_md, display_state, _ = built
+
+        lines = []
+        for line in raw_md.split("\n"):
+            if line.startswith("## "):
+                # Top-level sections: "Diff stat", "Review comments", "Comments"
+                lines.append(f"\n**{line.lstrip('#').strip()}**")
+            elif line.startswith("### ") and not line.startswith("### ic_"):
+                # File path heading (review comments)
+                lines.append(f"- {line.lstrip('#').strip()}")
+            elif line.startswith("#### rc_"):
+                lines.append(f"  - {line.lstrip('#').strip()}")
+            elif line.startswith("### ic_"):
+                lines.append(f"- {line.lstrip('#').strip()}")
+            elif line.startswith("**@") and lines:
+                lines[-1] += f" {line}"
+
+        if not lines:
+            lines.append("(no comments)")
+
+        section_body = "\n".join(lines).strip()
+        fm = _build_frontmatter({
+            "source": f"https://github.com/{match.owner}/{match.repo}/pull/{match.number}",
+            "api": "GitHub",
+            "type": "pull_request",
+            "state": display_state,
+            "trust": _TRUST_ADVISORY,
+            "hint": "Use WebFetchDirect with section= to extract a file's "
+                    "review thread or specific comment, or search= for BM25 keyword search",
+        })
+        return fm + "\n\n" + _fence_content(section_body, title=title)
+
+    # --- Repo: redirect to GitHub tool ---
+    if match.kind == "repo":
+        fm = _build_frontmatter({
+            "source": original_url,
+            "api": "GitHub",
+            "note": "Section listing is not applicable for repository pages.",
+            "see_also": f"Use GitHub tool with action='repo' query='{match.owner}/{match.repo}' "
+                        "for repo metadata and README, or action='tree' for directory listing",
+        })
+        return fm
+
+    # --- Tree: redirect to GitHub tool ---
+    if match.kind == "tree":
+        query = f"{match.owner}/{match.repo}/{match.path or ''}"
+        fm = _build_frontmatter({
+            "source": original_url,
+            "api": "GitHub",
+            "note": "Section listing is not applicable for directory pages.",
+            "see_also": f"Use GitHub tool with action='tree' query='{query}' "
+                        "for directory listing",
+        })
+        return fm
+
+    # --- Gist, discussion, or unknown: redirect ---
+    fm = _build_frontmatter({
+        "source": original_url,
+        "api": "GitHub",
+        "see_also": "Use the GitHub tool for structured access to this content",
+    })
+    return fm
+
+
 async def web_fetch_sections(url: str) -> str:
     """List the section headings of a web page.
 
@@ -428,6 +599,14 @@ async def web_fetch_sections(url: str) -> str:
             return fm
         except Exception:
             pass
+
+    # --- GitHub fast path ---
+    from .github import _detect_github_url
+    gh_match = _detect_github_url(url)
+    if gh_match is not None:
+        result = await _github_sections(gh_match, original_url, section_names)
+        if result is not None:
+            return result
 
     # --- MediaWiki fast path (uses single-entry cache) ---
     try:
