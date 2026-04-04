@@ -15,11 +15,13 @@ import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Annotated, Optional
 
 import httpx
+from pydantic import Field
 
-from .common import _API_USER_AGENT, RateLimiter
+from .common import _API_USER_AGENT, _FETCH_HEADERS, RateLimiter
+from .markdown import _build_frontmatter, _fence_content, _TRUST_ADVISORY
 
 logger = logging.getLogger(__name__)
 
@@ -337,3 +339,678 @@ def _rate_limit_warning() -> Optional[str]:
             "Set GITHUB_TOKEN for 5000 req/hr."
         )
     return None
+
+
+# ---------------------------------------------------------------------------
+# Query parsing helpers
+# ---------------------------------------------------------------------------
+
+def _parse_owner_repo_number(query: str) -> tuple[str, str, int] | str:
+    """Parse 'owner/repo#number' → (owner, repo, number) or error string."""
+    m = re.match(r"^([^/]+)/([^#]+)#(\d+)$", query.strip())
+    if not m:
+        return f"Error: Expected 'owner/repo#number', got '{query}'."
+    return m.group(1), m.group(2), int(m.group(3))
+
+
+def _parse_owner_repo(query: str) -> tuple[str, str] | str:
+    """Parse 'owner/repo' → (owner, repo) or error string."""
+    parts = query.strip().strip("/").split("/")
+    if len(parts) != 2 or not parts[0] or not parts[1]:
+        return f"Error: Expected 'owner/repo', got '{query}'."
+    return parts[0], parts[1]
+
+
+def _parse_owner_repo_path(query: str) -> tuple[str, str, str] | str:
+    """Parse 'owner/repo/path/to/file' → (owner, repo, path) or error string."""
+    parts = query.strip().strip("/").split("/", 2)
+    if len(parts) < 3 or not parts[0] or not parts[1] or not parts[2]:
+        return f"Error: Expected 'owner/repo/path', got '{query}'."
+    return parts[0], parts[1], parts[2]
+
+
+# ---------------------------------------------------------------------------
+# Formatting helpers
+# ---------------------------------------------------------------------------
+
+def _fmt_relative_time(iso_date: str) -> str:
+    """Format an ISO 8601 timestamp as a relative time string."""
+    from datetime import datetime, timezone
+    try:
+        dt = datetime.fromisoformat(iso_date.replace("Z", "+00:00"))
+        delta = datetime.now(timezone.utc) - dt
+        seconds = int(delta.total_seconds())
+        if seconds < 60:
+            return "just now"
+        if seconds < 3600:
+            m = seconds // 60
+            return f"{m}m ago"
+        if seconds < 86400:
+            h = seconds // 3600
+            return f"{h}h ago"
+        days = seconds // 86400
+        if days < 30:
+            return f"{days}d ago"
+        if days < 365:
+            return f"{days // 30}mo ago"
+        return f"{days // 365}y ago"
+    except Exception:
+        return iso_date
+
+
+def _fmt_labels(labels: list[dict]) -> str:
+    """Format label list as comma-separated names."""
+    return ", ".join(lb["name"] for lb in labels) if labels else ""
+
+
+def _fm_base(source: str, api: str = "GitHub") -> dict:
+    """Build common frontmatter entries."""
+    entries: dict = {"source": source, "api": api}
+    warning = _rate_limit_warning()
+    if warning:
+        entries["warning"] = warning
+    return entries
+
+
+# ---------------------------------------------------------------------------
+# Action: search_issues
+# ---------------------------------------------------------------------------
+
+async def _action_search_issues(
+    query: str, limit: int, page: int,
+) -> str:
+    """Search issues and pull requests across GitHub."""
+    result = await _github_request(
+        "GET", "/search/issues",
+        params={"q": query, "per_page": str(min(limit, 100)), "page": str(page)},
+    )
+    if isinstance(result, str):
+        return result
+
+    items = result.get("items", [])
+    total = result.get("total_count", 0)
+    incomplete = result.get("incomplete_results", False)
+
+    fm_entries = _fm_base(f"https://github.com/search?q={query}&type=issues")
+    fm_entries["total_results"] = total
+    fm_entries["showing"] = f"{len(items)} (page {page})"
+    if incomplete:
+        fm_entries["note"] = "Results may be incomplete (search timed out)"
+    fm = _build_frontmatter(fm_entries)
+
+    if not items:
+        return fm + "\n\nNo results found."
+
+    lines = []
+    for item in items:
+        num = item["number"]
+        title = item["title"]
+        state = item["state"]
+        repo_name = item.get("repository_url", "").rsplit("/", 2)[-2:]
+        repo_str = "/".join(repo_name) if len(repo_name) == 2 else ""
+        labels = _fmt_labels(item.get("labels", []))
+        updated = _fmt_relative_time(item.get("updated_at", ""))
+        kind = "PR" if "pull_request" in item else "Issue"
+        label_str = f" [{labels}]" if labels else ""
+
+        lines.append(f"- **{repo_str}#{num}** ({kind}, {state}) {title}{label_str} — {updated}")
+
+    body = "\n".join(lines)
+    return fm + "\n\n" + _fence_content(body)
+
+
+# ---------------------------------------------------------------------------
+# Action: search_code
+# ---------------------------------------------------------------------------
+
+async def _action_search_code(
+    query: str, limit: int, page: int,
+) -> str:
+    """Search code across GitHub repositories."""
+    result = await _github_request(
+        "GET", "/search/code",
+        params={"q": query, "per_page": str(min(limit, 100)), "page": str(page)},
+        accept="application/vnd.github.text-match+json",
+    )
+    if isinstance(result, str):
+        return result
+
+    items = result.get("items", [])
+    total = result.get("total_count", 0)
+
+    fm_entries = _fm_base(f"https://github.com/search?q={query}&type=code")
+    fm_entries["total_results"] = total
+    fm_entries["showing"] = f"{len(items)} (page {page})"
+    fm = _build_frontmatter(fm_entries)
+
+    if not items:
+        return fm + "\n\nNo results found."
+
+    lines = []
+    for item in items:
+        repo = item.get("repository", {}).get("full_name", "")
+        path = item.get("path", "")
+        # Extract text match fragments if available
+        matches = item.get("text_matches", [])
+        fragments = []
+        for tm in matches[:3]:
+            frag = tm.get("fragment", "").strip().replace("\n", " ")
+            if frag:
+                fragments.append(frag[:120])
+
+        lines.append(f"**{repo}** `{path}`")
+        for frag in fragments:
+            lines.append(f"> {frag}")
+        lines.append("")
+
+    body = "\n".join(lines).rstrip()
+    return fm + "\n\n" + _fence_content(body)
+
+
+# ---------------------------------------------------------------------------
+# Action: repo
+# ---------------------------------------------------------------------------
+
+async def _action_repo(query: str) -> str:
+    """Fetch repository metadata and README."""
+    parsed = _parse_owner_repo(query)
+    if isinstance(parsed, str):
+        return parsed
+    owner, repo = parsed
+
+    result = await _github_request("GET", f"/repos/{owner}/{repo}")
+    if isinstance(result, str):
+        return result
+
+    name = result["full_name"]
+    desc = result.get("description") or "No description"
+    stars = result.get("stargazers_count", 0)
+    forks = result.get("forks_count", 0)
+    lang = result.get("language") or "—"
+    license_info = result.get("license") or {}
+    license_name = license_info.get("spdx_id") or "—"
+    topics = result.get("topics") or []
+    open_issues = result.get("open_issues_count", 0)
+
+    fm_entries = _fm_base(f"https://github.com/{name}")
+    fm = _build_frontmatter(fm_entries)
+
+    parts = [
+        f"# {name}\n",
+        f"**{desc}**\n",
+        f"Stars: {stars:,} | Forks: {forks:,} | Open issues: {open_issues:,}",
+        f"Language: {lang} | License: {license_name}",
+    ]
+    if topics:
+        parts.append(f"Topics: {', '.join(topics)}")
+
+    # Fetch README
+    readme_result = await _github_request(
+        "GET", f"/repos/{owner}/{repo}/readme",
+        accept="application/vnd.github.raw+json",
+    )
+    if isinstance(readme_result, str) and not readme_result.startswith("Error"):
+        parts.append(f"\n## README\n\n{readme_result}")
+    elif isinstance(readme_result, dict):
+        # API returned JSON instead of raw — decode content
+        import base64
+        content = readme_result.get("content", "")
+        if content:
+            try:
+                decoded = base64.b64decode(content).decode("utf-8")
+                parts.append(f"\n## README\n\n{decoded}")
+            except Exception:
+                pass
+
+    body = "\n".join(parts)
+    return fm + "\n\n" + _fence_content(body, title=name)
+
+
+# ---------------------------------------------------------------------------
+# Action: tree
+# ---------------------------------------------------------------------------
+
+async def _action_tree(
+    query: str, ref: Optional[str],
+) -> str:
+    """Fetch directory listing from a repository."""
+    parsed = _parse_owner_repo_path(query)
+    if isinstance(parsed, str):
+        # Might be owner/repo (root directory)
+        parsed2 = _parse_owner_repo(query)
+        if isinstance(parsed2, str):
+            return parsed
+        owner, repo = parsed2
+        path = ""
+    else:
+        owner, repo, path = parsed
+
+    params = {}
+    if ref:
+        params["ref"] = ref
+
+    api_path = f"/repos/{owner}/{repo}/contents/{path}" if path else f"/repos/{owner}/{repo}/contents"
+    result = await _github_request("GET", api_path, params=params)
+    if isinstance(result, str):
+        return result
+    if not isinstance(result, list):
+        return "Error: Expected directory listing but got a file. Use the 'file' action instead."
+
+    source = f"https://github.com/{owner}/{repo}"
+    if path:
+        source += f"/tree/{ref or 'HEAD'}/{path}"
+    fm_entries = _fm_base(source)
+    fm_entries["entries"] = len(result)
+    fm = _build_frontmatter(fm_entries)
+
+    lines = []
+    # Sort: directories first, then files
+    dirs = sorted([e for e in result if e["type"] == "dir"], key=lambda e: e["name"])
+    files = sorted([e for e in result if e["type"] != "dir"], key=lambda e: e["name"])
+    for entry in dirs:
+        lines.append(f"  dir  {entry['name']}/")
+    for entry in files:
+        size = entry.get("size", 0)
+        if size >= 1024 * 1024:
+            size_str = f"{size / (1024 * 1024):.1f}MB"
+        elif size >= 1024:
+            size_str = f"{size / 1024:.1f}KB"
+        else:
+            size_str = f"{size}B"
+        lines.append(f"  file {entry['name']} ({size_str})")
+
+    title = f"{owner}/{repo}/{path}" if path else f"{owner}/{repo}"
+    body = "\n".join(lines)
+    return fm + "\n\n" + _fence_content(body, title=title)
+
+
+# ---------------------------------------------------------------------------
+# Action: issue
+# ---------------------------------------------------------------------------
+
+async def _action_issue(
+    query: str, limit: int, page: int,
+) -> str:
+    """Fetch an issue with comments."""
+    parsed = _parse_owner_repo_number(query)
+    if isinstance(parsed, str):
+        return parsed
+    owner, repo, number = parsed
+
+    # Fetch issue
+    result = await _github_request(
+        "GET", f"/repos/{owner}/{repo}/issues/{number}",
+    )
+    if isinstance(result, str):
+        return result
+
+    title = result["title"]
+    state = result["state"]
+    author = result["user"]["login"]
+    body = result.get("body") or ""
+    created = result.get("created_at", "")
+    labels = _fmt_labels(result.get("labels", []))
+    comment_count = result.get("comments", 0)
+    reactions = result.get("reactions", {})
+    association = result.get("author_association", "")
+
+    fm_entries = _fm_base(f"https://github.com/{owner}/{repo}/issues/{number}")
+    fm_entries["type"] = "issue"
+    fm_entries["state"] = state
+    fm_entries["trust"] = _TRUST_ADVISORY
+    if comment_count > limit:
+        fm_entries["hint"] = f"Showing {limit} of {comment_count} comments. Use page= for more."
+    fm = _build_frontmatter(fm_entries)
+
+    # Build issue body
+    parts = []
+    meta = f"**{owner}/{repo}#{number}** | {state} | {comment_count} comments"
+    parts.append(meta)
+
+    assoc_str = f" ({association})" if association and association != "NONE" else ""
+    parts.append(f"**@{author}**{assoc_str} — {_fmt_relative_time(created)}")
+    if labels:
+        parts.append(f"Labels: {labels}")
+
+    # Reaction summary
+    reaction_parts = []
+    for emoji, key in [
+        ("+1", "👍"), ("-1", "👎"), ("laugh", "😄"), ("hooray", "🎉"),
+        ("confused", "😕"), ("heart", "❤️"), ("rocket", "🚀"), ("eyes", "👀"),
+    ]:
+        count = reactions.get(emoji, 0)
+        if count:
+            reaction_parts.append(f"{key} {count}")
+    if reaction_parts:
+        parts.append(" ".join(reaction_parts))
+
+    parts.append("")
+    if body:
+        parts.append(body)
+
+    # Fetch comments
+    if comment_count > 0:
+        parts.append("\n## Comments\n")
+        comments = await _github_request(
+            "GET", f"/repos/{owner}/{repo}/issues/{number}/comments",
+            params={"per_page": str(min(limit, 100)), "page": str(page)},
+        )
+        if isinstance(comments, list):
+            for c in comments:
+                cid = c["id"]
+                cauthor = c["user"]["login"]
+                cassoc = c.get("author_association", "")
+                cbody = c.get("body") or ""
+                ccreated = c.get("created_at", "")
+                creactions = c.get("reactions", {})
+
+                assoc_tag = f" ({cassoc})" if cassoc and cassoc != "NONE" else ""
+                parts.append(f"### ic_{cid}\n")
+                parts.append(f"**@{cauthor}**{assoc_tag} — {_fmt_relative_time(ccreated)}")
+
+                # Comment reactions
+                cr_parts = []
+                for emoji, key in [
+                    ("+1", "👍"), ("-1", "👎"), ("laugh", "😄"),
+                    ("heart", "❤️"), ("rocket", "🚀"), ("eyes", "👀"),
+                ]:
+                    count = creactions.get(emoji, 0)
+                    if count:
+                        cr_parts.append(f"{key} {count}")
+                if cr_parts:
+                    parts.append(" ".join(cr_parts))
+
+                parts.append("")
+                parts.append(cbody)
+                parts.append("")
+
+    content = "\n".join(parts)
+    return fm + "\n\n" + _fence_content(content, title=title)
+
+
+# ---------------------------------------------------------------------------
+# Action: pull_request
+# ---------------------------------------------------------------------------
+
+async def _action_pull_request(
+    query: str, limit: int, page: int,
+) -> str:
+    """Fetch a pull request with diff stats and review comments."""
+    parsed = _parse_owner_repo_number(query)
+    if isinstance(parsed, str):
+        return parsed
+    owner, repo, number = parsed
+
+    # Fetch PR
+    result = await _github_request(
+        "GET", f"/repos/{owner}/{repo}/pulls/{number}",
+    )
+    if isinstance(result, str):
+        return result
+
+    title = result["title"]
+    state = result["state"]
+    merged = result.get("merged", False)
+    author = result["user"]["login"]
+    body = result.get("body") or ""
+    created = result.get("created_at", "")
+    additions = result.get("additions", 0)
+    deletions = result.get("deletions", 0)
+    changed_files = result.get("changed_files", 0)
+    base = result.get("base", {}).get("ref", "")
+    head = result.get("head", {}).get("ref", "")
+    comment_count = result.get("comments", 0)
+    review_comment_count = result.get("review_comments", 0)
+    labels = _fmt_labels(result.get("labels", []))
+    association = result.get("author_association", "")
+
+    display_state = "merged" if merged else state
+
+    fm_entries = _fm_base(f"https://github.com/{owner}/{repo}/pull/{number}")
+    fm_entries["type"] = "pull_request"
+    fm_entries["state"] = display_state
+    fm_entries["trust"] = _TRUST_ADVISORY
+    fm = _build_frontmatter(fm_entries)
+
+    parts = []
+    meta = f"**{owner}/{repo}#{number}** | {display_state} | {head} → {base}"
+    parts.append(meta)
+
+    assoc_str = f" ({association})" if association and association != "NONE" else ""
+    parts.append(f"**@{author}**{assoc_str} — {_fmt_relative_time(created)}")
+    if labels:
+        parts.append(f"Labels: {labels}")
+
+    parts.append("")
+    if body:
+        parts.append(body)
+
+    # Diff stat
+    parts.append("\n## Diff stat\n")
+    parts.append(f"{changed_files} files changed, +{additions}, -{deletions}")
+
+    # Review comments (grouped by file)
+    if review_comment_count > 0:
+        review_comments = await _github_request(
+            "GET", f"/repos/{owner}/{repo}/pulls/{number}/comments",
+            params={"per_page": str(min(limit, 100)), "page": str(page)},
+        )
+        if isinstance(review_comments, list) and review_comments:
+            # Group by file path
+            by_file: dict[str, list[dict]] = {}
+            for rc in review_comments:
+                path = rc.get("path", "unknown")
+                by_file.setdefault(path, []).append(rc)
+
+            parts.append("\n## Review comments\n")
+            for filepath, comments in by_file.items():
+                parts.append(f"### {filepath}\n")
+                for rc in comments:
+                    rcid = rc["id"]
+                    rcauthor = rc["user"]["login"]
+                    rcbody = rc.get("body") or ""
+                    rccreated = rc.get("created_at", "")
+                    rcassoc = rc.get("author_association", "")
+                    diff_hunk = rc.get("diff_hunk") or ""
+                    line = rc.get("line") or rc.get("original_line")
+                    in_reply = rc.get("in_reply_to_id")
+
+                    reply_tag = f" (reply to rc_{in_reply})" if in_reply else ""
+                    assoc_tag = f" ({rcassoc})" if rcassoc and rcassoc != "NONE" else ""
+                    line_tag = f" L{line}" if line else ""
+
+                    parts.append(f"#### rc_{rcid}{reply_tag}\n")
+                    parts.append(f"**@{rcauthor}**{assoc_tag}{line_tag} — {_fmt_relative_time(rccreated)}")
+
+                    # Include diff hunk context (trimmed)
+                    if diff_hunk and not in_reply:
+                        hunk_lines = diff_hunk.strip().split("\n")
+                        # Show last few lines of context
+                        display_lines = hunk_lines[-6:] if len(hunk_lines) > 6 else hunk_lines
+                        parts.append("```diff")
+                        parts.extend(display_lines)
+                        parts.append("```")
+
+                    parts.append("")
+                    parts.append(rcbody)
+                    parts.append("")
+
+    # Regular comments
+    if comment_count > 0:
+        parts.append("\n## Comments\n")
+        comments = await _github_request(
+            "GET", f"/repos/{owner}/{repo}/issues/{number}/comments",
+            params={"per_page": str(min(limit, 100)), "page": str(page)},
+        )
+        if isinstance(comments, list):
+            for c in comments:
+                cid = c["id"]
+                cauthor = c["user"]["login"]
+                cbody = c.get("body") or ""
+                ccreated = c.get("created_at", "")
+                cassoc = c.get("author_association", "")
+
+                assoc_tag = f" ({cassoc})" if cassoc and cassoc != "NONE" else ""
+                parts.append(f"### ic_{cid}\n")
+                parts.append(f"**@{cauthor}**{assoc_tag} — {_fmt_relative_time(ccreated)}")
+                parts.append("")
+                parts.append(cbody)
+                parts.append("")
+
+    content = "\n".join(parts)
+    return fm + "\n\n" + _fence_content(content, title=title)
+
+
+# ---------------------------------------------------------------------------
+# Action: file
+# ---------------------------------------------------------------------------
+
+async def _action_file(
+    query: str, ref: Optional[str], max_tokens: int = 5000,
+) -> str:
+    """Fetch raw file content from a repository."""
+    parsed = _parse_owner_repo_path(query)
+    if isinstance(parsed, str):
+        return parsed
+    owner, repo, path = parsed
+
+    # Fetch via raw.githubusercontent.com (no API rate limit, no base64)
+    raw_url = f"https://raw.githubusercontent.com/{owner}/{repo}/{ref or 'HEAD'}/{path}"
+    headers = dict(_FETCH_HEADERS)
+    token = _get_github_token()
+    if token:
+        headers["Authorization"] = f"token {token}"
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+            response = await client.get(raw_url, headers=headers)
+    except httpx.TimeoutException:
+        return f"Error: Request timed out for {raw_url}"
+    except httpx.RequestError as e:
+        return f"Error: Request failed - {type(e).__name__}"
+
+    if response.status_code == 404:
+        if not token:
+            return "Error: File not found. If this is a private repo, set GITHUB_TOKEN."
+        return "Error: File not found."
+    if response.status_code != 200:
+        return f"Error: HTTP {response.status_code} for {raw_url}"
+
+    content = response.text
+
+    # Binary detection
+    if "\x00" in content[:8192]:
+        return f"Error: Binary file ({path}). Use the GitHub web UI to view this file."
+
+    # Detect language from extension for code fencing
+    ext = Path(path).suffix.lower() if "." in path else ""
+    lang_map = {
+        ".py": "python", ".js": "javascript", ".ts": "typescript",
+        ".jsx": "javascript", ".tsx": "typescript",
+        ".go": "go", ".rs": "rust", ".rb": "ruby",
+        ".java": "java", ".kt": "kotlin", ".scala": "scala",
+        ".c": "c", ".h": "c", ".cpp": "cpp", ".hpp": "cpp", ".cc": "cpp",
+        ".sh": "bash", ".bash": "bash", ".zsh": "zsh",
+        ".yaml": "yaml", ".yml": "yaml", ".json": "json",
+        ".toml": "toml", ".xml": "xml", ".html": "html", ".css": "css",
+        ".md": "markdown", ".sql": "sql", ".r": "r",
+        ".swift": "swift", ".m": "objectivec",
+    }
+    lang = lang_map.get(ext, "")
+
+    # Truncate if needed
+    char_budget = max_tokens * 4
+    truncated = False
+    if len(content) > char_budget:
+        content = content[:char_budget]
+        truncated = True
+
+    source = f"https://github.com/{owner}/{repo}/blob/{ref or 'HEAD'}/{path}"
+    fm_entries = _fm_base(source, api="GitHub (raw)")
+    if lang:
+        fm_entries["language"] = lang
+    if truncated:
+        fm_entries["truncated"] = f"Content truncated to ~{max_tokens} tokens"
+    fm = _build_frontmatter(fm_entries)
+
+    # Add line numbers
+    lines = content.split("\n")
+    width = len(str(len(lines)))
+    numbered = "\n".join(f"{i + 1:>{width}} | {line}" for i, line in enumerate(lines))
+
+    fenced_code = f"```{lang}\n{numbered}\n```"
+    return fm + "\n\n" + _fence_content(fenced_code, title=path)
+
+
+# ---------------------------------------------------------------------------
+# Main tool dispatch
+# ---------------------------------------------------------------------------
+
+_VALID_ACTIONS = (
+    "search_issues", "search_code", "repo", "tree",
+    "issue", "pull_request", "file",
+)
+
+
+async def github(
+    action: Annotated[str, Field(
+        description=(
+            "The operation to perform. "
+            "search_issues: search issues/PRs by query (supports GitHub qualifiers like repo:, is:, label:). "
+            "search_code: search code across GitHub (supports qualifiers like repo:, language:, path:). "
+            "issue: get issue details + comments by owner/repo#number. "
+            "pull_request: get PR details + review comments + diff stat by owner/repo#number. "
+            "file: get file content from a repo (use ref= for branch/tag). "
+            "repo: get repo metadata + README. "
+            "tree: get directory listing."
+        ),
+    )],
+    query: Annotated[str, Field(
+        description=(
+            "For search_issues/search_code: search query with optional GitHub qualifiers. "
+            "For issue/pull_request: 'owner/repo#number' (e.g. 'facebook/react#1234'). "
+            "For file/tree: 'owner/repo/path' (e.g. 'facebook/react/packages/react/src/React.js'). "
+            "For repo: 'owner/repo' (e.g. 'facebook/react')."
+        ),
+    )],
+    ref: Annotated[Optional[str], Field(
+        description="Git ref (branch, tag, or commit SHA) for file/tree actions. Defaults to the repo's default branch.",
+    )] = None,
+    limit: Annotated[int, Field(
+        description="Maximum results to return (default 10, max 100).",
+    )] = 10,
+    page: Annotated[int, Field(
+        description="Page number for pagination (1-indexed).",
+    )] = 1,
+) -> str:
+    """Search and retrieve code, issues, and pull requests from GitHub."""
+    action = action.strip().lower()
+
+    if action not in _VALID_ACTIONS:
+        return (
+            f"Error: Unknown action '{action}'. "
+            f"Valid actions: {', '.join(_VALID_ACTIONS)}"
+        )
+
+    # Auto-detect URLs in query for issue/PR actions
+    if action in ("issue", "pull_request"):
+        match = _detect_github_url(query.strip())
+        if match and match.kind in ("issue", "pull") and match.number:
+            query = f"{match.owner}/{match.repo}#{match.number}"
+
+    if action == "search_issues":
+        return await _action_search_issues(query, limit, page)
+    if action == "search_code":
+        return await _action_search_code(query, limit, page)
+    if action == "repo":
+        return await _action_repo(query)
+    if action == "tree":
+        return await _action_tree(query, ref)
+    if action == "issue":
+        return await _action_issue(query, limit, page)
+    if action == "pull_request":
+        return await _action_pull_request(query, limit, page)
+    if action == "file":
+        return await _action_file(query, ref)
+
+    return f"Error: Action '{action}' not implemented."
