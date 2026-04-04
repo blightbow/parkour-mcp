@@ -387,6 +387,454 @@ class TestWebFetchDirectFragmentExtraction:
         assert "│ ## Second Section" in result
 
 
+SAMPLE_PYTHON_FILE = """\
+import os
+import sys
+
+def hello():
+    print("hello")
+
+def greet(name):
+    print(f"hello {name}")
+
+class MyApp:
+    def __init__(self):
+        self.running = False
+
+    def start(self):
+        self.running = True
+
+    def stop(self):
+        self.running = False
+
+if __name__ == "__main__":
+    app = MyApp()
+    app.start()
+"""
+
+
+class TestWebFetchDirectGitHubLineAnchors:
+    """Tests for GitHub #L45 and #L45-L100 line anchor handling."""
+
+    @pytest.fixture(autouse=True)
+    def _clear_caches(self):
+        yield
+        _page_cache.clear()
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_single_line_anchor(self):
+        """#L4 should return just line 4."""
+        respx.get(
+            "https://raw.githubusercontent.com/owner/repo/main/app.py"
+        ).mock(return_value=httpx.Response(200, text=SAMPLE_PYTHON_FILE))
+
+        result = await web_fetch_direct(
+            "https://github.com/owner/repo/blob/main/app.py#L4"
+        )
+        assert "lines: 4-4 of" in result
+        assert "4 | def hello():" in result
+        # Should NOT contain surrounding lines
+        assert "import os" not in result
+        assert "def greet" not in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_line_range_anchor(self):
+        """#L4-L6 should return lines 4 through 6."""
+        respx.get(
+            "https://raw.githubusercontent.com/owner/repo/main/app.py"
+        ).mock(return_value=httpx.Response(200, text=SAMPLE_PYTHON_FILE))
+
+        result = await web_fetch_direct(
+            "https://github.com/owner/repo/blob/main/app.py#L4-L6"
+        )
+        assert "lines: 4-6 of" in result
+        assert "4 | def hello():" in result
+        assert '5 |     print("hello")' in result
+        assert "6 |" in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_line_range_beyond_file_returns_error(self):
+        """#L9000-L9999 on a short file should return an error."""
+        respx.get(
+            "https://raw.githubusercontent.com/owner/repo/main/app.py"
+        ).mock(return_value=httpx.Response(200, text=SAMPLE_PYTHON_FILE))
+
+        result = await web_fetch_direct(
+            "https://github.com/owner/repo/blob/main/app.py#L9000-L9999"
+        )
+        assert "Error:" in result
+        assert "9000" in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_line_range_partial_overlap_warns(self):
+        """#L20-L100 on a 23-line file should clamp with a warning."""
+        respx.get(
+            "https://raw.githubusercontent.com/owner/repo/main/app.py"
+        ).mock(return_value=httpx.Response(200, text=SAMPLE_PYTHON_FILE))
+
+        result = await web_fetch_direct(
+            "https://github.com/owner/repo/blob/main/app.py#L20-L100"
+        )
+        assert "lines: 20-23 of" in result
+        assert "warning:" in result
+        assert "file ends at line 23" in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_line_range_reversed_returns_error(self):
+        """#L100-L50 should return an error for reversed range."""
+        respx.get(
+            "https://raw.githubusercontent.com/owner/repo/main/app.py"
+        ).mock(return_value=httpx.Response(200, text=SAMPLE_PYTHON_FILE))
+
+        result = await web_fetch_direct(
+            "https://github.com/owner/repo/blob/main/app.py#L100-L50"
+        )
+        assert "Error:" in result
+        assert "Invalid line range" in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_line_anchor_not_treated_as_section(self):
+        """#L45 should not produce sections_not_found."""
+        respx.get(
+            "https://raw.githubusercontent.com/owner/repo/main/app.py"
+        ).mock(return_value=httpx.Response(200, text=SAMPLE_PYTHON_FILE))
+
+        result = await web_fetch_direct(
+            "https://github.com/owner/repo/blob/main/app.py#L1"
+        )
+        assert "sections_not_found" not in result
+        assert "lines: 1-1 of" in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_non_line_fragment_still_becomes_section(self):
+        """#some-heading should still be treated as section request."""
+        respx.get("https://example.com/page").mock(
+            return_value=httpx.Response(
+                200,
+                text=SAMPLE_HTML_PAGE,
+                headers={"content-type": "text/html"},
+            )
+        )
+
+        result = await web_fetch_direct("https://example.com/page#second-section")
+        assert "│ ## Second Section" in result
+
+
+class TestWebFetchDirectRawGitHub:
+    """Tests for raw.githubusercontent.com routing through GitHub fast path."""
+
+    @pytest.fixture(autouse=True)
+    def _clear_caches(self):
+        yield
+        _page_cache.clear()
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_raw_github_gets_line_numbers(self):
+        """raw.githubusercontent.com URLs should get line-numbered output."""
+        respx.get(
+            "https://raw.githubusercontent.com/owner/repo/main/app.py"
+        ).mock(return_value=httpx.Response(200, text=SAMPLE_PYTHON_FILE))
+
+        result = await web_fetch_direct(
+            "https://raw.githubusercontent.com/owner/repo/main/app.py"
+        )
+        assert "api: GitHub (raw)" in result
+        assert "1 | import os" in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_raw_github_populates_cache(self):
+        """raw.githubusercontent.com should populate the page cache."""
+        respx.get(
+            "https://raw.githubusercontent.com/owner/repo/main/app.py"
+        ).mock(return_value=httpx.Response(200, text=SAMPLE_PYTHON_FILE))
+
+        await web_fetch_direct(
+            "https://raw.githubusercontent.com/owner/repo/main/app.py"
+        )
+        cached = _page_cache.get(
+            "https://raw.githubusercontent.com/owner/repo/main/app.py"
+        )
+        assert cached is not None
+
+
+class TestWebFetchDirectGitHubWiki:
+    """Tests for GitHub wiki page handling."""
+
+    @pytest.fixture(autouse=True)
+    def _clear_caches(self):
+        yield
+        _page_cache.clear()
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_wiki_page_fetched(self):
+        """Wiki page should be fetched as raw markdown."""
+        respx.get(
+            "https://raw.githubusercontent.com/wiki/owner/repo/Getting-Started.md"
+        ).mock(return_value=httpx.Response(200, text="# Getting Started\n\nWelcome!"))
+
+        result = await web_fetch_direct(
+            "https://github.com/owner/repo/wiki/Getting-Started"
+        )
+        assert "api: GitHub (wiki)" in result
+        assert "Welcome!" in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_wiki_root_defaults_to_home(self):
+        """Wiki root URL should fetch Home.md."""
+        route = respx.get(
+            "https://raw.githubusercontent.com/wiki/owner/repo/Home.md"
+        ).mock(return_value=httpx.Response(200, text="# Home\n\nWiki home page."))
+
+        result = await web_fetch_direct("https://github.com/owner/repo/wiki")
+        assert route.called
+        assert "Wiki home page" in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_wiki_page_404(self):
+        """Missing wiki page should return clean error naming the page."""
+        respx.get(
+            "https://raw.githubusercontent.com/wiki/owner/repo/Nonexistent.md"
+        ).mock(return_value=httpx.Response(404))
+
+        result = await web_fetch_direct(
+            "https://github.com/owner/repo/wiki/Nonexistent"
+        )
+        assert "Error:" in result
+        assert "Nonexistent" in result
+        assert "not found" in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_wiki_root_404_no_wiki(self):
+        """Wiki root 404 should report that the wiki doesn't exist."""
+        respx.get(
+            "https://raw.githubusercontent.com/wiki/owner/repo/Home.md"
+        ).mock(return_value=httpx.Response(404))
+
+        result = await web_fetch_direct("https://github.com/owner/repo/wiki")
+        assert "Error:" in result
+        assert "does not have a wiki" in result
+
+
+class TestWebFetchDirectGitHubCommit:
+    """Tests for GitHub commit handling."""
+
+    @pytest.fixture(autouse=True)
+    def _clear_caches(self):
+        yield
+        _page_cache.clear()
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_commit_rendered(self):
+        """Commit URL should render via API."""
+        respx.get("https://api.github.com/repos/owner/repo/commits/abc1234").mock(
+            return_value=httpx.Response(200, json={
+                "sha": "abc1234def5678",
+                "commit": {
+                    "message": "Fix the widget\n\nLonger description here.",
+                    "author": {"name": "Alice", "date": "2026-01-15T10:00:00Z"},
+                },
+                "stats": {"total": 5, "additions": 3, "deletions": 2},
+                "files": [
+                    {"filename": "widget.py", "status": "modified", "additions": 3, "deletions": 2},
+                ],
+            })
+        )
+
+        result = await web_fetch_direct(
+            "https://github.com/owner/repo/commit/abc1234"
+        )
+        assert "type: commit" in result
+        assert "Alice" in result
+        assert "Fix the widget" in result
+        assert "widget.py" in result
+
+
+class TestWebFetchDirectGitHubCompare:
+    """Tests for GitHub compare handling."""
+
+    @pytest.fixture(autouse=True)
+    def _clear_caches(self):
+        yield
+        _page_cache.clear()
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_compare_rendered(self):
+        """Compare URL should render via API."""
+        respx.get("https://api.github.com/repos/owner/repo/compare/v1.0...v2.0").mock(
+            return_value=httpx.Response(200, json={
+                "status": "ahead",
+                "base_commit": {"sha": "aaa1111"},
+                "commits": [
+                    {"sha": "bbb2222", "commit": {"message": "Add feature"}},
+                    {"sha": "ccc3333", "commit": {"message": "Fix bug"}},
+                ],
+                "files": [
+                    {"filename": "app.py", "status": "modified", "additions": 10, "deletions": 3},
+                ],
+            })
+        )
+
+        result = await web_fetch_direct(
+            "https://github.com/owner/repo/compare/v1.0...v2.0"
+        )
+        assert "type: compare" in result
+        assert "status: ahead" in result
+        assert "Add feature" in result
+        assert "app.py" in result
+
+
+class TestWebFetchDirectGitHubUnsupported:
+    """Tests for unsupported GitHub paths returning clean errors."""
+
+    @pytest.fixture(autouse=True)
+    def _clear_caches(self):
+        yield
+        _page_cache.clear()
+
+    @pytest.mark.asyncio
+    async def test_blame_returns_error(self):
+        result = await web_fetch_direct(
+            "https://github.com/owner/repo/blame/main/src/app.py"
+        )
+        assert "Error:" in result
+        assert "Blame" in result
+
+    @pytest.mark.asyncio
+    async def test_actions_returns_error(self):
+        result = await web_fetch_direct(
+            "https://github.com/owner/repo/actions"
+        )
+        assert "Error:" in result
+
+
+class TestWebFetchDirectGitHubOrg:
+    """Tests for GitHub org/user profile handling."""
+
+    @pytest.fixture(autouse=True)
+    def _clear_caches(self):
+        yield
+        _page_cache.clear()
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_org_profile(self):
+        """Org URL should render profile with repo list."""
+        respx.get("https://api.github.com/orgs/myorg").mock(
+            return_value=httpx.Response(200, json={
+                "name": "My Organization",
+                "description": "Building cool stuff",
+                "public_repos": 42,
+            })
+        )
+        respx.get("https://api.github.com/orgs/myorg/repos").mock(
+            return_value=httpx.Response(200, json=[
+                {"name": "project-a", "description": "Main project", "stargazers_count": 100, "language": "Python"},
+                {"name": "project-b", "description": None, "stargazers_count": 5, "language": "Go"},
+            ])
+        )
+
+        result = await web_fetch_direct("https://github.com/myorg")
+        assert "type: organization" in result
+        assert "My Organization" in result
+        assert "project-a" in result
+        assert "100" in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_user_profile_fallback(self):
+        """Personal account should fall back to /users/ endpoint."""
+        respx.get("https://api.github.com/orgs/someuser").mock(
+            return_value=httpx.Response(404, json={"message": "Not Found"})
+        )
+        respx.get("https://api.github.com/users/someuser").mock(
+            return_value=httpx.Response(200, json={
+                "name": "Some User",
+                "bio": "Developer",
+                "public_repos": 10,
+            })
+        )
+        respx.get("https://api.github.com/users/someuser/repos").mock(
+            return_value=httpx.Response(200, json=[])
+        )
+
+        result = await web_fetch_direct("https://github.com/someuser")
+        assert "type: user" in result
+        assert "Some User" in result
+
+    @pytest.mark.asyncio
+    async def test_system_page_not_intercepted(self):
+        """System pages like /explore should not be intercepted."""
+        from kagi_research_mcp.github import _detect_github_url
+        assert _detect_github_url("https://github.com/explore") is None
+        assert _detect_github_url("https://github.com/settings") is None
+
+
+class TestWebFetchDirectGitHubReleases:
+    """Tests for GitHub releases handling."""
+
+    @pytest.fixture(autouse=True)
+    def _clear_caches(self):
+        yield
+        _page_cache.clear()
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_releases_list(self):
+        """Releases list URL should render recent releases."""
+        respx.get("https://api.github.com/repos/owner/repo/releases").mock(
+            return_value=httpx.Response(200, json=[
+                {"tag_name": "v2.0", "name": "Version 2.0", "published_at": "2026-03-01T00:00:00Z", "prerelease": False},
+                {"tag_name": "v1.0", "name": "Version 1.0", "published_at": "2026-01-01T00:00:00Z", "prerelease": False},
+            ])
+        )
+
+        result = await web_fetch_direct("https://github.com/owner/repo/releases")
+        assert "type: releases" in result
+        assert "Version 2.0" in result
+        assert "v2.0" in result
+        assert "hint:" in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_release_tag(self):
+        """Specific tag URL should render full release notes."""
+        respx.get("https://api.github.com/repos/owner/repo/releases/tags/v2.0").mock(
+            return_value=httpx.Response(200, json={
+                "name": "Version 2.0",
+                "tag_name": "v2.0",
+                "body": "## What's new\n\n- Feature A\n- Feature B",
+                "published_at": "2026-03-01T00:00:00Z",
+                "author": {"login": "maintainer"},
+                "prerelease": False,
+                "assets": [
+                    {"name": "release.tar.gz", "size": 5242880, "download_count": 1000},
+                ],
+            })
+        )
+
+        result = await web_fetch_direct("https://github.com/owner/repo/releases/tag/v2.0")
+        assert "type: release" in result
+        assert "Version 2.0" in result
+        assert "Feature A" in result
+        assert "release.tar.gz" in result
+        assert "1,000 downloads" in result
+
+
 class TestWebFetchSections:
     """Tests for the web_fetch_sections tool."""
 

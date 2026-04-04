@@ -138,7 +138,7 @@ def check_url_ssrf(url: str) -> str | None:
         return None  # DNS failure — let httpx handle and report the error
 
     for family, _, _, _, sockaddr in addrinfos:
-        addr = sockaddr[0]
+        addr = str(sockaddr[0])
         if _is_private_ip(addr):
             _logger.debug("SSRF block: %s resolved to private address %s", hostname, addr)
             return f"Error: Blocked request to private/reserved address ({hostname} -> {addr})."

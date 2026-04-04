@@ -41,7 +41,7 @@ API integration modules (each ~300-650 LOC, self-contained):
 - **`doi.py`** — DOI resolution via content negotiation. Registration agency detection. DataCite enrichment (ORCID, affiliations, licenses).
 - **`mediawiki.py`** — Wikipedia/MediaWiki API. Probes for api.php endpoint. Full-page fetch with downstream section filtering.
 - **`reddit.py`** — Reddit fast path via `old.reddit.com` `.json` endpoint. URL rewriting, comment tree parsing, section-based comment navigation. 2s rate limit.
-- **`github.py`** — GitHub REST API integration. 7 actions (search_issues, search_code, repo, tree, issue, pull_request, file). Three-tier auth (env → config file → unauthenticated). Per-resource rate limit tracking. URL detection for fast-path chain. Source code sectionization via tree-sitter CodeSplitter. CITATION.cff parsing for research shelf integration. ~1500 LOC.
+- **`github.py`** — GitHub REST API integration. 7 tool actions (search_issues, search_code, repo, tree, issue, pull_request, file). Three-tier auth (env → config file → unauthenticated). Per-resource rate limit tracking. URL detection for fast-path chain covering blob (with line anchors), tree, issue, PR, wiki, commit, compare, releases, org/user profiles, gist, and `raw.githubusercontent.com`. Source code sectionization via tree-sitter CodeSplitter. CITATION.cff parsing for research shelf integration. ~1600 LOC.
 - **`common.py`** — Shared constants: dual User-Agent strategy (browser UA for HTML, API UA for structured endpoints), `RateLimiter` class, `_LANGUAGE_MAP` for file extension → syntax highlight language.
 
 ### Key Concepts

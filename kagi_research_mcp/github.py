@@ -230,7 +230,7 @@ async def _github_request(
 @dataclass
 class GitHubUrlMatch:
     """Parsed components of a GitHub URL."""
-    kind: str  # "blob", "tree", "issue", "pull", "discussion", "repo", "gist"
+    kind: str  # "blob", "tree", "issue", "pull", "discussion", "repo", "gist", "wiki", "commit", "compare"
     owner: str = ""
     repo: str = ""
     number: Optional[int] = None
@@ -251,10 +251,21 @@ _TREE_RE = re.compile(r"^tree/([^/]+)/(.+)$")
 _ISSUE_RE = re.compile(r"^issues/(\d+)(?:/.*)?$")
 _PULL_RE = re.compile(r"^pull/(\d+)(?:/.*)?$")
 _DISCUSSION_RE = re.compile(r"^discussions/(\d+)(?:/.*)?$")
+_WIKI_RE = re.compile(r"^wiki(?:/(.+))?$")
+_COMMIT_RE = re.compile(r"^commit/([0-9a-f]{7,40})$", re.IGNORECASE)
+_COMPARE_RE = re.compile(r"^compare/(.+)$")
+_BLAME_RE = re.compile(r"^blame/([^/]+)/(.+)$")
 
 # Gist URL
 _GIST_URL_RE = re.compile(
     r"https?://gist\.github\.com/(?:[^/]+/)?([0-9a-f]+)",
+    re.IGNORECASE,
+)
+
+# raw.githubusercontent.com — maps to blob kind
+# Format: raw.githubusercontent.com/{owner}/{repo}/{ref}/{path}
+_RAW_GH_RE = re.compile(
+    r"https?://raw\.githubusercontent\.com/([^/]+)/([^/]+)/([^/]+)/(.+)$",
     re.IGNORECASE,
 )
 
@@ -269,10 +280,37 @@ def _detect_github_url(url: str) -> Optional[GitHubUrlMatch]:
     discussion URLs when no GITHUB_TOKEN is configured, allowing them to
     fall through to generic HTTP fetch rather than silently failing.
     """
+    # raw.githubusercontent.com → blob
+    m = _RAW_GH_RE.match(url)
+    if m:
+        return GitHubUrlMatch(
+            kind="blob", owner=m.group(1), repo=m.group(2),
+            ref=m.group(3), path=m.group(4),
+        )
+
     # Gist
     m = _GIST_URL_RE.match(url)
     if m:
         return GitHubUrlMatch(kind="gist", gist_id=m.group(1))
+
+    # Org/user profile: github.com/{name} (single path segment, no repo)
+    _ORG_RE = re.compile(
+        r"https?://github\.com/([a-zA-Z0-9](?:[a-zA-Z0-9\-]*[a-zA-Z0-9])?)/?$",
+        re.IGNORECASE,
+    )
+    om = _ORG_RE.match(url)
+    if om:
+        name = om.group(1).lower()
+        # Exclude GitHub system pages
+        if name not in (
+            "settings", "orgs", "marketplace", "explore",
+            "topics", "trending", "collections", "sponsors",
+            "features", "security", "enterprise", "pricing",
+            "login", "signup", "join", "new", "about",
+            "readme", "codespaces", "copilot", "issues",
+            "pulls", "discussions", "notifications",
+        ):
+            return GitHubUrlMatch(kind="org", owner=om.group(1))
 
     # Main github.com
     m = _GITHUB_URL_RE.match(url)
@@ -330,6 +368,48 @@ def _detect_github_url(url: str) -> Optional[GitHubUrlMatch]:
             kind="discussion", owner=owner, repo=repo,
             number=int(dm.group(1)),
         )
+
+    # Wiki
+    wm = _WIKI_RE.match(rest)
+    if wm:
+        return GitHubUrlMatch(
+            kind="wiki", owner=owner, repo=repo,
+            path=wm.group(1),  # page name or None for wiki root
+        )
+
+    # Commit
+    cm = _COMMIT_RE.match(rest)
+    if cm:
+        return GitHubUrlMatch(
+            kind="commit", owner=owner, repo=repo,
+            ref=cm.group(1),
+        )
+
+    # Compare
+    cpm = _COMPARE_RE.match(rest)
+    if cpm:
+        return GitHubUrlMatch(
+            kind="compare", owner=owner, repo=repo,
+            path=cpm.group(1),  # "base...head" spec
+        )
+
+    # Blame (detected so we can give a clean error)
+    blm = _BLAME_RE.match(rest)
+    if blm:
+        return GitHubUrlMatch(
+            kind="blame", owner=owner, repo=repo,
+            ref=blm.group(1), path=blm.group(2),
+        )
+
+    # Releases — preserve sub-path for tag dispatch
+    if rest == "releases" or rest.startswith("releases/"):
+        sub = rest[len("releases/"):] if "/" in rest else None
+        return GitHubUrlMatch(kind="releases", owner=owner, repo=repo, path=sub)
+
+    # Paths that produce broken HTML if we fall through — detect and error cleanly
+    for prefix in ("actions", "projects"):
+        if rest == prefix or rest.startswith(prefix + "/"):
+            return GitHubUrlMatch(kind=prefix, owner=owner, repo=repo)
 
     return None
 

@@ -87,6 +87,77 @@ class TestDetectGithubUrl:
         m = _detect_github_url("http://github.com/owner/repo/issues/1")
         assert m is not None and m.kind == "issue"
 
+    def test_raw_githubusercontent(self):
+        m = _detect_github_url(
+            "https://raw.githubusercontent.com/owner/repo/main/src/app.py"
+        )
+        assert m is not None and m.kind == "blob"
+        assert m.owner == "owner" and m.repo == "repo"
+        assert m.ref == "main" and m.path == "src/app.py"
+
+    def test_raw_githubusercontent_nested_path(self):
+        m = _detect_github_url(
+            "https://raw.githubusercontent.com/org/project/v2.0/deep/nested/file.txt"
+        )
+        assert m is not None and m.kind == "blob"
+        assert m.ref == "v2.0" and m.path == "deep/nested/file.txt"
+
+    def test_raw_githubusercontent_http(self):
+        m = _detect_github_url(
+            "http://raw.githubusercontent.com/owner/repo/main/file.py"
+        )
+        assert m is not None and m.kind == "blob"
+
+    def test_wiki_page(self):
+        m = _detect_github_url("https://github.com/owner/repo/wiki/Getting-Started")
+        assert m is not None and m.kind == "wiki"
+        assert m.owner == "owner" and m.repo == "repo"
+        assert m.path == "Getting-Started"
+
+    def test_wiki_root(self):
+        m = _detect_github_url("https://github.com/owner/repo/wiki")
+        assert m is not None and m.kind == "wiki"
+        assert m.path is None  # defaults to Home at fetch time
+
+    def test_commit(self):
+        m = _detect_github_url(
+            "https://github.com/owner/repo/commit/abc1234def5678"
+        )
+        assert m is not None and m.kind == "commit"
+        assert m.ref == "abc1234def5678"
+
+    def test_commit_short_sha(self):
+        m = _detect_github_url("https://github.com/owner/repo/commit/abc1234")
+        assert m is not None and m.kind == "commit"
+
+    def test_compare(self):
+        m = _detect_github_url("https://github.com/owner/repo/compare/v1.0...v2.0")
+        assert m is not None and m.kind == "compare"
+        assert m.path == "v1.0...v2.0"
+
+    def test_blame(self):
+        m = _detect_github_url(
+            "https://github.com/owner/repo/blame/main/src/app.py"
+        )
+        assert m is not None and m.kind == "blame"
+        assert m.ref == "main" and m.path == "src/app.py"
+
+    def test_releases(self):
+        m = _detect_github_url("https://github.com/owner/repo/releases")
+        assert m is not None and m.kind == "releases"
+
+    def test_releases_tag(self):
+        m = _detect_github_url("https://github.com/owner/repo/releases/tag/v1.0")
+        assert m is not None and m.kind == "releases"
+
+    def test_actions(self):
+        m = _detect_github_url("https://github.com/owner/repo/actions")
+        assert m is not None and m.kind == "actions"
+
+    def test_projects(self):
+        m = _detect_github_url("https://github.com/owner/repo/projects")
+        assert m is not None and m.kind == "projects"
+
 
 # ---------------------------------------------------------------------------
 # Query parsing

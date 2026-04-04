@@ -573,7 +573,10 @@ async def _reddit_fast_path(url: str, max_tokens: int = 5000) -> Optional[str]:
 # GitHub fast path
 # ---------------------------------------------------------------------------
 
-async def _github_fast_path(url: str, max_tokens: int = 5000) -> Optional[str]:
+async def _github_fast_path(
+    url: str, max_tokens: int = 5000,
+    line_range: Optional[tuple[int, int]] = None,
+) -> Optional[str]:
     """Attempt to handle a GitHub URL via the API or raw.githubusercontent.com.
 
     Returns formatted content on success, or None if not a GitHub URL.
@@ -581,14 +584,20 @@ async def _github_fast_path(url: str, max_tokens: int = 5000) -> Optional[str]:
     fallback to generic HTTP fetch (which hits GitHub's JS-heavy SPA).
 
     Populates ``_page_cache`` for slicing/search support.
+
+    Args:
+        line_range: Optional (start, end) 1-based inclusive line range for
+            blob URLs.  Extracted from ``#L45`` or ``#L45-L100`` fragments.
     """
     from .github import (
         _detect_github_url, _action_repo, _action_tree,
         _build_issue_markdown, _build_pr_markdown,
         _sectionize_code, _split_github_comments,
-        _rate_limit_warning,
+        _rate_limit_warning, _get_github_token,
     )
+    from .common import _FETCH_HEADERS
     from pathlib import Path
+    import httpx
 
     match = _detect_github_url(url)
     if match is None:
@@ -596,9 +605,6 @@ async def _github_fast_path(url: str, max_tokens: int = 5000) -> Optional[str]:
 
     # --- Blob: raw file fetch (single request, shared between cache and response) ---
     if match.kind == "blob" and match.ref and match.path:
-        from .github import _get_github_token
-        from .common import _FETCH_HEADERS
-        import httpx
 
         raw_url = f"https://raw.githubusercontent.com/{match.owner}/{match.repo}/{match.ref}/{match.path}"
         headers = dict(_FETCH_HEADERS)
@@ -627,6 +633,10 @@ async def _github_fast_path(url: str, max_tokens: int = 5000) -> Optional[str]:
         if "\x00" in raw_content[:8192]:
             return f"Error: Binary file ({match.path}). Use the GitHub web UI to view this file."
 
+        # Empty file
+        if not raw_content.strip():
+            return f"Empty file ({match.path})."
+
         # Cache with code-aware presplit
         ext = Path(match.path).suffix.lower()
         presplit = _sectionize_code(raw_content, ext)
@@ -650,16 +660,49 @@ async def _github_fast_path(url: str, max_tokens: int = 5000) -> Optional[str]:
         fm_entries: dict[str, object] = {"source": source, "api": "GitHub (raw)"}
         if lang:
             fm_entries["language"] = lang
-        if truncated:
-            fm_entries["truncated"] = f"Content truncated to ~{max_tokens} tokens"
+
+        all_lines = content.split("\n")
+        total_lines = len(all_lines)
+
+        # Apply line range if specified (1-based inclusive)
+        if line_range:
+            req_start, req_end = line_range
+            if req_start > req_end:
+                return (
+                    f"Error: Invalid line range L{req_start}-L{req_end} "
+                    f"(start must not exceed end)."
+                )
+            if req_start > total_lines:
+                return (
+                    f"Error: Requested lines {req_start}-{req_end} "
+                    f"but file has only {total_lines} lines."
+                )
+            start = max(1, req_start)
+            end = min(req_end, total_lines)
+            display_lines = all_lines[start - 1:end]
+            line_offset = start
+            fm_entries["lines"] = f"{start}-{end} of {total_lines}"
+            if req_end > total_lines:
+                fm_entries["warning"] = (
+                    f"Requested lines {req_start}-{req_end} "
+                    f"but file ends at line {total_lines}"
+                )
+        else:
+            if truncated:
+                fm_entries["truncated"] = f"Content truncated to ~{max_tokens} tokens"
+            display_lines = all_lines
+            line_offset = 1
+
         rl_warn = _rate_limit_warning()
         if rl_warn:
             fm_entries["warning"] = rl_warn
         fm = _build_frontmatter(fm_entries)
 
-        lines = content.split("\n")
-        width = len(str(len(lines)))
-        numbered = "\n".join(f"{i + 1:>{width}} | {line}" for i, line in enumerate(lines))
+        width = len(str(line_offset + len(display_lines) - 1))
+        numbered = "\n".join(
+            f"{i + line_offset:>{width}} | {line}"
+            for i, line in enumerate(display_lines)
+        )
 
         fenced_code = f"```{lang}\n{numbered}\n```"
         return fm + "\n\n" + _fence_content(fenced_code, title=match.path)
@@ -772,7 +815,300 @@ async def _github_fast_path(url: str, max_tokens: int = 5000) -> Optional[str]:
         _page_cache.store(url, gist_desc, body, renderer="github")
         return fm + "\n\n" + _fence_content(body, title=gist_desc)
 
-    # Matched but unhandled kind (e.g. discussion without implementation)
+    # --- Org/user profile ---
+    if match.kind == "org":
+        from .github import _github_request
+
+        org_result = await _github_request("GET", f"/orgs/{match.owner}")
+        # Fall back to user endpoint if orgs/ returns error (personal accounts)
+        is_user = False
+        if isinstance(org_result, str):
+            org_result = await _github_request("GET", f"/users/{match.owner}")
+            if isinstance(org_result, str):
+                return org_result
+            is_user = True
+        assert isinstance(org_result, dict)
+
+        repos_result = await _github_request(
+            "GET",
+            f"/{'users' if is_user else 'orgs'}/{match.owner}/repos",
+            params={"sort": "pushed", "per_page": "30"},
+        )
+        repos = repos_result if isinstance(repos_result, list) else []
+
+        name = org_result.get("name") or match.owner
+        desc = org_result.get("description") or org_result.get("bio") or ""
+        public_repos = org_result.get("public_repos", 0)
+        profile_type = "User" if is_user else "Organization"
+
+        parts = [f"**{name}** — {profile_type}"]
+        if desc:
+            parts.append(f"\n{desc}")
+        parts.append(f"\nPublic repositories: {public_repos}")
+        parts.append("")
+
+        if repos:
+            parts.append("### Recently active repositories")
+            parts.append("")
+            for r in repos:
+                stars = r.get("stargazers_count", 0)
+                lang = r.get("language") or ""
+                rdesc = r.get("description") or ""
+                star_str = f" | {stars:,} stars" if stars else ""
+                lang_str = f" | {lang}" if lang else ""
+                line = f"- **{r['name']}**{lang_str}{star_str}"
+                if rdesc:
+                    line += f" — {rdesc}"
+                parts.append(line)
+
+        fm = _build_frontmatter({
+            "source": f"https://github.com/{match.owner}",
+            "api": "GitHub",
+            "type": profile_type.lower(),
+            "trust": _TRUST_ADVISORY,
+        })
+        return fm + "\n\n" + _fence_content("\n".join(parts), title=name)
+
+    # --- Wiki page ---
+    if match.kind == "wiki":
+        page_name = match.path or "Home"
+        raw_url = (
+            f"https://raw.githubusercontent.com/wiki/"
+            f"{match.owner}/{match.repo}/{page_name}.md"
+        )
+        headers = dict(_FETCH_HEADERS)
+        token = _get_github_token()
+        if token:
+            headers["Authorization"] = f"token {token}"
+
+        try:
+            async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+                resp = await client.get(raw_url, headers=headers)
+        except httpx.RequestError:
+            return f"Error: Failed to fetch wiki page '{page_name}'."
+
+        if resp.status_code == 404:
+            if page_name == "Home":
+                return (
+                    f"Error: This repository does not have a wiki. "
+                    f"({match.owner}/{match.repo})"
+                )
+            return f"Error: Wiki page '{page_name}' not found in {match.owner}/{match.repo} wiki."
+        if resp.status_code != 200:
+            return f"Error: HTTP {resp.status_code} fetching wiki page '{page_name}'."
+
+        wiki_md = resp.text
+        wiki_url = f"https://github.com/{match.owner}/{match.repo}/wiki/{page_name}"
+
+        # Cache for search/slices
+        _page_cache.store(url, page_name, wiki_md, renderer="github")
+
+        content, trunc_hint = _apply_semantic_truncation(wiki_md, max_tokens)
+        fm_entries: dict[str, object] = {
+            "source": wiki_url,
+            "api": "GitHub (wiki)",
+            "trust": _TRUST_ADVISORY,
+        }
+        if trunc_hint:
+            fm_entries["truncated"] = trunc_hint
+        rl_warn = _rate_limit_warning()
+        if rl_warn:
+            fm_entries["warning"] = rl_warn
+        fm = _build_frontmatter(fm_entries)
+        return fm + "\n\n" + _fence_content(content, title=page_name)
+
+    # --- Commit ---
+    if match.kind == "commit" and match.ref:
+        from .github import _github_request
+
+        result = await _github_request(
+            "GET", f"/repos/{match.owner}/{match.repo}/commits/{match.ref}",
+        )
+        if isinstance(result, str):
+            return result
+        assert isinstance(result, dict)
+
+        sha = result.get("sha", match.ref)
+        commit = result.get("commit", {})
+        message = commit.get("message", "")
+        author_info = commit.get("author", {})
+        author_name = author_info.get("name", "Unknown")
+        author_date = author_info.get("date", "")
+        stats = result.get("stats", {})
+        files = result.get("files", [])
+
+        parts = [f"**{sha[:10]}** by {author_name} — {author_date}", ""]
+        parts.append(message)
+        parts.append("")
+
+        if stats:
+            parts.append(
+                f"**{stats.get('total', 0)} changes**: "
+                f"+{stats.get('additions', 0)} / -{stats.get('deletions', 0)} "
+                f"across {len(files)} file{'s' if len(files) != 1 else ''}"
+            )
+            parts.append("")
+
+        for f in files[:50]:
+            status_icon = {"added": "+", "removed": "-", "modified": "~"}.get(
+                f.get("status", ""), "?"
+            )
+            parts.append(f"  {status_icon} {f.get('filename', '?')} (+{f.get('additions', 0)}/-{f.get('deletions', 0)})")
+
+        if len(files) > 50:
+            parts.append(f"  ... and {len(files) - 50} more files")
+
+        title = message.split("\n")[0][:80] if message else sha[:10]
+        fm = _build_frontmatter({
+            "source": f"https://github.com/{match.owner}/{match.repo}/commit/{sha}",
+            "api": "GitHub",
+            "type": "commit",
+            "trust": _TRUST_ADVISORY,
+        })
+        return fm + "\n\n" + _fence_content("\n".join(parts), title=title)
+
+    # --- Compare ---
+    if match.kind == "compare" and match.path:
+        from .github import _github_request
+
+        result = await _github_request(
+            "GET", f"/repos/{match.owner}/{match.repo}/compare/{match.path}",
+        )
+        if isinstance(result, str):
+            return result
+        assert isinstance(result, dict)
+
+        base_label = result.get("base_commit", {}).get("sha", "?")[:10]
+        head_label = result.get("commits", [{}])[-1].get("sha", "?")[:10] if result.get("commits") else "?"
+        commits = result.get("commits", [])
+        files = result.get("files", [])
+        status = result.get("status", "")  # ahead, behind, diverged, identical
+
+        parts = [f"**{status}** — {len(commits)} commit{'s' if len(commits) != 1 else ''}, {len(files)} file{'s' if len(files) != 1 else ''} changed"]
+        parts.append(f"{base_label} → {head_label}")
+        parts.append("")
+
+        if commits:
+            parts.append("### Commits")
+            parts.append("")
+            for c in commits[:30]:
+                sha_short = c.get("sha", "?")[:10]
+                msg = c.get("commit", {}).get("message", "").split("\n")[0]
+                parts.append(f"- `{sha_short}` {msg}")
+            if len(commits) > 30:
+                parts.append(f"- ... and {len(commits) - 30} more")
+            parts.append("")
+
+        if files:
+            parts.append("### Files changed")
+            parts.append("")
+            for f in files[:50]:
+                status_icon = {"added": "+", "removed": "-", "modified": "~"}.get(
+                    f.get("status", ""), "?"
+                )
+                parts.append(f"  {status_icon} {f.get('filename', '?')} (+{f.get('additions', 0)}/-{f.get('deletions', 0)})")
+            if len(files) > 50:
+                parts.append(f"  ... and {len(files) - 50} more files")
+
+        fm = _build_frontmatter({
+            "source": f"https://github.com/{match.owner}/{match.repo}/compare/{match.path}",
+            "api": "GitHub",
+            "type": "compare",
+            "status": status,
+            "trust": _TRUST_ADVISORY,
+        })
+        return fm + "\n\n" + _fence_content("\n".join(parts), title=match.path)
+
+    # --- Releases ---
+    if match.kind == "releases":
+        from .github import _github_request
+
+        # Check if this is a specific tag release
+        rest = match.path
+        if rest and rest.startswith("tag/"):
+            tag = rest[4:]
+            result = await _github_request(
+                "GET",
+                f"/repos/{match.owner}/{match.repo}/releases/tags/{tag}",
+            )
+            if isinstance(result, str):
+                return result
+            assert isinstance(result, dict)
+
+            name = result.get("name") or tag
+            body = result.get("body") or ""
+            published = result.get("published_at", "")
+            author = result.get("author", {}).get("login", "")
+            prerelease = result.get("prerelease", False)
+            assets = result.get("assets", [])
+
+            parts = [f"**{name}** ({tag})"]
+            if author:
+                parts[0] += f" by @{author}"
+            if published:
+                parts[0] += f" — {published}"
+            if prerelease:
+                parts.append("*Pre-release*")
+            parts.append("")
+            if body:
+                parts.append(body)
+                parts.append("")
+            if assets:
+                parts.append("### Assets")
+                parts.append("")
+                for a in assets:
+                    size_mb = a.get("size", 0) / (1024 * 1024)
+                    dl = a.get("download_count", 0)
+                    parts.append(f"- {a['name']} ({size_mb:.1f} MB, {dl:,} downloads)")
+
+            fm = _build_frontmatter({
+                "source": f"https://github.com/{match.owner}/{match.repo}/releases/tag/{tag}",
+                "api": "GitHub",
+                "type": "release",
+                "trust": _TRUST_ADVISORY,
+            })
+            return fm + "\n\n" + _fence_content("\n".join(parts), title=name)
+
+        # List recent releases
+        result = await _github_request(
+            "GET",
+            f"/repos/{match.owner}/{match.repo}/releases",
+            params={"per_page": "20"},
+        )
+        if isinstance(result, str):
+            return result
+        assert isinstance(result, list)
+
+        if not result:
+            return f"Error: No releases found for {match.owner}/{match.repo}."
+
+        parts = []
+        for r in result:
+            tag = r.get("tag_name", "?")
+            name = r.get("name") or tag
+            published = r.get("published_at", "")[:10]
+            prerelease = " (pre-release)" if r.get("prerelease") else ""
+            parts.append(f"- **{name}** `{tag}` — {published}{prerelease}")
+
+        fm = _build_frontmatter({
+            "source": f"https://github.com/{match.owner}/{match.repo}/releases",
+            "api": "GitHub",
+            "type": "releases",
+            "hint": "Use WebFetchDirect with a specific release tag URL for full release notes and assets",
+            "trust": _TRUST_ADVISORY,
+        })
+        return fm + "\n\n" + _fence_content("\n".join(parts), title=f"{match.owner}/{match.repo} releases")
+
+    # --- Unsupported paths — clean errors instead of broken HTML scrapes ---
+    _UNSUPPORTED_MESSAGES = {
+        "blame": "Blame view is not available via API. Use the blob URL for file content.",
+        "actions": "Actions workflows are not content-oriented. Use the GitHub web UI or `gh run list`.",
+        "projects": "Projects boards are not yet supported. Use the GitHub web UI.",
+    }
+    if match.kind in _UNSUPPORTED_MESSAGES:
+        return f"Error: {_UNSUPPORTED_MESSAGES[match.kind]}"
+
+    # Matched but unhandled kind
     return f"Error: GitHub URL type '{match.kind}' is not yet supported."
 
 
