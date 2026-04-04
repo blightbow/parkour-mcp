@@ -963,35 +963,38 @@ async def _action_repo(query: str) -> str:
     if topics:
         parts.append(f"Topics: {', '.join(topics)}")
 
-    # Fetch README and CITATION.cff concurrently
+    # Fetch README (as JSON for path metadata) and CITATION.cff concurrently
     readme_task = asyncio.create_task(_github_request(
         "GET", f"/repos/{owner}/{repo}/readme",
-        accept="application/vnd.github.raw+json",
     ))
     citation_task = asyncio.create_task(_fetch_citation_cff(owner, repo, default_branch))
 
     readme_text = None
+    readme_path = "README.md"  # fallback
     readme_result = await readme_task
-    if isinstance(readme_result, str) and not readme_result.startswith("Error"):
-        readme_text = readme_result
-    elif isinstance(readme_result, dict):
+    if isinstance(readme_result, dict):
         import base64
+        readme_path = readme_result.get("path", readme_path)
         content = readme_result.get("content", "")
         if content:
             try:
                 readme_text = base64.b64decode(content).decode("utf-8")
             except Exception:
                 pass
+    elif isinstance(readme_result, str) and not readme_result.startswith("Error"):
+        # Raw text response (shouldn't happen with default accept, but handle it)
+        readme_text = readme_result
 
     if readme_text:
         # Truncate README to ~2000 tokens — repos are an entry point, not a full read
         truncated, trunc_hint = _apply_semantic_truncation(readme_text, 2000)
         parts.append(f"\n## README\n\n{truncated}")
         if trunc_hint:
+            readme_url = f"https://github.com/{owner}/{repo}/blob/{default_branch}/{readme_path}"
             fm_entries["hint"] = (
                 f"README truncated. Use GitHub file action with "
-                f"'{owner}/{repo}/README.md' for full content, "
-                f"or WebFetchDirect with section= for specific sections."
+                f"'{owner}/{repo}/{readme_path}' for full content, "
+                f"or WebFetchDirect('{readme_url}', section=...) for specific sections."
             )
 
     # Shelf tracking from CITATION.cff (or bare repo metadata)
