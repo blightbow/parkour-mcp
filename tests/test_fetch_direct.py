@@ -559,8 +559,8 @@ class TestWebFetchDirectGitHubWiki:
 
     @pytest.mark.asyncio
     @respx.mock
-    async def test_wiki_404(self):
-        """Missing wiki page should return clean error."""
+    async def test_wiki_page_404(self):
+        """Missing wiki page should return clean error naming the page."""
         respx.get(
             "https://raw.githubusercontent.com/wiki/owner/repo/Nonexistent.md"
         ).mock(return_value=httpx.Response(404))
@@ -569,7 +569,20 @@ class TestWebFetchDirectGitHubWiki:
             "https://github.com/owner/repo/wiki/Nonexistent"
         )
         assert "Error:" in result
+        assert "Nonexistent" in result
         assert "not found" in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_wiki_root_404_no_wiki(self):
+        """Wiki root 404 should report that the wiki doesn't exist."""
+        respx.get(
+            "https://raw.githubusercontent.com/wiki/owner/repo/Home.md"
+        ).mock(return_value=httpx.Response(404))
+
+        result = await web_fetch_direct("https://github.com/owner/repo/wiki")
+        assert "Error:" in result
+        assert "does not have a wiki" in result
 
 
 class TestWebFetchDirectGitHubCommit:

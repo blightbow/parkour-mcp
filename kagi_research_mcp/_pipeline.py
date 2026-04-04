@@ -815,7 +815,12 @@ async def _github_fast_path(
             return f"Error: Failed to fetch wiki page '{page_name}'."
 
         if resp.status_code == 404:
-            return f"Error: Wiki page '{page_name}' not found. The wiki may not exist or may be private."
+            if page_name == "Home":
+                return (
+                    f"Error: This repository does not have a wiki. "
+                    f"({match.owner}/{match.repo})"
+                )
+            return f"Error: Wiki page '{page_name}' not found in {match.owner}/{match.repo} wiki."
         if resp.status_code != 200:
             return f"Error: HTTP {resp.status_code} fetching wiki page '{page_name}'."
 
