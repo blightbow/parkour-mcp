@@ -15,15 +15,8 @@ from kagi_research_mcp._pipeline import _page_cache, _wiki_cache
 def clear_caches():
     """Ensure each test starts with empty caches."""
     yield
-    _wiki_cache.url = None
-    _wiki_cache.wiki_info = None
-    _wiki_cache.wiki_page = None
-    _page_cache.url = None
-    _page_cache.title = None
-    _page_cache.markdown = None
-    _page_cache.slices = None
-    _page_cache.slice_ancestry = None
-    _page_cache.renderer = None
+    _wiki_cache.clear()
+    _page_cache.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -152,6 +145,38 @@ class TestComputeSliceAncestry:
 
 
 # ---------------------------------------------------------------------------
+# _WikiCache unit tests
+# ---------------------------------------------------------------------------
+
+class TestWikiCache:
+    def test_store_and_get(self):
+        _wiki_cache.store("https://en.wikipedia.org/wiki/Test", {"api_base": "x"}, {"html": "<p>hi</p>"})
+        info, page = _wiki_cache.get("https://en.wikipedia.org/wiki/Test")
+        assert info == {"api_base": "x"}
+        assert page == {"html": "<p>hi</p>"}
+
+    def test_miss(self):
+        _wiki_cache.store("https://en.wikipedia.org/wiki/A", {}, {})
+        info, page = _wiki_cache.get("https://en.wikipedia.org/wiki/B")
+        assert info is None
+        assert page is None
+
+    def test_multi_entry(self):
+        _wiki_cache.store("https://en.wikipedia.org/wiki/A", {"a": 1}, None)
+        _wiki_cache.store("https://en.wikipedia.org/wiki/B", {"b": 2}, None)
+        info_a, _ = _wiki_cache.get("https://en.wikipedia.org/wiki/A")
+        info_b, _ = _wiki_cache.get("https://en.wikipedia.org/wiki/B")
+        assert info_a == {"a": 1}
+        assert info_b == {"b": 2}
+
+    def test_clear(self):
+        _wiki_cache.store("https://en.wikipedia.org/wiki/A", {}, {})
+        _wiki_cache.clear()
+        info, page = _wiki_cache.get("https://en.wikipedia.org/wiki/A")
+        assert info is None
+
+
+# ---------------------------------------------------------------------------
 # _PageCache unit tests
 # ---------------------------------------------------------------------------
 
@@ -171,13 +196,100 @@ class TestPageCache:
         _page_cache.store("https://example.com", "Title", "# Content")
         assert _page_cache.get("https://other.com") is None
 
-    def test_eviction_on_new_url(self):
+    def test_multi_entry_coexistence(self):
+        """Multiple URLs coexist in the LRU cache."""
         _page_cache.store("https://first.com", "First", "# First")
         _page_cache.store("https://second.com", "Second", "# Second")
-        assert _page_cache.get("https://first.com") is None
-        cached = _page_cache.get("https://second.com")
-        assert cached is not None
-        assert cached.title == "Second"
+        first = _page_cache.get("https://first.com")
+        second = _page_cache.get("https://second.com")
+        assert first is not None
+        assert first.title == "First"
+        assert second is not None
+        assert second.title == "Second"
+
+    def test_lru_eviction_at_capacity(self):
+        """Oldest untouched entry is evicted when cache exceeds capacity."""
+        # Use a small cache for this test
+        from kagi_research_mcp._pipeline import _PageCache
+        cache = _PageCache(max_entries=3)
+        cache.store("https://a.com", "A", "# A")
+        cache.store("https://b.com", "B", "# B")
+        cache.store("https://c.com", "C", "# C")
+        # All three should exist
+        assert cache.get("https://a.com") is not None
+        assert cache.get("https://b.com") is not None
+        assert cache.get("https://c.com") is not None
+        # Storing a 4th evicts the LRU (a.com was touched by get, but b.com
+        # was touched after a.com, so a.com is oldest after the get round).
+        # After the gets above, order is: a, b, c → get(a) → b, c, a →
+        # get(b) → c, a, b → get(c) → a, b, c
+        # So a.com is the LRU after all three gets in order.
+        cache.store("https://d.com", "D", "# D")
+        assert cache.get("https://a.com") is None
+        assert cache.get("https://b.com") is not None
+        assert cache.get("https://c.com") is not None
+        assert cache.get("https://d.com") is not None
+
+    def test_lru_touch_on_get(self):
+        """Accessing an entry promotes it, protecting it from eviction."""
+        from kagi_research_mcp._pipeline import _PageCache
+        cache = _PageCache(max_entries=3)
+        cache.store("https://a.com", "A", "# A")
+        cache.store("https://b.com", "B", "# B")
+        cache.store("https://c.com", "C", "# C")
+        # Touch A — makes it most-recently-used; B is now LRU
+        cache.get("https://a.com")
+        cache.store("https://d.com", "D", "# D")
+        # B should be evicted (LRU), A should survive (recently touched)
+        assert cache.get("https://a.com") is not None
+        assert cache.get("https://b.com") is None
+        assert cache.get("https://c.com") is not None
+        assert cache.get("https://d.com") is not None
+
+    def test_renderer_filter(self):
+        """get() with renderer filter only returns matching entries."""
+        _page_cache.store("https://example.com", "Title", "# Content", renderer="direct")
+        assert _page_cache.get("https://example.com") is not None
+        assert _page_cache.get("https://example.com", renderer="direct") is not None
+        assert _page_cache.get("https://example.com", renderer="js") is None
+
+    def test_store_same_url_updates_in_place(self):
+        """Storing the same URL replaces the entry without evicting others."""
+        from kagi_research_mcp._pipeline import _PageCache
+        cache = _PageCache(max_entries=3)
+        cache.store("https://a.com", "A", "# A")
+        cache.store("https://b.com", "B", "# B")
+        cache.store("https://a.com", "A-updated", "# A updated")
+        # Both should exist, A should have the updated title
+        assert cache.get("https://b.com") is not None
+        a = cache.get("https://a.com")
+        assert a is not None
+        assert a.title == "A-updated"
+
+    def test_group_eviction(self):
+        """Evicting one entry evicts all entries in its group."""
+        from kagi_research_mcp._pipeline import _PageCache
+        cache = _PageCache(max_entries=4)
+        cache.store("https://pr/1/comments", "PR comments", "# Comments", group="pr:1")
+        cache.store("https://pr/1/code", "PR code", "# Code", group="pr:1")
+        cache.store("https://other.com", "Other", "# Other")
+        cache.store("https://another.com", "Another", "# Another")
+        # Cache is full (4 entries). Storing a 5th should evict the LRU
+        # group — both pr:1 entries — freeing 2 slots.
+        cache.store("https://new.com", "New", "# New")
+        assert cache.get("https://pr/1/comments") is None
+        assert cache.get("https://pr/1/code") is None
+        assert cache.get("https://other.com") is not None
+        assert cache.get("https://another.com") is not None
+        assert cache.get("https://new.com") is not None
+
+    def test_clear(self):
+        """clear() empties all entries."""
+        _page_cache.store("https://a.com", "A", "# A")
+        _page_cache.store("https://b.com", "B", "# B")
+        _page_cache.clear()
+        assert _page_cache.get("https://a.com") is None
+        assert _page_cache.get("https://b.com") is None
 
     def test_slices_cover_content(self):
         md = "# Title\n\nParagraph one.\n\n## Section\n\nParagraph two."

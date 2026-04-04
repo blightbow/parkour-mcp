@@ -5,6 +5,7 @@ assembly that is common to both web_fetch_js and web_fetch_direct.
 """
 
 import logging
+from collections import OrderedDict
 from typing import Optional
 from urllib.parse import urldefrag
 
@@ -29,52 +30,77 @@ from .reddit import _detect_reddit_url, _fetch_reddit_content, _split_by_comment
 
 logger = logging.getLogger(__name__)
 
+# Default maximum entries for LRU caches.  Each page-cache entry holds a
+# tantivy in-memory index + slices + full markdown, so memory is proportional
+# to page size.  5 entries is conservative and sufficient for comparing a few
+# pages while keeping recently visited ones warm.
+PAGE_CACHE_MAX_ENTRIES = 5
+WIKI_CACHE_MAX_ENTRIES = 5
+
 
 # ---------------------------------------------------------------------------
-# Single-entry MediaWiki page cache
+# LRU MediaWiki page cache
 # ---------------------------------------------------------------------------
 # Avoids redundant API calls for the common workflow:
 #   web_fetch_sections(url) → web_fetch_direct(url, section=...) → citation
 # Keyed on canonical URL (no fragment). Stores detect + full-page results.
-# Invalidates automatically when a different URL is requested.
 
-class _WikiCache:
-    """Single-entry cache for the most recently fetched MediaWiki page."""
+class _WikiCacheEntry:
+    """A single cached MediaWiki page."""
 
     __slots__ = ("url", "wiki_info", "wiki_page")
 
-    def __init__(self):
-        self.url: Optional[str] = None
-        self.wiki_info: Optional[dict] = None
-        self.wiki_page: Optional[dict] = None
-
-    def get(self, url: str) -> tuple[Optional[dict], Optional[dict]]:
-        """Return (wiki_info, wiki_page) if url matches, else (None, None)."""
-        if self.url == url:
-            return self.wiki_info, self.wiki_page
-        return None, None
-
-    def store(self, url: str, wiki_info: dict, wiki_page: Optional[dict]):
+    def __init__(self, url: str, wiki_info: dict, wiki_page: Optional[dict]):
         self.url = url
         self.wiki_info = wiki_info
         self.wiki_page = wiki_page
+
+
+class _WikiCache:
+    """LRU cache for MediaWiki API results."""
+
+    def __init__(self, max_entries: int = WIKI_CACHE_MAX_ENTRIES):
+        self._entries: OrderedDict[str, _WikiCacheEntry] = OrderedDict()
+        self._max_entries = max_entries
+
+    def get(self, url: str) -> tuple[Optional[dict], Optional[dict]]:
+        """Return (wiki_info, wiki_page) if url is cached, else (None, None)."""
+        entry = self._entries.get(url)
+        if entry is not None:
+            self._entries.move_to_end(url)
+            return entry.wiki_info, entry.wiki_page
+        return None, None
+
+    def store(self, url: str, wiki_info: dict, wiki_page: Optional[dict]):
+        """Cache a MediaWiki page, evicting the LRU entry if at capacity."""
+        if url in self._entries:
+            self._entries[url] = _WikiCacheEntry(url, wiki_info, wiki_page)
+            self._entries.move_to_end(url)
+        else:
+            if len(self._entries) >= self._max_entries:
+                self._entries.popitem(last=False)
+            self._entries[url] = _WikiCacheEntry(url, wiki_info, wiki_page)
+
+    def clear(self):
+        """Evict all entries."""
+        self._entries.clear()
 
 
 _wiki_cache = _WikiCache()
 
 
 # ---------------------------------------------------------------------------
-# Single-entry page cache (post-markdown-conversion)
+# LRU page cache (post-markdown-conversion)
 # ---------------------------------------------------------------------------
-# Caches the most recently fetched page as pre-sliced content for keyword
-# search and index-based retrieval.  Populated by _process_markdown_sections
-# (all HTML paths feed through it).  Evicts automatically on a new URL.
+# Caches recently fetched pages as pre-sliced content for keyword search and
+# index-based retrieval.  Populated by _process_markdown_sections (all HTML
+# paths feed through it) and by fast-path handlers (Reddit, etc.).
 
-class _PageCache:
-    """Single-entry cache for sliced page content with BM25 search index."""
+class _CacheEntry:
+    """A single cached page with sliced content and BM25 search index."""
 
     __slots__ = ("url", "title", "markdown", "slices", "slice_ancestry",
-                 "_tantivy_index", "renderer")
+                 "_tantivy_index", "renderer", "group")
 
     _SPLITTER = MarkdownSplitter((1600, 2000))
 
@@ -90,51 +116,23 @@ class _PageCache:
             cls._SCHEMA = builder.build()
         return cls._SCHEMA
 
-    def __init__(self):
-        self.url: Optional[str] = None
-        self.title: Optional[str] = None
-        self.markdown: Optional[str] = None
-        self.slices: Optional[list[str]] = None
-        self.slice_ancestry: Optional[list[str]] = None
-        self._tantivy_index = None
-        self.renderer: Optional[str] = None  # "direct" or "js"
-
-    def get(self, url: str, renderer: Optional[str] = None):
-        """Return self if url matches, else None.
-
-        When renderer is specified, only returns a hit if the cached entry
-        was produced by the same renderer.  This prevents WebFetchJS from
-        reusing sparse content that WebFetchDirect cached from a JS-heavy page.
-        """
-        if self.url == url:
-            if renderer is not None and self.renderer != renderer:
-                return None
-            return self
-        return None
-
-    def store(
+    def __init__(
         self,
         url: str,
         title: str,
         markdown: str,
         renderer: Optional[str] = None,
+        group: Optional[str] = None,
         presplit: Optional[list[tuple[int, str]]] = None,
     ):
-        """Slice markdown, build BM25 index, and cache results.
-
-        When *presplit* is provided it is used directly instead of running
-        ``MarkdownSplitter``.  Each element is ``(char_offset, text)`` —
-        the offset is used for section-ancestry computation.  This lets
-        callers supply domain-aware chunks (e.g. one chunk per Reddit
-        comment) while still getting BM25 indexing and ancestry breadcrumbs.
-        """
         self.url = url
         self.title = title
         self.markdown = markdown
         self.renderer = renderer
+        self.group = group
 
         if presplit is not None:
-            self.slices = [text for _, text in presplit]
+            self.slices: list[str] = [text for _, text in presplit]
             offsets = [offset for offset, _ in presplit]
         else:
             chunks = self._SPLITTER.chunk_indices(markdown)
@@ -142,7 +140,7 @@ class _PageCache:
             offsets = [offset for offset, _ in chunks]
 
         sections = _extract_sections_from_markdown(markdown)
-        self.slice_ancestry = _compute_slice_ancestry(sections, offsets)
+        self.slice_ancestry: list[str] = _compute_slice_ancestry(sections, offsets)
 
         # Build tantivy in-memory search index over slices
         schema = self._get_schema()
@@ -161,6 +159,95 @@ class _PageCache:
         searcher = self._tantivy_index.searcher()
         results = searcher.search(query, limit=limit)
         return [searcher.doc(addr)["idx"][0] for _score, addr in results.hits]
+
+
+class _PageCache:
+    """LRU cache for sliced page content with BM25 search indexes.
+
+    Each entry holds the full markdown, pre-computed slices with ancestry
+    breadcrumbs, and a tantivy in-memory search index.  Entries are keyed by
+    URL and evicted in LRU order when capacity is reached.
+
+    The optional ``group`` field on entries enables entity linking: multiple
+    cache entries that share a group tag are evicted together (e.g. a PR's
+    comments and code as separate but linked entries).
+    """
+
+    def __init__(self, max_entries: int = PAGE_CACHE_MAX_ENTRIES):
+        self._entries: OrderedDict[str, _CacheEntry] = OrderedDict()
+        self._max_entries = max_entries
+
+    def get(self, url: str, renderer: Optional[str] = None) -> Optional[_CacheEntry]:
+        """Return the cached entry for *url*, or None on miss.
+
+        Touching an entry moves it to the most-recently-used position.
+        When *renderer* is specified, only returns a hit if the cached entry
+        was produced by the same renderer.  This prevents WebFetchJS from
+        reusing sparse content that WebFetchDirect cached from a JS-heavy page.
+        """
+        entry = self._entries.get(url)
+        if entry is None:
+            return None
+        if renderer is not None and entry.renderer != renderer:
+            return None
+        self._entries.move_to_end(url)
+        return entry
+
+    def store(
+        self,
+        url: str,
+        title: str,
+        markdown: str,
+        renderer: Optional[str] = None,
+        presplit: Optional[list[tuple[int, str]]] = None,
+        group: Optional[str] = None,
+    ):
+        """Slice markdown, build BM25 index, and cache the entry.
+
+        If *url* already exists, the entry is replaced in-place (no eviction
+        of other entries).  Otherwise a new entry is inserted and the
+        least-recently-used entry is evicted if at capacity.
+
+        When *presplit* is provided it is used directly instead of running
+        ``MarkdownSplitter``.  Each element is ``(char_offset, text)`` —
+        the offset is used for section-ancestry computation.  This lets
+        callers supply domain-aware chunks (e.g. one chunk per Reddit
+        comment) while still getting BM25 indexing and ancestry breadcrumbs.
+
+        The *group* tag enables entity linking: entries sharing a group are
+        evicted together when any member is the LRU victim.
+        """
+        entry = _CacheEntry(
+            url, title, markdown,
+            renderer=renderer, group=group, presplit=presplit,
+        )
+        if url in self._entries:
+            self._entries[url] = entry
+            self._entries.move_to_end(url)
+        else:
+            if len(self._entries) >= self._max_entries:
+                self._evict()
+            self._entries[url] = entry
+
+    def _evict(self):
+        """Evict the least-recently-used entry (and its group, if any)."""
+        if not self._entries:
+            return
+        # Peek at the oldest entry
+        oldest_url = next(iter(self._entries))
+        oldest = self._entries[oldest_url]
+        if oldest.group is not None:
+            # Evict all entries sharing the same group
+            group = oldest.group
+            to_remove = [u for u, e in self._entries.items() if e.group == group]
+            for u in to_remove:
+                del self._entries[u]
+        else:
+            self._entries.popitem(last=False)
+
+    def clear(self):
+        """Evict all entries."""
+        self._entries.clear()
 
 
 _page_cache = _PageCache()
@@ -433,7 +520,7 @@ def _process_markdown_sections(
 # ---------------------------------------------------------------------------
 
 def _slice_output(
-    cache: _PageCache,
+    cache: _CacheEntry,
     indices: list[int],
     max_tokens: int,
     fm_entries: dict,

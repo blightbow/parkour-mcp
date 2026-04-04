@@ -22,15 +22,8 @@ from .conftest import (
 def clear_caches():
     """Ensure each test starts with empty caches."""
     yield
-    _wiki_cache.url = None
-    _wiki_cache.wiki_info = None
-    _wiki_cache.wiki_page = None
-    _page_cache.url = None
-    _page_cache.title = None
-    _page_cache.markdown = None
-    _page_cache.slices = None
-    _page_cache.slice_ancestry = None
-    _page_cache.renderer = None
+    _wiki_cache.clear()
+    _page_cache.clear()
 
 
 class TestWebFetchJsMediawikiFastPath:
