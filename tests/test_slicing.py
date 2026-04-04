@@ -362,6 +362,35 @@ class TestPageCache:
         assert len(cache._probation) == 0
         assert len(cache._protected) == 0
 
+    def test_entry_estimated_bytes(self):
+        """_CacheEntry.estimated_bytes returns a positive size estimate."""
+        md = "# Title\n\n" + "Some content. " * 100
+        _page_cache.store("https://example.com", "Title", md)
+        cached = _page_cache.get("https://example.com")
+        assert cached is not None
+        assert cached.estimated_bytes > len(md)  # slices + ancestry + tantivy estimate
+
+    def test_stats_structure(self):
+        """stats property returns queue distribution and per-entry info."""
+        from kagi_research_mcp._pipeline import _PageCache
+        cache = _PageCache(max_entries=5)
+        cache.store("https://a.com", "A", "# A content here")
+        cache.store("https://b.com", "B", "# B content here")
+        cache.get("https://a.com")  # promote to protected
+        stats = cache.stats
+        assert stats["max_entries"] == 5
+        assert stats["total_entries"] == 2
+        assert stats["probation_entries"] == 1
+        assert stats["protected_entries"] == 1
+        assert stats["total_estimated_bytes"] > 0
+        assert len(stats["entries"]) == 2
+        # Check per-entry info
+        urls = {e["url"] for e in stats["entries"]}
+        assert urls == {"https://a.com", "https://b.com"}
+        queues = {e["url"]: e["queue"] for e in stats["entries"]}
+        assert queues["https://a.com"] == "protected"
+        assert queues["https://b.com"] == "probation"
+
     def test_slices_cover_content(self):
         md = "# Title\n\nParagraph one.\n\n## Section\n\nParagraph two."
         _page_cache.store("https://example.com", "Title", md)

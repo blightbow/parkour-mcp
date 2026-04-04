@@ -30,6 +30,16 @@ from .reddit import _detect_reddit_url, _fetch_reddit_content, _split_by_comment
 
 logger = logging.getLogger(__name__)
 
+
+def _fmt_bytes(n: int) -> str:
+    """Format a byte count as a human-readable string for log messages."""
+    if n < 1024:
+        return f"{n} B"
+    if n < 1024 * 1024:
+        return f"{n / 1024:.1f} KB"
+    return f"{n / (1024 * 1024):.1f} MB"
+
+
 # Default maximum entries for caches.  Each page-cache entry holds a tantivy
 # in-memory index + slices + full markdown, so memory is proportional to page
 # size.  8 entries across probation+protected is enough for comparing several
@@ -80,6 +90,15 @@ class _WikiCache:
             if len(self._entries) >= self._max_entries:
                 self._entries.popitem(last=False)
             self._entries[url] = _WikiCacheEntry(url, wiki_info, wiki_page)
+
+    @property
+    def stats(self) -> dict:
+        """Return cache diagnostics for developer inspection."""
+        return {
+            "max_entries": self._max_entries,
+            "total_entries": len(self._entries),
+            "urls": list(self._entries.keys()),
+        }
 
     def clear(self):
         """Evict all entries."""
@@ -151,6 +170,24 @@ class _CacheEntry:
         writer.commit()
         self._tantivy_index.reload()
 
+    @property
+    def estimated_bytes(self) -> int:
+        """Estimate memory usage of this entry's Python-side data.
+
+        Counts the markdown source, slices (which duplicate most of the
+        markdown text), and ancestry strings.  The tantivy index lives in
+        Rust heap memory and cannot be measured from Python; a 0.7x
+        multiplier on the indexed text approximates the compressed store +
+        inverted index overhead (empirically 0.65-0.72x across 10-200
+        slices via disk-write measurement of equivalent RAM indexes).
+        """
+        md_bytes = len(self.markdown.encode("utf-8")) if self.markdown else 0
+        slices_bytes = sum(len(s.encode("utf-8")) for s in self.slices)
+        ancestry_bytes = sum(len(a.encode("utf-8")) for a in self.slice_ancestry)
+        # Tantivy index heuristic: stored fields + inverted index ≈ 0.7× text
+        tantivy_est = int(slices_bytes * 0.7)
+        return md_bytes + slices_bytes + ancestry_bytes + tantivy_est
+
     def search(self, query_str: str, limit: int = 50) -> list[int]:
         """BM25 search over cached slices. Returns matching slice indices ranked by relevance."""
         if not self._tantivy_index or not self.slices:
@@ -186,6 +223,40 @@ class _PageCache:
     def _total(self) -> int:
         return len(self._probation) + len(self._protected)
 
+    @property
+    def stats(self) -> dict:
+        """Return cache diagnostics for developer inspection.
+
+        Includes queue distribution, per-entry size estimates, and totals.
+        This is a developer tool — not exposed to the LLM via tool output.
+        """
+        def _entry_info(entry: _CacheEntry, queue: str) -> dict:
+            return {
+                "url": entry.url,
+                "title": entry.title,
+                "renderer": entry.renderer,
+                "group": entry.group,
+                "slices": len(entry.slices),
+                "estimated_bytes": entry.estimated_bytes,
+                "queue": queue,
+            }
+
+        entries = []
+        for e in self._probation.values():
+            entries.append(_entry_info(e, "probation"))
+        for e in self._protected.values():
+            entries.append(_entry_info(e, "protected"))
+
+        total_bytes = sum(e["estimated_bytes"] for e in entries)
+        return {
+            "max_entries": self._max_entries,
+            "total_entries": self._total(),
+            "probation_entries": len(self._probation),
+            "protected_entries": len(self._protected),
+            "total_estimated_bytes": total_bytes,
+            "entries": entries,
+        }
+
     def get(self, url: str, renderer: Optional[str] = None) -> Optional[_CacheEntry]:
         """Return the cached entry for *url*, or None on miss.
 
@@ -214,6 +285,11 @@ class _PageCache:
             del self._probation[url]
             self._protected[url] = entry
             self._protected.move_to_end(url)
+            logger.debug(
+                "cache promote %s → protected (%d probation, %d protected, ~%s)",
+                url, len(self._probation), len(self._protected),
+                _fmt_bytes(entry.estimated_bytes),
+            )
             return entry
 
         return None
@@ -260,6 +336,11 @@ class _PageCache:
         while self._total() >= self._max_entries:
             self._evict()
         self._probation[url] = entry
+        logger.debug(
+            "cache store %s → probation (%d probation, %d protected, ~%s)",
+            url, len(self._probation), len(self._protected),
+            _fmt_bytes(entry.estimated_bytes),
+        )
 
     def _evict(self):
         """Evict one entry, preferring probation over protected.
@@ -277,11 +358,15 @@ class _PageCache:
 
         if oldest.group is not None:
             group = oldest.group
+            evicted: list[str] = []
             for q in (self._probation, self._protected):
                 to_remove = [u for u, e in q.items() if e.group == group]
                 for u in to_remove:
+                    evicted.append(u)
                     del q[u]
+            logger.debug("cache evict group %s: %s", group, evicted)
         else:
+            logger.debug("cache evict %s (~%s)", oldest_url, _fmt_bytes(oldest.estimated_bytes))
             del victim_queue[oldest_url]
 
     def clear(self):
