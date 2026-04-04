@@ -1,6 +1,7 @@
 """Direct HTTP content fetching without JavaScript rendering."""
 
 import logging
+import re
 from typing import Optional, Union
 
 import httpx
@@ -23,6 +24,9 @@ from ._pipeline import (
 from .mediawiki import _mediawiki_html_to_markdown, _extract_citations, _format_citations
 
 logger = logging.getLogger(__name__)
+
+# GitHub line anchor fragments: #L45 or #L45-L100
+_LINE_ANCHOR_RE = re.compile(r"^L(\d+)(?:-L(\d+))?$")
 
 
 async def web_fetch_direct(
@@ -58,8 +62,21 @@ async def web_fetch_direct(
     # Extract fragment from URL (e.g. #section-name) as implicit section request
     url, fragment = _extract_fragment(url)
     section_names = _normalize_sections(section)
+
+    # Detect GitHub line anchors (#L45, #L45-L100) before they become
+    # section requests — these are line ranges, not heading names.
+    line_range: Optional[tuple[int, int]] = None
     if fragment and not section_names:
-        section_names = [fragment]
+        lm = _LINE_ANCHOR_RE.match(fragment)
+        if lm:
+            start = int(lm.group(1))
+            end = int(lm.group(2)) if lm.group(2) else start
+            line_range = (start, end)
+            # Don't convert to section_names — line ranges are handled
+            # by the GitHub fast path directly
+        else:
+            section_names = [fragment]
+
     source_url, fragment_warning = _resolve_fragment_source(url, fragment, section)
 
     # Normalize empty search/slices to None
@@ -216,7 +233,7 @@ async def web_fetch_direct(
     try:
         from .github import _detect_github_url
         if _detect_github_url(url):
-            result = await _github_fast_path(url, max_tokens)
+            result = await _github_fast_path(url, max_tokens, line_range=line_range)
             if result is not None:
                 if want_slicing:
                     return _dispatch_slicing(
