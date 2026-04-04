@@ -356,6 +356,25 @@ Conditional:
 | `api`    | `GitHub (wiki)` |
 | `trust`  | Trust advisory for fenced content |
 
+**`releases` (fast path only):**
+
+| Field    | Description |
+|----------|-------------|
+| `source` | GitHub releases URL |
+| `api`    | `GitHub` |
+| `type`   | `releases` (list) or `release` (single tag) |
+| `hint`   | Drill-in guidance for specific release tags (list view only) |
+| `trust`  | Trust advisory for fenced content |
+
+**`org` / `user` (fast path only):**
+
+| Field    | Description |
+|----------|-------------|
+| `source` | GitHub org/user profile URL |
+| `api`    | `GitHub` |
+| `type`   | `organization` or `user` |
+| `trust`  | Trust advisory for fenced content |
+
 **GitHub fast path (via fetch tools):**
 
 GitHub URLs intercepted by `web_fetch_direct` and `web_fetch_js` produce
@@ -372,8 +391,12 @@ path additionally populates the 2Q page cache with presplit content:
   repo; root URL defaults to the Home page
 - **Commit/compare URLs**: rendered via Commits/Compare API with stats
   and file lists
+- **Release URLs**: list or single-tag via Releases API with notes and
+  asset download counts
+- **Org/user profile URLs** (`github.com/{name}`): rendered via Orgs or
+  Users API with recently active repos
 - **Repo/tree/gist URLs**: served directly, no cache population needed
-- **Unsupported paths** (`/blame`, `/releases`, `/actions`, `/projects`):
+- **Unsupported paths** (`/blame`, `/actions`, `/projects`):
   return descriptive errors instead of falling through to HTML
 
 `web_fetch_sections` on GitHub URLs returns:

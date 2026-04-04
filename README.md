@@ -878,8 +878,10 @@ The fetch tools share the following features:
   - **Wiki** (`/wiki/{page}`) — fetched as raw markdown from the wiki git repo. Root URL defaults to the Home page.
   - **Commit** (`/commit/{sha}`) — rendered via Commits API with message, stats, and file list.
   - **Compare** (`/compare/{base}...{head}`) — rendered via Compare API with commit log and diff summary.
+  - **Releases** (`/releases`, `/releases/tag/{tag}`) — list recent releases or fetch full release notes with assets and download counts.
+  - **Org/user profiles** (`github.com/{name}`) — rendered via Orgs/Users API with description and recently active repos sorted by push date.
   - **Repo/tree/gist** — served via REST API as before.
-  - **Unsupported paths** (`/blame`, `/releases`, `/actions`, `/projects`) return descriptive errors instead of falling through to broken HTML scrapes.
+  - **Unsupported paths** (`/blame`, `/actions`, `/projects`) return descriptive errors instead of falling through to broken HTML scrapes.
   - `web_fetch_sections` returns code definition trees (via tree-sitter AST walk) for source files, and comment trees for issues/PRs. Repos with a `CITATION.cff` are auto-tracked on the research shelf.
 - **MediaWiki fast path** - Wiki URLs (`/wiki/...`) are detected and fetched via the MediaWiki API with a [Wikimedia-compliant User-Agent](https://meta.wikimedia.org/wiki/User-Agent_policy), bypassing  HTTP entirely. Returns clean markdown with YAML frontmatter including site name and generator metadata. A dedicated multi-entry LRU wiki cache avoids redundant API calls when multiple tools access the same page.
 - **Footnote extraction** (MediaWiki) - Inline footnotes appear as `[^N]` markers in the markdown output. The `footnotes` parameter retrieves specific numbered entries. Author-date shorthand (e.g. "Simpson 2003, p. 8") is automatically resolved against the article's bibliography via `#CITEREF` links.
