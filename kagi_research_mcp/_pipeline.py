@@ -30,11 +30,11 @@ from .reddit import _detect_reddit_url, _fetch_reddit_content, _split_by_comment
 
 logger = logging.getLogger(__name__)
 
-# Default maximum entries for LRU caches.  Each page-cache entry holds a
-# tantivy in-memory index + slices + full markdown, so memory is proportional
-# to page size.  5 entries is conservative and sufficient for comparing a few
-# pages while keeping recently visited ones warm.
-PAGE_CACHE_MAX_ENTRIES = 5
+# Default maximum entries for caches.  Each page-cache entry holds a tantivy
+# in-memory index + slices + full markdown, so memory is proportional to page
+# size.  8 entries across probation+protected is enough for comparing several
+# pages while keeping recently drilled-into ones warm.
+PAGE_CACHE_MAX_ENTRIES = 8
 WIKI_CACHE_MAX_ENTRIES = 5
 
 
@@ -162,36 +162,61 @@ class _CacheEntry:
 
 
 class _PageCache:
-    """LRU cache for sliced page content with BM25 search indexes.
+    """2Q (two-queue) cache for sliced page content with BM25 search indexes.
 
-    Each entry holds the full markdown, pre-computed slices with ancestry
-    breadcrumbs, and a tantivy in-memory search index.  Entries are keyed by
-    URL and evicted in LRU order when capacity is reached.
+    New entries land in the **probation** queue (FIFO).  When a probation
+    entry is accessed again via ``get()``, it is **promoted** to the
+    **protected** queue (LRU).  Eviction prefers probation (cheap one-hit
+    pages) before falling back to the protected LRU tail.
 
-    The optional ``group`` field on entries enables entity linking: multiple
-    cache entries that share a group tag are evicted together (e.g. a PR's
-    comments and code as separate but linked entries).
+    This is scan-resistant: pages fetched once during browsing stay in
+    probation and get evicted first, while pages the user drills into
+    (search, section, slices) get promoted and persist.
+
+    The optional ``group`` field on entries enables entity linking: entries
+    sharing a group tag are evicted together (e.g. a PR's comments and code
+    as separate but linked cache entries).
     """
 
     def __init__(self, max_entries: int = PAGE_CACHE_MAX_ENTRIES):
-        self._entries: OrderedDict[str, _CacheEntry] = OrderedDict()
+        self._probation: OrderedDict[str, _CacheEntry] = OrderedDict()
+        self._protected: OrderedDict[str, _CacheEntry] = OrderedDict()
         self._max_entries = max_entries
+
+    def _total(self) -> int:
+        return len(self._probation) + len(self._protected)
 
     def get(self, url: str, renderer: Optional[str] = None) -> Optional[_CacheEntry]:
         """Return the cached entry for *url*, or None on miss.
 
-        Touching an entry moves it to the most-recently-used position.
+        Accessing a **probation** entry promotes it to **protected** (proving
+        it is part of the working set, not a scan).  Accessing a
+        **protected** entry refreshes its LRU position.
+
         When *renderer* is specified, only returns a hit if the cached entry
         was produced by the same renderer.  This prevents WebFetchJS from
         reusing sparse content that WebFetchDirect cached from a JS-heavy page.
         """
-        entry = self._entries.get(url)
-        if entry is None:
-            return None
-        if renderer is not None and entry.renderer != renderer:
-            return None
-        self._entries.move_to_end(url)
-        return entry
+        # Check protected first (most likely for active pages)
+        entry = self._protected.get(url)
+        if entry is not None:
+            if renderer is not None and entry.renderer != renderer:
+                return None
+            self._protected.move_to_end(url)
+            return entry
+
+        # Check probation — hit here triggers promotion
+        entry = self._probation.get(url)
+        if entry is not None:
+            if renderer is not None and entry.renderer != renderer:
+                return None
+            # Promote: move from probation to protected
+            del self._probation[url]
+            self._protected[url] = entry
+            self._protected.move_to_end(url)
+            return entry
+
+        return None
 
     def store(
         self,
@@ -204,9 +229,8 @@ class _PageCache:
     ):
         """Slice markdown, build BM25 index, and cache the entry.
 
-        If *url* already exists, the entry is replaced in-place (no eviction
-        of other entries).  Otherwise a new entry is inserted and the
-        least-recently-used entry is evicted if at capacity.
+        New URLs enter **probation**.  If the URL already exists (in either
+        queue), the entry is replaced in-place without evicting others.
 
         When *presplit* is provided it is used directly instead of running
         ``MarkdownSplitter``.  Each element is ``(char_offset, text)`` —
@@ -215,46 +239,62 @@ class _PageCache:
         comment) while still getting BM25 indexing and ancestry breadcrumbs.
 
         The *group* tag enables entity linking: entries sharing a group are
-        evicted together when any member is the LRU victim.
+        evicted together when any member is the eviction victim.
         """
         entry = _CacheEntry(
             url, title, markdown,
             renderer=renderer, group=group, presplit=presplit,
         )
-        if url in self._entries:
-            self._entries[url] = entry
-            self._entries.move_to_end(url)
-        else:
-            if len(self._entries) >= self._max_entries:
-                self._evict()
-            self._entries[url] = entry
+
+        # Update in-place if URL already cached (in either queue)
+        if url in self._protected:
+            self._protected[url] = entry
+            self._protected.move_to_end(url)
+            return
+        if url in self._probation:
+            self._probation[url] = entry
+            self._probation.move_to_end(url)
+            return
+
+        # New entry → probation (FIFO)
+        while self._total() >= self._max_entries:
+            self._evict()
+        self._probation[url] = entry
 
     def _evict(self):
-        """Evict the least-recently-used entry (and its group, if any)."""
-        if not self._entries:
+        """Evict one entry, preferring probation over protected.
+
+        Group-aware: if the victim has a group tag, all entries sharing
+        that group are evicted together from both queues.
+        """
+        # Prefer evicting from probation (cheap one-hit pages)
+        victim_queue = self._probation if self._probation else self._protected
+        if not victim_queue:
             return
-        # Peek at the oldest entry
-        oldest_url = next(iter(self._entries))
-        oldest = self._entries[oldest_url]
+
+        oldest_url = next(iter(victim_queue))
+        oldest = victim_queue[oldest_url]
+
         if oldest.group is not None:
-            # Evict all entries sharing the same group
             group = oldest.group
-            to_remove = [u for u, e in self._entries.items() if e.group == group]
-            for u in to_remove:
-                del self._entries[u]
+            for q in (self._probation, self._protected):
+                to_remove = [u for u, e in q.items() if e.group == group]
+                for u in to_remove:
+                    del q[u]
         else:
-            self._entries.popitem(last=False)
+            del victim_queue[oldest_url]
 
     def clear(self):
-        """Evict all entries."""
-        self._entries.clear()
+        """Evict all entries from both queues."""
+        self._probation.clear()
+        self._protected.clear()
 
 
 _page_cache = _PageCache()
 
 
 async def _cached_mediawiki_fetch(url: str) -> tuple[Optional[dict], Optional[dict]]:
-    """Detect and fetch a MediaWiki page, using the single-entry cache.
+    """Detect and fetch a MediaWiki page, using the LRU cache.
 
     Returns (wiki_info, wiki_page) or (None, None) if not a MediaWiki site.
     Always fetches the full page (no section filtering) for cacheability.

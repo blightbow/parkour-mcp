@@ -197,7 +197,7 @@ class TestPageCache:
         assert _page_cache.get("https://other.com") is None
 
     def test_multi_entry_coexistence(self):
-        """Multiple URLs coexist in the LRU cache."""
+        """Multiple URLs coexist in the cache."""
         _page_cache.store("https://first.com", "First", "# First")
         _page_cache.store("https://second.com", "Second", "# Second")
         first = _page_cache.get("https://first.com")
@@ -207,44 +207,73 @@ class TestPageCache:
         assert second is not None
         assert second.title == "Second"
 
-    def test_lru_eviction_at_capacity(self):
-        """Oldest untouched entry is evicted when cache exceeds capacity."""
-        # Use a small cache for this test
+    def test_new_entries_land_in_probation(self):
+        """A freshly stored entry is in probation, not protected."""
         from kagi_research_mcp._pipeline import _PageCache
         cache = _PageCache(max_entries=3)
         cache.store("https://a.com", "A", "# A")
-        cache.store("https://b.com", "B", "# B")
-        cache.store("https://c.com", "C", "# C")
-        # All three should exist
-        assert cache.get("https://a.com") is not None
-        assert cache.get("https://b.com") is not None
+        assert "https://a.com" in cache._probation
+        assert "https://a.com" not in cache._protected
+
+    def test_get_promotes_to_protected(self):
+        """Accessing a probation entry promotes it to protected."""
+        from kagi_research_mcp._pipeline import _PageCache
+        cache = _PageCache(max_entries=3)
+        cache.store("https://a.com", "A", "# A")
+        cache.get("https://a.com")
+        assert "https://a.com" not in cache._probation
+        assert "https://a.com" in cache._protected
+
+    def test_eviction_prefers_probation(self):
+        """Probation entries are evicted before protected entries."""
+        from kagi_research_mcp._pipeline import _PageCache
+        cache = _PageCache(max_entries=3)
+        cache.store("https://a.com", "A", "# A")
+        cache.get("https://a.com")  # promote A to protected
+        cache.store("https://b.com", "B", "# B")  # probation
+        cache.store("https://c.com", "C", "# C")  # probation
+        # Full at 3. Storing D should evict B (oldest probation), not A (protected).
+        cache.store("https://d.com", "D", "# D")
+        assert cache.get("https://a.com") is not None  # protected, safe
+        assert cache.get("https://b.com") is None      # evicted from probation
         assert cache.get("https://c.com") is not None
-        # Storing a 4th evicts the LRU (a.com was touched by get, but b.com
-        # was touched after a.com, so a.com is oldest after the get round).
-        # After the gets above, order is: a, b, c → get(a) → b, c, a →
-        # get(b) → c, a, b → get(c) → a, b, c
-        # So a.com is the LRU after all three gets in order.
+        assert cache.get("https://d.com") is not None
+
+    def test_protected_lru_eviction(self):
+        """When probation is empty, the oldest protected entry is evicted."""
+        from kagi_research_mcp._pipeline import _PageCache
+        cache = _PageCache(max_entries=3)
+        # Fill with all-promoted entries
+        cache.store("https://a.com", "A", "# A")
+        cache.get("https://a.com")  # promote
+        cache.store("https://b.com", "B", "# B")
+        cache.get("https://b.com")  # promote
+        cache.store("https://c.com", "C", "# C")
+        cache.get("https://c.com")  # promote
+        # All 3 in protected, probation empty. Storing D evicts oldest protected (A).
         cache.store("https://d.com", "D", "# D")
         assert cache.get("https://a.com") is None
         assert cache.get("https://b.com") is not None
         assert cache.get("https://c.com") is not None
         assert cache.get("https://d.com") is not None
 
-    def test_lru_touch_on_get(self):
-        """Accessing an entry promotes it, protecting it from eviction."""
+    def test_scan_resistance(self):
+        """One-hit pages in probation don't evict drilled-into protected pages."""
         from kagi_research_mcp._pipeline import _PageCache
-        cache = _PageCache(max_entries=3)
-        cache.store("https://a.com", "A", "# A")
-        cache.store("https://b.com", "B", "# B")
-        cache.store("https://c.com", "C", "# C")
-        # Touch A — makes it most-recently-used; B is now LRU
-        cache.get("https://a.com")
-        cache.store("https://d.com", "D", "# D")
-        # B should be evicted (LRU), A should survive (recently touched)
-        assert cache.get("https://a.com") is not None
-        assert cache.get("https://b.com") is None
-        assert cache.get("https://c.com") is not None
-        assert cache.get("https://d.com") is not None
+        cache = _PageCache(max_entries=4)
+        # Two pages the user drills into (promoted to protected)
+        cache.store("https://working-a.com", "A", "# A")
+        cache.get("https://working-a.com")
+        cache.store("https://working-b.com", "B", "# B")
+        cache.get("https://working-b.com")
+        # Scan: browse through several one-hit pages
+        cache.store("https://scan-1.com", "S1", "# S1")
+        cache.store("https://scan-2.com", "S2", "# S2")
+        # Full at 4. Another scan page should evict scan-1 (probation), not working pages.
+        cache.store("https://scan-3.com", "S3", "# S3")
+        assert cache.get("https://working-a.com") is not None
+        assert cache.get("https://working-b.com") is not None
+        assert cache.get("https://scan-1.com") is None  # evicted from probation
 
     def test_renderer_filter(self):
         """get() with renderer filter only returns matching entries."""
@@ -252,6 +281,16 @@ class TestPageCache:
         assert _page_cache.get("https://example.com") is not None
         assert _page_cache.get("https://example.com", renderer="direct") is not None
         assert _page_cache.get("https://example.com", renderer="js") is None
+
+    def test_renderer_filter_no_promotion(self):
+        """get() with non-matching renderer does not promote the entry."""
+        from kagi_research_mcp._pipeline import _PageCache
+        cache = _PageCache(max_entries=5)
+        cache.store("https://example.com", "Title", "# Content", renderer="direct")
+        # This should return None (renderer mismatch) and NOT promote
+        assert cache.get("https://example.com", renderer="js") is None
+        assert "https://example.com" in cache._probation
+        assert "https://example.com" not in cache._protected
 
     def test_store_same_url_updates_in_place(self):
         """Storing the same URL replaces the entry without evicting others."""
@@ -266,6 +305,16 @@ class TestPageCache:
         assert a is not None
         assert a.title == "A-updated"
 
+    def test_store_updates_protected_in_place(self):
+        """Re-storing a URL that was already promoted keeps it in protected."""
+        from kagi_research_mcp._pipeline import _PageCache
+        cache = _PageCache(max_entries=3)
+        cache.store("https://a.com", "A", "# A")
+        cache.get("https://a.com")  # promote to protected
+        cache.store("https://a.com", "A-v2", "# A v2")
+        assert "https://a.com" in cache._protected
+        assert cache.get("https://a.com").title == "A-v2"
+
     def test_group_eviction(self):
         """Evicting one entry evicts all entries in its group."""
         from kagi_research_mcp._pipeline import _PageCache
@@ -274,8 +323,8 @@ class TestPageCache:
         cache.store("https://pr/1/code", "PR code", "# Code", group="pr:1")
         cache.store("https://other.com", "Other", "# Other")
         cache.store("https://another.com", "Another", "# Another")
-        # Cache is full (4 entries). Storing a 5th should evict the LRU
-        # group — both pr:1 entries — freeing 2 slots.
+        # Full at 4. Storing a 5th evicts the oldest probation group —
+        # both pr:1 entries — freeing 2 slots.
         cache.store("https://new.com", "New", "# New")
         assert cache.get("https://pr/1/comments") is None
         assert cache.get("https://pr/1/code") is None
@@ -283,13 +332,35 @@ class TestPageCache:
         assert cache.get("https://another.com") is not None
         assert cache.get("https://new.com") is not None
 
+    def test_group_eviction_across_queues(self):
+        """Group eviction removes members from both probation and protected."""
+        from kagi_research_mcp._pipeline import _PageCache
+        cache = _PageCache(max_entries=4)
+        cache.store("https://pr/1/a", "A", "# A", group="pr:1")
+        cache.get("https://pr/1/a")  # promote to protected
+        cache.store("https://pr/1/b", "B", "# B", group="pr:1")  # stays in probation
+        cache.store("https://x.com", "X", "# X")
+        cache.get("https://x.com")  # promote
+        cache.store("https://y.com", "Y", "# Y")
+        # Full at 4. pr/1/b is oldest in probation. Evicting it should
+        # also evict pr/1/a from protected (same group).
+        cache.store("https://z.com", "Z", "# Z")
+        assert cache.get("https://pr/1/a") is None
+        assert cache.get("https://pr/1/b") is None
+        assert cache.get("https://x.com") is not None
+
     def test_clear(self):
-        """clear() empties all entries."""
-        _page_cache.store("https://a.com", "A", "# A")
-        _page_cache.store("https://b.com", "B", "# B")
-        _page_cache.clear()
-        assert _page_cache.get("https://a.com") is None
-        assert _page_cache.get("https://b.com") is None
+        """clear() empties all entries from both queues."""
+        from kagi_research_mcp._pipeline import _PageCache
+        cache = _PageCache(max_entries=5)
+        cache.store("https://a.com", "A", "# A")
+        cache.get("https://a.com")  # promote to protected
+        cache.store("https://b.com", "B", "# B")  # stays in probation
+        cache.clear()
+        assert cache.get("https://a.com") is None
+        assert cache.get("https://b.com") is None
+        assert len(cache._probation) == 0
+        assert len(cache._protected) == 0
 
     def test_slices_cover_content(self):
         md = "# Title\n\nParagraph one.\n\n## Section\n\nParagraph two."
