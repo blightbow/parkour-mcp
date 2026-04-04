@@ -803,6 +803,130 @@ async def _action_search_code(
 # Action: repo
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# CITATION.cff parsing and shelf integration
+# ---------------------------------------------------------------------------
+
+async def _fetch_citation_cff(
+    owner: str, repo: str, default_branch: str,
+) -> Optional[dict]:
+    """Fetch and parse CITATION.cff from the repo root. Returns parsed YAML or None."""
+    import yaml
+
+    raw_url = (
+        f"https://raw.githubusercontent.com/{owner}/{repo}/{default_branch}/CITATION.cff"
+    )
+    headers = {"User-Agent": _API_USER_AGENT}
+    token = _get_github_token()
+    if token:
+        headers["Authorization"] = f"token {token}"
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(raw_url, headers=headers)
+        if resp.status_code != 200:
+            return None
+        return yaml.safe_load(resp.text)
+    except Exception:
+        return None
+
+
+def _parse_citation_cff(cff: dict) -> tuple[Optional[str], str, list[str], Optional[int]]:
+    """Extract DOI, title, authors, and year from a CITATION.cff dict.
+
+    Prefers ``preferred-citation`` when present (it references the
+    associated paper rather than the software itself). Falls back to
+    top-level fields.
+
+    Returns (doi, title, authors_list, year).
+    """
+    # Prefer the preferred-citation block (references the paper)
+    source = cff.get("preferred-citation") or cff
+
+    doi = source.get("doi") or cff.get("doi")
+    title = source.get("title") or cff.get("title") or "Untitled"
+
+    # Authors: list of dicts with family-names/given-names
+    raw_authors = source.get("authors") or cff.get("authors") or []
+    authors = []
+    for a in raw_authors:
+        family = a.get("family-names", "")
+        given = a.get("given-names", "")
+        if family and given:
+            authors.append(f"{family}, {given}")
+        elif family:
+            authors.append(family)
+        elif a.get("name"):
+            authors.append(a["name"])
+
+    # Year from date-released or year field
+    year = None
+    date_released = source.get("date-released") or cff.get("date-released")
+    if date_released:
+        try:
+            year = int(str(date_released)[:4])
+        except (ValueError, TypeError):
+            pass
+    if year is None:
+        raw_year = source.get("year") or cff.get("year")
+        if raw_year:
+            try:
+                year = int(raw_year)
+            except (ValueError, TypeError):
+                pass
+
+    return doi, title, authors, year
+
+
+async def _track_repo_on_shelf(
+    owner: str,
+    repo: str,
+    full_name: str,
+    description: str,
+    repo_data: dict,
+    citation_cff: Optional[dict],
+) -> Optional[str]:
+    """Track a GitHub repo on the research shelf.
+
+    If CITATION.cff is present, extracts DOI + metadata from it.
+    Otherwise, tracks the repo with a synthetic github: identifier.
+    """
+    from .shelf import _track_on_shelf, CitationRecord
+
+    if citation_cff:
+        doi, title, authors, year = _parse_citation_cff(citation_cff)
+        if not doi:
+            # CFF exists but has no DOI — use synthetic key
+            doi = f"github:{full_name}"
+        return await _track_on_shelf(CitationRecord(
+            doi=doi,
+            title=title,
+            authors=authors,
+            year=year,
+            venue=f"GitHub ({full_name})",
+            source_tool="github",
+        ))
+
+    # No CITATION.cff — track with synthetic identifier and repo metadata
+    license_info = repo_data.get("license") or {}
+    license_name = license_info.get("spdx_id")
+    created = repo_data.get("created_at", "")
+    year = None
+    if len(created) >= 4:
+        try:
+            year = int(created[:4])
+        except (ValueError, TypeError):
+            pass
+
+    return await _track_on_shelf(CitationRecord(
+        doi=f"github:{full_name}",
+        title=f"{full_name}: {description}" if description else full_name,
+        year=year,
+        venue="GitHub" + (f" | {license_name}" if license_name else ""),
+        source_tool="github",
+    ))
+
+
 async def _action_repo(query: str) -> str:
     """Fetch repository metadata and README."""
     parsed = _parse_owner_repo(query)
@@ -824,8 +948,9 @@ async def _action_repo(query: str) -> str:
     topics = result.get("topics") or []
     open_issues = result.get("open_issues_count", 0)
 
+    default_branch = result.get("default_branch", "main")
+
     fm_entries = _fm_base(f"https://github.com/{name}")
-    fm = _build_frontmatter(fm_entries)
 
     parts = [
         f"**{desc}**\n",
@@ -835,11 +960,14 @@ async def _action_repo(query: str) -> str:
     if topics:
         parts.append(f"Topics: {', '.join(topics)}")
 
-    # Fetch README
-    readme_result = await _github_request(
+    # Fetch README and CITATION.cff concurrently
+    readme_task = asyncio.create_task(_github_request(
         "GET", f"/repos/{owner}/{repo}/readme",
         accept="application/vnd.github.raw+json",
-    )
+    ))
+    citation_task = asyncio.create_task(_fetch_citation_cff(owner, repo, default_branch))
+
+    readme_result = await readme_task
     if isinstance(readme_result, str) and not readme_result.startswith("Error"):
         parts.append(f"\n## README\n\n{readme_result}")
     elif isinstance(readme_result, dict):
@@ -853,6 +981,13 @@ async def _action_repo(query: str) -> str:
             except Exception:
                 pass
 
+    # Shelf tracking from CITATION.cff (or bare repo metadata)
+    citation_cff = await citation_task
+    fm_entries["shelf"] = await _track_repo_on_shelf(
+        owner, repo, name, desc, result, citation_cff,
+    )
+
+    fm = _build_frontmatter(fm_entries)
     body = "\n".join(parts)
     return fm + "\n\n" + _fence_content(body, title=name)
 

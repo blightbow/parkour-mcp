@@ -17,6 +17,7 @@ dependencies = [
     "markdownify",
     "semantic-text-splitter>=0.29.0",
     "tantivy>=0.25.1",
+    "pyyaml>=6.0.3",
 ]
 classifiers = [
     "Programming Language :: Python :: 3",
