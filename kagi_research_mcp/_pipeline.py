@@ -633,6 +633,10 @@ async def _github_fast_path(
         if "\x00" in raw_content[:8192]:
             return f"Error: Binary file ({match.path}). Use the GitHub web UI to view this file."
 
+        # Empty file
+        if not raw_content.strip():
+            return f"Empty file ({match.path})."
+
         # Cache with code-aware presplit
         ext = Path(match.path).suffix.lower()
         presplit = _sectionize_code(raw_content, ext)
