@@ -160,11 +160,13 @@ async def _github_request(
 
         # Success
         if response.status_code in (200, 201):
-            ct = response.headers.get("content-type", "")
-            if "json" in ct:
+            # Try JSON parse; fall back to text for raw content endpoints
+            # (application/vnd.github.raw+json contains "json" in the
+            # content-type but the body is raw text, not JSON)
+            try:
                 return response.json()
-            # Raw content (e.g. application/vnd.github.raw+json returns text)
-            return response.text
+            except Exception:
+                return response.text
         if response.status_code == 204:
             return {}
 
@@ -826,7 +828,6 @@ async def _action_repo(query: str) -> str:
     fm = _build_frontmatter(fm_entries)
 
     parts = [
-        f"# {name}\n",
         f"**{desc}**\n",
         f"Stars: {stars:,} | Forks: {forks:,} | Open issues: {open_issues:,}",
         f"Language: {lang} | License: {license_name}",
