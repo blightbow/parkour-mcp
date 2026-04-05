@@ -515,6 +515,19 @@ Corpus-wide search (no `paper_id`) returns results grouped by paper then section
 
 arXiv DOIs (`10.48550/arXiv.*`) are delegated to the arXiv handler, so the full arXiv metadata experience is preserved even when the DOI form is used.
 
+#### Retraction detection
+
+All three paper-fetch paths (DOI, arXiv, Semantic Scholar) call the CrossRef REST API concurrently alongside existing metadata fetches to check for retractions, expressions of concern, and corrections. CrossRef absorbed the [Retraction Watch](https://www.crossref.org/documentation/retrieve-metadata/retraction-watch/) database in 2023, so this covers both publisher-reported and independently-tracked retractions.
+
+When a retraction is detected:
+
+- An `alert:` frontmatter field surfaces the retraction date, notice DOI, and source -- a field reserved for retroactive invalidation of information that may already be in context
+- A `[RETRACTED]` banner renders at the top of the paper body
+- The paper is routed to the shelf's retracted bucket rather than the active citation set (see [Research Shelf](#research-shelf))
+- If the paper was *already* on the active shelf from a prior fetch, it is moved to the retracted bucket with score/confirmed/notes preserved
+
+The same enrichment call also extracts preprint-to-version linkage (`is-preprint-of`, `has-version`) and license metadata from CrossRef at no additional cost. Version-linked DOIs are fed into the shelf's alt_dois for cross-DOI deduplication, improving preprint/journal merge accuracy.
+
 ### Reddit handling
 
 Reddit URLs are intercepted and rewritten to use `old.reddit.com`'s unauthenticated `.json` endpoint, bypassing both the login wall on `www.reddit.com` and the monetised official API (which requires OAuth approval and enterprise-tier pricing). Any `reddit.com`, `old.reddit.com`, `new.reddit.com`, `np.reddit.com`, or `redd.it` URL is automatically detected and rewritten.
@@ -741,6 +754,14 @@ Papers are tracked automatically on individual paper lookups (not searches). The
 
 The shelf supports scoring, confirmation, and freetext notes for triage, and exports in BibTeX, RIS, and JSON formats. JSON export/import enables cross-session persistence via the agent's memory files.
 
+#### Retraction partitioning
+
+The shelf maintains two separate buckets: **active** (citable papers) and **retracted** (papers flagged by CrossRef as retracted). Retracted papers are never mixed with the active citation set, but they are tracked so their retraction status is visible and preserved. This is motivated by the principle of least astonishment -- a retracted paper silently appearing on a citation shelf would undermine the shelf's purpose.
+
+When a retraction is detected mid-session for a paper that is already on the active shelf, the entry is moved to the retracted bucket with all user-managed fields (score, confirmed, notes) preserved. The retraction status is sticky: re-inspecting a retracted paper through a different path (e.g. arXiv after a DOI fetch) does not resurrect it to the active bucket. Version-linked DOIs (preprint and journal forms of the same paper) propagate retraction status to each other through the shelf's alt_dois deduplication.
+
+The `list` action accepts a `section` parameter: `active` (default, citable only), `retracted`, or `all` (renders both under headings). BibTeX and RIS exports exclude retracted entries by default; pass `with_retracted` to include them with a prominent `RETRACTED` note field.
+
 ```
 >>> research_shelf(action="list")
 ---
@@ -752,6 +773,18 @@ action: list
 |---|-------|--------|-------|-----|--------|
 | 1 | 9 | confirmed | Attention Is All You Need | 10.48550/arXiv.1706.03762 | arxiv |
 | 2 | — |  | BERT: Pre-training of Deep Bidir... | 10.18653/v1/N19-1423 | semantic_scholar |
+
+_(1 retracted entries hidden — list with section="retracted" to view)_
+
+>>> research_shelf(action="list", query="retracted")
+---
+api: ResearchShelf
+action: list
+---
+
+| # | Title | DOI | Retracted | Notice | Source |
+|---|-------|-----|-----------|--------|--------|
+| 1 | RETRACTED: Hydroxychloroquine or chloroquine with ... | 10.1016/S0140-6736(20)31180-6 | 2020-06-05 | 10.1016/s0140-6736(20)31324-6 | retraction-watch |
 
 >>> research_shelf(action="export", query="bibtex")
 ---
