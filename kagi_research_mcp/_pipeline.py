@@ -566,7 +566,8 @@ async def _reddit_fast_path(url: str, max_tokens: int = 5000) -> Optional[str]:
         fm_entries["truncated"] = trunc_hint
 
     fm = _build_frontmatter(fm_entries)
-    return fm + "\n\n" + _fence_content(truncated, title=title)
+    # Reddit markdown already starts with "# {title}" — don't re-add it
+    return fm + "\n\n" + _fence_content(truncated)
 
 
 # ---------------------------------------------------------------------------
@@ -1318,7 +1319,10 @@ def _dispatch_slicing(
     cached = _page_cache.get(url)
     if not cached:
         return "Error: Page cache could not be populated for this URL."
-    title = cached.title
+    # Reddit markdown already embeds "# {title}" as slice 0's first line
+    # (kept so slice ancestry remains informative) — skip re-adding it via
+    # _fence_content to avoid a duplicated title heading.
+    title = None if cached.renderer == "reddit" else cached.title
     fm_base = {"source": source_url, "warning": warning}
     if search is not None:
         return _search_slices(url, search, max_tokens, fm_base, title=title) or \
