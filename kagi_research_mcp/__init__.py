@@ -12,6 +12,7 @@ from .semantic_scholar import semantic_scholar
 from .arxiv import arxiv
 from .github import github
 from .ietf import ietf
+from .packages import packages
 from .shelf import research_shelf, _get_shelf
 
 logging.basicConfig(level=logging.INFO)
@@ -33,6 +34,7 @@ TOOL_NAMES = {
     "research_shelf": {"code": "ResearchShelf", "desktop": "research_shelf"},
     "github": {"code": "GitHub", "desktop": "github"},
     "ietf": {"code": "IETF", "desktop": "ietf"},
+    "packages": {"code": "Packages", "desktop": "packages"},
 }
 
 # Per-profile template variables — tool names and description overrides.
@@ -210,6 +212,23 @@ group acronym like "httpbis" or "tls").
 RFCs have native DOIs (10.17487/RFC{{N}}) and are automatically tracked on the
 research shelf when inspected.""",
 
+    "packages": """Search and inspect software packages across language ecosystems via deps.dev.
+
+Use this for package lookups: get version history, licenses, security advisories,
+dependency graphs, OpenSSF Scorecards, and SLSA provenance data. Covers 7 ecosystems:
+npm, PyPI, Go, Maven, Cargo, NuGet, and RubyGems.
+
+Actions: package, version, dependencies, project, advisory.
+
+Query formats:
+- package/version/dependencies: ecosystem/name[@version] (e.g. "pypi/requests", "npm/express@4.18.2")
+- project: github.com/owner/repo (e.g. "github.com/psf/requests")
+- advisory: advisory ID (e.g. "GHSA-9hjg-9r4m-mvj7")
+
+Ecosystem aliases: pypi, npm, cargo/crates, go/golang, maven, nuget, rubygems/gems.
+
+For repository details (README, issues, code), use {fetch_direct} or the GitHub tool.""",
+
     "research_shelf": """Manage the research shelf — an in-memory tracker for papers inspected during research.
 
 Papers are automatically added when you use ArXiv, SemanticScholar, DOI, or IETF
@@ -250,6 +269,7 @@ def main():
         ("research_shelf", research_shelf),
         ("github", github),
         ("ietf", ietf),
+        ("packages", packages),
     ]
     for internal_name, func in tools:
         name = TOOL_NAMES[internal_name][args.profile]
