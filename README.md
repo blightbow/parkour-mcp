@@ -1,6 +1,6 @@
 # Kagi Research MCP
 
-A research synthesis pipeline for MCP. Enables agents to perform targeted content extraction from websites and research papers. Integrates with the APIs for Kagi Search, Kagi Summarize, Semantic Scholar, arXiv, IETF, GitHub, MediaWiki, and Reddit. It is primarily designed for Claude Code and Claude Desktop, but should be adaptable to most needs.
+A research synthesis pipeline for MCP. Enables agents to perform targeted content extraction from websites and research papers. Integrates with the APIs for Kagi Search, Kagi Summarize, Semantic Scholar, arXiv, IETF, deps.dev, GitHub, MediaWiki, and Reddit. It is primarily designed for Claude Code and Claude Desktop, but should be adaptable to most needs.
 
 ## Attribution
 
@@ -978,8 +978,8 @@ The `--profile` argument adjusts tool names and descriptions for the target clie
 
 | Profile | Target | Tool Names |
 |---------|--------|------------|
-| `desktop` (default) | Claude Desktop | `kagi_search`, `kagi_summarize`, `web_fetch_js`, `web_fetch_direct`, `web_fetch_sections`, `semantic_scholar`, `arxiv`, `github`, `ietf` |
-| `code` | Claude Code | `KagiSearch`, `KagiSummarize`, `WebFetchJS`, `WebFetchDirect`, `WebFetchSections`, `SemanticScholar`, `ArXiv`, `GitHub`, `IETF` |
+| `desktop` (default) | Claude Desktop | `kagi_search`, `kagi_summarize`, `web_fetch_js`, `web_fetch_direct`, `web_fetch_sections`, `semantic_scholar`, `arxiv`, `github`, `ietf`, `packages` |
+| `code` | Claude Code | `KagiSearch`, `KagiSummarize`, `WebFetchJS`, `WebFetchDirect`, `WebFetchSections`, `SemanticScholar`, `ArXiv`, `GitHub`, `IETF`, `Packages` |
 
 The `desktop` profile (snake_case) is the default as it aligns with MCP ecosystem conventions. Claude Code's PascalCase naming is the exception, not the norm.
 
@@ -997,6 +997,7 @@ semantic_scholar   | SemanticScholar       | Search and retrieve academic paper 
 arxiv              | ArXiv                 | Search and retrieve academic papers from arXiv (search with field-prefix syntax, paper details, category browsing)
 github             | GitHub                | Search and retrieve code, issues, pull requests, commits, and comparisons from GitHub (7 actions: search_issues, search_code, repo, tree, issue, pull_request, file)
 ietf               | IETF                  | Search and retrieve IETF RFCs and Internet-Drafts (4 actions: rfc, search, draft, subseries)
+packages           | Packages              | Inspect software packages across 7 language ecosystems via deps.dev (5 actions: package, version, dependencies, project, advisory)
 kagi_summarize     | KagiSummarize         | Summarize URLs or text (supports PDFs, YouTube, audio)
 
 ### fetch tool capabilities (common)
@@ -1004,7 +1005,7 @@ kagi_summarize     | KagiSummarize         | Summarize URLs or text (supports PD
 The fetch tools share the following features:
 
 - **Markdown output with YAML frontmatter** - Returns structured output with source URL, trust advisory, and truncation hints. When content is truncated, frontmatter includes a table of contents so the caller can request specific sections.
-- **Output fencing** - All untrusted external content is wrapped in self-labeling box-drawing fences (`┌─ untrusted content` / `└─ untrusted content`) with per-line `│` provenance markers. This is a datamarking-style defense against indirect prompt injection (see [Microsoft Spotlighting](https://arxiv.org/abs/2403.14720)) that provides a continuous signal of content provenance, resilient to truncation and context compression. Page titles are rendered inside the fence as markdown headings — no attacker-controlled data appears in the trusted frontmatter zone. arXiv and Semantic Scholar fast paths are exempt (structured API metadata formatted by our own code).
+- **Output fencing** - All untrusted external content is wrapped in self-labeling box-drawing fences (`┌─ untrusted content` / `└─ untrusted content`) with per-line `│` provenance markers. This is a datamarking-style defense against indirect prompt injection (see [Microsoft Spotlighting](https://arxiv.org/abs/2403.14720)) that provides a continuous signal of content provenance, resilient to truncation and context compression. Page titles are rendered inside the fence as markdown headings — no attacker-controlled data appears in the trusted frontmatter zone. arXiv and Semantic Scholar fast paths are exempt (structured API metadata formatted by our own code). The Packages tool (deps.dev) is fenced despite being API-structured, because upstream fields like `deprecatedReason`, `description`, and link URLs originate from package contributors.
 - **Section extraction** - Use the `section` parameter with a heading name (or list of names) to extract specific sections. Supports disambiguation for duplicate heading names.
 - **Fragment resolution** - URL fragments (e.g. `#section-name`) are resolved against the heading tree. Fuzzy matching handles cross-platform slug differences: case folding, underscore↔hyphen normalization (GFM vs Goldmark), and percent-encoded characters like `%27` (apostrophes).
 - **Whitespace normalization** - Non-breaking spaces, HTML entities (`&nbsp;`), and exotic Unicode whitespace in headings and titles are normalized to plain ASCII spaces for reliable section matching.

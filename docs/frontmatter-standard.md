@@ -390,6 +390,68 @@ IETF tool actions.  RFC DOIs (`10.17487/RFC{N}`) resolved via `doi.org`
 are delegated to the IETF handler rather than generic DOI content
 negotiation, preserving relationship chains and subseries metadata.
 
+### Packages tool (deps.dev)
+
+**`package` action:**
+
+| Field             | Description |
+|-------------------|-------------|
+| `source`          | deps.dev package URL |
+| `api`             | `deps.dev` |
+| `ecosystem`       | Display label (e.g. `PyPI`, `Cargo`, `npm`) |
+| `default_version` | Current default/stable version |
+| `versions`        | Total version count |
+| `note`            | Deprecation or advisory warning (conditional) |
+| `hint`            | Guidance to use `dependencies` action |
+| `see_also`        | Guidance to use `project` action for OpenSSF Scorecard (conditional) |
+
+**`version` action:**
+
+| Field       | Description |
+|-------------|-------------|
+| `source`    | deps.dev version URL |
+| `api`       | `deps.dev` |
+| `ecosystem` | Display label |
+| `advisories`| Count of known security advisories |
+| `note`      | Advisory count warning (conditional) |
+| `hint`      | Guidance to use `advisory` or `dependencies` action |
+| `see_also`  | Guidance to use `project` action for OpenSSF Scorecard (conditional) |
+
+**`dependencies` action:**
+
+| Field            | Description |
+|------------------|-------------|
+| `api`            | `deps.dev` |
+| `ecosystem`      | Display label |
+| `action`         | `dependencies` |
+| `package`        | `name@version` |
+| `direct_deps`    | Count of direct dependencies |
+| `transitive_deps`| Count of transitive dependencies |
+| `hint`           | Guidance to use `version` action for dependency details |
+
+**`project` action:**
+
+| Field            | Description |
+|------------------|-------------|
+| `source`         | GitHub project URL |
+| `api`            | `deps.dev` |
+| `action`         | `project` |
+| `scorecard_score`| OpenSSF Scorecard overall score (e.g. `8.2/10`) (conditional) |
+| `hint`           | Guidance to use GitHub tool for README/issues |
+
+**`advisory` action:**
+
+| Field    | Description |
+|----------|-------------|
+| `api`    | `deps.dev` |
+| `action` | `advisory` |
+| `source` | OSV vulnerability URL |
+| `hint`   | Guidance to use `version` action to check affected versions |
+
+All Packages tool actions fence their body content because upstream
+fields (`deprecatedReason`, `description`, link URLs) originate from
+package contributors and are potential injection vectors.
+
 ### GitHub tool
 
 **`repo` action:**

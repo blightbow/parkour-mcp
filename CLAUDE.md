@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-**kagi-research-mcp** — an MCP server providing a research synthesis pipeline for targeted content extraction from websites and research papers. Integrates Kagi, Semantic Scholar, arXiv, MediaWiki, and DOI resolution APIs into a unified tool suite for Claude Code and Claude Desktop.
+**kagi-research-mcp** — an MCP server providing a research synthesis pipeline for targeted content extraction from websites and research papers. Integrates Kagi, Semantic Scholar, arXiv, deps.dev, MediaWiki, and DOI resolution APIs into a unified tool suite for Claude Code and Claude Desktop.
 
 ## Commands
 
@@ -27,7 +27,7 @@ uv run python3 scripts/regenerate_readme_examples.py
 
 ### Module Layout (`kagi_research_mcp/`)
 
-- **`__init__.py`** — MCP server entry point. Registers 10 tools with profile-specific names (PascalCase for `code`, snake_case for `desktop`). Description templates have placeholders replaced at registration time.
+- **`__init__.py`** — MCP server entry point. Registers 11 tools with profile-specific names (PascalCase for `code`, snake_case for `desktop`). Description templates have placeholders replaced at registration time.
 - **`_pipeline.py`** — Shared processing layer. Owns the fast-path detection chain, multi-entry caching (`_WikiCache` LRU, `_PageCache` 2Q), slicing, BM25 search, and section filtering.
 - **`markdown.py`** — HTML→markdown conversion via custom `TextOnlyConverter`. Section extraction with fuzzy slug matching. Content fencing. Semantic truncation for markdown, hard truncation for structured formats.
 - **`shelf.py`** — Research shelf implementation. All public methods guarded by `asyncio.Lock`.
@@ -43,6 +43,7 @@ API integration modules (each ~300-650 LOC, self-contained):
 - **`reddit.py`** — Reddit fast path via `old.reddit.com` `.json` endpoint. URL rewriting, comment tree parsing, section-based comment navigation. 2s rate limit.
 - **`github.py`** — GitHub REST API integration. 7 tool actions (search_issues, search_code, repo, tree, issue, pull_request, file). Three-tier auth (env → config file → unauthenticated). Per-resource rate limit tracking. URL detection for fast-path chain covering blob (with line anchors), tree, issue, PR, wiki, commit, compare, releases, org/user profiles, gist, and `raw.githubusercontent.com`. Source code sectionization via tree-sitter CodeSplitter. CITATION.cff parsing for research shelf integration. ~1600 LOC.
 - **`ietf.py`** — IETF RFC and Internet-Draft integration. 4 tool actions (rfc, search, draft, subseries). RFC Editor per-document JSON for metadata and relationship chains (obsoletes/updates). IETF Datatracker REST API for search with status/WG filtering. BibXML service for subseries (STD/BCP/FYI) resolution. Native DOI tracking (`10.17487/RFC{N}`). 1s Datatracker rate limit.
+- **`packages.py`** — deps.dev (Google Open Source Insights) integration. 5 tool actions (package, version, dependencies, project, advisory). Covers 7 ecosystems (npm, PyPI, Go, Maven, Cargo, NuGet, RubyGems). Version history, license detection, security advisories (GHSA/CVE with CVSS), resolved dependency graphs with native constraints, OpenSSF Scorecard, OSS-Fuzz coverage, and SLSA provenance. No auth required. 1s politeness rate limit. Body content fenced (contributor-supplied fields are injection vectors). ~480 LOC.
 - **`common.py`** — Shared constants: dual User-Agent strategy (browser UA for HTML, API UA for structured endpoints), `RateLimiter` class, `_LANGUAGE_MAP` for file extension → syntax highlight language.
 
 ### Key Concepts
