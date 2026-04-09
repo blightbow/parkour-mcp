@@ -2,10 +2,10 @@
   "manifest_version": "0.4",
   "name": "parkour-mcp",
   "display_name": "Parkour",
-  "version": "0.2.0",
-  "description": "Research synthesis pipeline: web search, content extraction, academic papers, GitHub, RFCs, and package metadata",
-  "long_description": "MCP server providing a content exploration and research synthesis pipeline. Uses clean first-party APIs to surface and explore web content without summarization. Integrates Kagi, Semantic Scholar, arXiv, deps.dev, IETF, GitHub, MediaWiki, Reddit, and DOI resolution APIs into a unified tool suite.\n\n**Note:** The web_fetch_js tool (for JavaScript-rendered pages) requires a one-time browser install. Run `playwright install webkit` from any terminal. The other 10 tools work without this step.",
-  "homepage": "https://github.com/blightbow/kagi-research-mcp",
+  "version": "1.0.0",
+  "description": "Research synthesis pipeline: web search, content extraction, academic papers, GitHub, RFCs, Discourse forums, and package metadata",
+  "long_description": "MCP server providing a content exploration and research synthesis pipeline. Uses clean first-party APIs to surface and explore web content without summarization. Integrates Kagi, Semantic Scholar, arXiv, deps.dev, IETF, GitHub, MediaWiki, Reddit, Discourse, and DOI resolution APIs into a unified tool suite.\n\n**Note:** The web_fetch_js tool (for JavaScript-rendered pages) requires a one-time browser install. Run `playwright install webkit` from any terminal. The other 11 tools work without this step.",
+  "homepage": "https://github.com/blightbow/parkour-mcp",
   "icon": "assets/icon.png",
   "author": {
     "name": "blightbow",
@@ -13,11 +13,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/blightbow/kagi-research-mcp"
+    "url": "https://github.com/blightbow/parkour-mcp"
   },
   "license": "MIT",
   "privacy_policies": [
-    "https://github.com/blightbow/kagi-research-mcp/blob/main/privacy-policy.md"
+    "https://github.com/blightbow/parkour-mcp/blob/main/privacy-policy.md"
   ],
   "keywords": [
     "research",
@@ -27,6 +27,7 @@
     "papers",
     "arxiv",
     "github",
+    "discourse",
     "kagi"
   ],
   "server": {
@@ -129,6 +130,10 @@
     {
       "name": "packages",
       "description": "Search and inspect software packages across language ecosystems via deps.dev"
+    },
+    {
+      "name": "discourse",
+      "description": "Search and browse Discourse forum topics and posts"
     },
     {
       "name": "research_shelf",

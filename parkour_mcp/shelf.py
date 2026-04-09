@@ -215,10 +215,6 @@ class ResearchShelf:
                 return key
         return None
 
-    def _find_by_alt_doi(self, record: CitationRecord) -> Optional[str]:
-        """Find a matching record in the active store. Retained for compat."""
-        return self._find_in_store(record, self._records)
-
     def _merge_into_existing(
         self, record: CitationRecord, existing: CitationRecord,
     ) -> None:

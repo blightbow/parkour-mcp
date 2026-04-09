@@ -4,6 +4,8 @@ import argparse
 import base64
 import logging
 import pathlib
+from collections.abc import Callable
+from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 from mcp.types import Icon, ToolAnnotations
@@ -335,7 +337,7 @@ def main():
         )
 
     # Register all tools with profile-specific names and descriptions
-    tools: list[tuple[str, object]] = [
+    tools: list[tuple[str, Callable[..., Any]]] = [
         ("search", search),
         ("web_fetch_sections", web_fetch_sections),
         ("web_fetch_direct", web_fetch_direct),

@@ -62,10 +62,12 @@ def _handle_kagi_error(e: Exception) -> str:
     """Format a Kagi API exception into a user-facing error string."""
     error_msg = str(e)
     # Try to extract structured error from Kagi's JSON response body
-    if hasattr(e, "response") and hasattr(e.response, "text"):
+    response = getattr(e, "response", None)
+    response_text: str | None = getattr(response, "text", None) if response else None
+    if response_text is not None:
         try:
             import json
-            body = json.loads(e.response.text)
+            body = json.loads(response_text)
             errors = body.get("error") or []
             if errors and isinstance(errors, list):
                 kagi_msg = errors[0].get("msg", "")

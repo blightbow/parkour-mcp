@@ -55,12 +55,25 @@ _github_limiter = RateLimiter(1.0)
 # ---------------------------------------------------------------------------
 
 
+_github_token_cache: str | None = None
+
+
 def _get_github_token() -> str:
-    """Load GitHub token from env var, config file, or return empty string."""
+    """Load GitHub token from env var, config file, or return empty string.
+
+    Result is cached after the first call — the token does not change
+    during a server session.
+    """
+    global _github_token_cache
+    if _github_token_cache is not None:
+        return _github_token_cache
     if key := os.environ.get("GITHUB_TOKEN"):
+        _github_token_cache = key
         return key
     if GITHUB_CONFIG_PATH.exists():
-        return GITHUB_CONFIG_PATH.read_text().strip()
+        _github_token_cache = GITHUB_CONFIG_PATH.read_text().strip()
+        return _github_token_cache
+    _github_token_cache = ""
     return ""
 
 
@@ -268,6 +281,10 @@ _RAW_GH_RE = re.compile(
     r"https?://raw\.githubusercontent\.com/([^/]+)/([^/]+)/([^/]+)/(.+)$",
     re.IGNORECASE,
 )
+_ORG_RE = re.compile(
+    r"https?://github\.com/([a-zA-Z0-9](?:[a-zA-Z0-9\-]*[a-zA-Z0-9])?)/?$",
+    re.IGNORECASE,
+)
 
 
 def _detect_github_url(url: str) -> Optional[GitHubUrlMatch]:
@@ -294,10 +311,6 @@ def _detect_github_url(url: str) -> Optional[GitHubUrlMatch]:
         return GitHubUrlMatch(kind="gist", gist_id=m.group(1))
 
     # Org/user profile: github.com/{name} (single path segment, no repo)
-    _ORG_RE = re.compile(
-        r"https?://github\.com/([a-zA-Z0-9](?:[a-zA-Z0-9\-]*[a-zA-Z0-9])?)/?$",
-        re.IGNORECASE,
-    )
     om = _ORG_RE.match(url)
     if om:
         name = om.group(1).lower()
@@ -1368,68 +1381,83 @@ async def _build_pr_markdown(
     parts.append("\n## Diff stat\n")
     parts.append(f"{changed_files} files changed, +{additions}, -{deletions}")
 
-    if review_comment_count > 0:
-        review_comments = await _github_request(
+    # Fetch review comments and issue comments concurrently when both exist
+    review_coro = (
+        _github_request(
             "GET", f"/repos/{owner}/{repo}/pulls/{number}/comments",
             params={"per_page": str(min(limit, 100)), "page": str(page)},
-        )
-        if isinstance(review_comments, list) and review_comments:
-            by_file: dict[str, list[dict]] = {}
-            for rc in review_comments:
-                path = rc.get("path", "unknown")
-                by_file.setdefault(path, []).append(rc)
-
-            parts.append("\n## Review comments\n")
-            for filepath, comments in by_file.items():
-                parts.append(f"### {filepath}\n")
-                for rc in comments:
-                    rcid = rc["id"]
-                    rcauthor = rc["user"]["login"]
-                    rcbody = rc.get("body") or ""
-                    rccreated = rc.get("created_at", "")
-                    rcassoc = rc.get("author_association", "")
-                    diff_hunk = rc.get("diff_hunk") or ""
-                    line = rc.get("line") or rc.get("original_line")
-                    in_reply = rc.get("in_reply_to_id")
-
-                    reply_tag = f" (reply to rc_{in_reply})" if in_reply else ""
-                    assoc_tag = f" ({rcassoc})" if rcassoc and rcassoc != "NONE" else ""
-                    line_tag = f" L{line}" if line else ""
-
-                    parts.append(f"#### rc_{rcid}{reply_tag}\n")
-                    parts.append(f"**@{rcauthor}**{assoc_tag}{line_tag} — {_fmt_relative_time(rccreated)}")
-
-                    if diff_hunk and not in_reply:
-                        hunk_lines = diff_hunk.strip().split("\n")
-                        display_lines = hunk_lines[-6:] if len(hunk_lines) > 6 else hunk_lines
-                        parts.append("```diff")
-                        parts.extend(display_lines)
-                        parts.append("```")
-
-                    parts.append("")
-                    parts.append(rcbody)
-                    parts.append("")
-
-    if comment_count > 0:
-        parts.append("\n## Comments\n")
-        comments = await _github_request(
+        ) if review_comment_count > 0 else None
+    )
+    issue_coro = (
+        _github_request(
             "GET", f"/repos/{owner}/{repo}/issues/{number}/comments",
             params={"per_page": str(min(limit, 100)), "page": str(page)},
-        )
-        if isinstance(comments, list):
-            for c in comments:
-                cid = c["id"]
-                cauthor = c["user"]["login"]
-                cbody = c.get("body") or ""
-                ccreated = c.get("created_at", "")
-                cassoc = c.get("author_association", "")
+        ) if comment_count > 0 else None
+    )
+    if review_coro and issue_coro:
+        review_comments, comments = await asyncio.gather(review_coro, issue_coro)
+    elif review_coro:
+        review_comments = await review_coro
+        comments = []
+    elif issue_coro:
+        review_comments = []
+        comments = await issue_coro
+    else:
+        review_comments = []
+        comments = []
 
-                assoc_tag = f" ({cassoc})" if cassoc and cassoc != "NONE" else ""
-                parts.append(f"### ic_{cid}\n")
-                parts.append(f"**@{cauthor}**{assoc_tag} — {_fmt_relative_time(ccreated)}")
+    if isinstance(review_comments, list) and review_comments:
+        by_file: dict[str, list[dict]] = {}
+        for rc in review_comments:
+            path = rc.get("path", "unknown")
+            by_file.setdefault(path, []).append(rc)
+
+        parts.append("\n## Review comments\n")
+        for filepath, file_comments in by_file.items():
+            parts.append(f"### {filepath}\n")
+            for rc in file_comments:
+                rcid = rc["id"]
+                rcauthor = rc["user"]["login"]
+                rcbody = rc.get("body") or ""
+                rccreated = rc.get("created_at", "")
+                rcassoc = rc.get("author_association", "")
+                diff_hunk = rc.get("diff_hunk") or ""
+                line = rc.get("line") or rc.get("original_line")
+                in_reply = rc.get("in_reply_to_id")
+
+                reply_tag = f" (reply to rc_{in_reply})" if in_reply else ""
+                assoc_tag = f" ({rcassoc})" if rcassoc and rcassoc != "NONE" else ""
+                line_tag = f" L{line}" if line else ""
+
+                parts.append(f"#### rc_{rcid}{reply_tag}\n")
+                parts.append(f"**@{rcauthor}**{assoc_tag}{line_tag} — {_fmt_relative_time(rccreated)}")
+
+                if diff_hunk and not in_reply:
+                    hunk_lines = diff_hunk.strip().split("\n")
+                    display_lines = hunk_lines[-6:] if len(hunk_lines) > 6 else hunk_lines
+                    parts.append("```diff")
+                    parts.extend(display_lines)
+                    parts.append("```")
+
                 parts.append("")
-                parts.append(cbody)
+                parts.append(rcbody)
                 parts.append("")
+
+    if isinstance(comments, list) and comments:
+        parts.append("\n## Comments\n")
+        for c in comments:
+            cid = c["id"]
+            cauthor = c["user"]["login"]
+            cbody = c.get("body") or ""
+            ccreated = c.get("created_at", "")
+            cassoc = c.get("author_association", "")
+
+            assoc_tag = f" ({cassoc})" if cassoc and cassoc != "NONE" else ""
+            parts.append(f"### ic_{cid}\n")
+            parts.append(f"**@{cauthor}**{assoc_tag} — {_fmt_relative_time(ccreated)}")
+            parts.append("")
+            parts.append(cbody)
+            parts.append("")
 
     return title, "\n".join(parts), display_state, extra_fm
 

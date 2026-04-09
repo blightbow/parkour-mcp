@@ -9,6 +9,7 @@ from collections import OrderedDict
 from typing import Optional
 from urllib.parse import urldefrag
 
+import httpx
 import tantivy
 from semantic_text_splitter import MarkdownSplitter
 
@@ -603,7 +604,7 @@ async def _reddit_fast_path(url: str, max_tokens: int = 5000) -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 async def _discourse_fast_path(
-    url: str, headers: object, max_tokens: int = 5000,
+    url: str, headers: httpx.Headers, max_tokens: int = 5000,
 ) -> Optional[str]:
     """Handle a Discourse topic URL detected via response headers.
 

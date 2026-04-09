@@ -2,7 +2,8 @@
 
 # Pack Claude Desktop Extension bundle
 pack:
-    npx @anthropic-ai/mcpb pack . tmp/parkour-mcp.mcpb
+    mkdir -p dist
+    npx @anthropic-ai/mcpb pack . dist/parkour-mcp.mcpb
 
 # Run unit tests (mocked, excludes live)
 test *args:

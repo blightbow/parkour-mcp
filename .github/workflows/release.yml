@@ -1,0 +1,70 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write    # gh release create + asset upload
+  id-token: write    # PyPI trusted publisher (OIDC)
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    environment: release
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Install Python
+        run: uv python install 3.12
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Verify tag matches package version
+        run: |
+          tag="${GITHUB_REF#refs/tags/v}"
+          pkg=$(uv run python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          if [ "$tag" != "$pkg" ]; then
+            echo "::error::Tag v$tag does not match pyproject.toml version $pkg"
+            exit 1
+          fi
+
+      - name: Run tests
+        run: uv run pytest
+
+      - name: Build sdist and wheel
+        run: uv build
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        # Uses OIDC trusted publisher — no token needed.
+        # Configure at: https://pypi.org/manage/project/parkour-mcp/settings/publishing/
+
+      - name: Pack mcpb bundle
+        run: npx @anthropic-ai/mcpb pack . dist/parkour-mcp.mcpb
+
+      - name: Sign mcpb bundle
+        run: npx @anthropic-ai/mcpb sign dist/parkour-mcp.mcpb
+        env:
+          MCPB_SIGNING_KEY: ${{ secrets.MCPB_SIGNING_KEY }}
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          gh release create "$tag" \
+            --title "$tag" \
+            --generate-notes \
+            dist/*.tar.gz \
+            dist/*.whl \
+            dist/parkour-mcp.mcpb

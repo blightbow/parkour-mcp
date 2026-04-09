@@ -607,8 +607,8 @@ async def web_fetch_sections(url: str) -> str:
 
     # --- arXiv fast path (sections not applicable for API data) ---
     from .arxiv import _detect_arxiv_url
-    if _detect_arxiv_url(url):
-        arxiv_id = _detect_arxiv_url(url)
+    arxiv_id = _detect_arxiv_url(url)
+    if arxiv_id:
         fm = _build_frontmatter({
             "title": "arXiv paper",
             "source": original_url,
