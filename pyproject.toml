@@ -1,7 +1,7 @@
 [project]
 name = "parkour-mcp"
-version = "0.2.0"
-description = "Research synthesis pipeline for MCP enabling targeted content extraction from websites and research papers"
+version = "1.0.0"
+description = "A content exploration toolkit that helps LLMs surface high signal, unsummarized web content."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.12"
@@ -42,9 +42,9 @@ grammars = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/blightbow/kagi-research-mcp"
-Repository = "https://github.com/blightbow/kagi-research-mcp"
-Issues = "https://github.com/blightbow/kagi-research-mcp/issues"
+Homepage = "https://github.com/blightbow/parkour-mcp"
+Repository = "https://github.com/blightbow/parkour-mcp"
+Issues = "https://github.com/blightbow/parkour-mcp/issues"
 
 [project.scripts]
 parkour-mcp = "parkour_mcp:main"

@@ -5,7 +5,7 @@
 > _"an activity in which people move quickly around buildings and objects in a city while performing jumps and other skilful movements, usually trying to move between points as quickly, smoothly, and safely as possible"_
 > -- [Cambridge Dictionary](https://dictionary.cambridge.org/dictionary/english/parkour)
 
-Parkour is a content exploration toolkit that helps LLMs to surface high signal, unsummarized web content. It makes extensive use of clean APIs and Markdown conversion to enable targeted content extraction and knowledge synthesis. A rolling 2Q page cache keeps recently visited pages in memory so that follow-up requests (section extraction, BM25 search, slice retrieval, comparison pivots) are served quickly and without additional round-trips. While primarily designed for Claude Code and Claude Desktop, it should be adaptable to most agentic toolchain needs.
+Parkour is a content exploration toolkit that helps LLMs surface high signal, unsummarized web content. It makes extensive use of clean APIs and Markdown conversion to enable targeted content extraction and knowledge synthesis. A rolling 2Q page cache keeps recently visited pages in memory so that follow-up requests (section extraction, BM25 search, slice retrieval, comparison pivots) are served quickly and without additional round-trips. While primarily designed for Claude Code and Claude Desktop, it should be adaptable to most agentic toolchain needs.
 
 API integrations:
 - Kagi Search
@@ -24,7 +24,7 @@ What sets Parkour apart from the standard approaches are three principles:
 
 ### Tool calls should participate in steering the LLM.
 
-We design our tool outputs with the LLM in mind. The LLM is our user, and if our user has a good experience the humans behind them have an even better experience.
+We design our tool outputs with the LLM in mind. The LLM is our immediate user, and if our user has a good experience the humans behind them have an even better experience.
 
 The standout feature of Parkour is a frontmatter tool envelope that intelligently advises the LLM and steers its decisionmaking. This is a fancy way of saying "our tool payloads are prefaced with instructional YAML frontmatter". It's a technique that is simple on its face but deceptively powerful.
 
@@ -565,6 +565,15 @@ Google Scholar does not provide an official API. Semantic Scholar has comparable
 We accept no liability, and there is no liability to be accepted. How your prompt stack spends your API balance isn't something we can help with.
 
 Also, why would you connect a tool designed with almost no synthesis of research papers to a MCP server dedicated to research synthesis?
+
+> Does this MCP server respect robots.txt?
+
+No. We use an honest, identifiable User-Agent string so site operators can make informed decisions about Parkour.
+
+Parkour is intended to operate as a local sidecar for a human user. Requests originate from your machine, at your direction, from your IP address. This is functionally equivalent to a browser or `curl`, neither of which consult robots.txt. The robots.txt protocol was designed for autonomous crawlers that index content at scale without specific human intent behind each request. Parkour does none of this: it fetches one page at a time, actively avoids generating more requests than necessary, and does not permanently index the content outside of its page cache (the mechanism for avoiding extra lookups).
+
+For context, Anthropic's own `Claude-User` bot [honors robots.txt](https://support.claude.com/en/articles/8896518-does-anthropic-crawl-data-from-the-web-and-how-can-site-owners-block-the-crawler) even for user-directed fetches — the most conservative position among AI vendors. OpenAI and Perplexity both treat their user-initiated fetchers as [exempt from robots.txt](https://www.searchenginejournal.com/anthropics-claude-bots-make-robots-txt-decisions-more-granular/568253/). Parkour is further removed from a crawler than any of these: it's a locally-run tool with no training pipeline, no search index, and no autonomous behavior.
+
 
 ## Credits
 
