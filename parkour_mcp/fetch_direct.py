@@ -80,6 +80,11 @@ async def web_fetch_direct(
 
     source_url, fragment_warning = _resolve_fragment_source(url, fragment, section)
 
+    # --- SSRF check (must run before any fast path that makes HTTP requests) ---
+    ssrf_error = check_url_ssrf(url)
+    if ssrf_error:
+        return ssrf_error
+
     # Normalize empty search/slices to None
     if search is not None and search == "":
         search = None
@@ -289,11 +294,6 @@ async def web_fetch_direct(
             return result
     except Exception:
         pass  # Fall through to HTTP fetch
-
-    # --- SSRF check ---
-    ssrf_error = check_url_ssrf(url)
-    if ssrf_error:
-        return ssrf_error
 
     # --- HTTP fetch ---
     try:
@@ -605,6 +605,11 @@ async def web_fetch_sections(url: str) -> str:
     url, fragment = _extract_fragment(url)
     section_names = [fragment] if fragment else None
 
+    # --- SSRF check (must run before any fast path that makes HTTP requests) ---
+    ssrf_error = check_url_ssrf(url)
+    if ssrf_error:
+        return ssrf_error
+
     # --- arXiv fast path (sections not applicable for API data) ---
     from .arxiv import _detect_arxiv_url
     arxiv_id = _detect_arxiv_url(url)
@@ -702,11 +707,6 @@ async def web_fetch_sections(url: str) -> str:
             )
     except Exception:
         pass
-
-    # --- SSRF check ---
-    ssrf_error = check_url_ssrf(url)
-    if ssrf_error:
-        return ssrf_error
 
     # --- HTTP fetch ---
     try:

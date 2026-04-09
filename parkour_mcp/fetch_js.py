@@ -267,6 +267,11 @@ async def web_fetch_js(
         section_names = [fragment]
     source_url, fragment_warning = _resolve_fragment_source(url, fragment, section)
 
+    # --- SSRF check (must run before any fast path that makes HTTP requests) ---
+    ssrf_error = check_url_ssrf(url)
+    if ssrf_error:
+        return ssrf_error
+
     # --- Parameter validation ---
     if search is not None and search == "":
         search = None
@@ -398,11 +403,6 @@ async def web_fetch_js(
             return result
     except Exception:
         pass  # Fall through to browser path
-
-    # --- SSRF check ---
-    ssrf_error = check_url_ssrf(url)
-    if ssrf_error:
-        return ssrf_error
 
     # --- Content-type pre-check (skip browser for non-HTML) ---
     if not actions and not wait_for:
