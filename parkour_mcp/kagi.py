@@ -61,10 +61,22 @@ def _check_balance(response: Any, is_summarize: bool = False) -> Optional[str]:
 def _handle_kagi_error(e: Exception) -> str:
     """Format a Kagi API exception into a user-facing error string."""
     error_msg = str(e)
+    # Try to extract structured error from Kagi's JSON response body
+    if hasattr(e, "response") and hasattr(e.response, "text"):
+        try:
+            import json
+            body = json.loads(e.response.text)
+            errors = body.get("error") or []
+            if errors and isinstance(errors, list):
+                kagi_msg = errors[0].get("msg", "")
+                if "Insufficient credit" in kagi_msg:
+                    return "Error: Insufficient API credits. Add funds at https://kagi.com/settings?p=billing_api"
+        except (json.JSONDecodeError, KeyError, IndexError):
+            pass
     if "401" in error_msg or "Unauthorized" in error_msg:
         return "Error: Invalid API key. Check ~/.config/parkour/kagi_api_key or KAGI_API_KEY env var."
     if "402" in error_msg:
-        return "Error: Insufficient API credits. Add funds at https://kagi.com/settings?p=billing"
+        return "Error: Insufficient API credits. Add funds at https://kagi.com/settings?p=billing_api"
     return f"Error: {error_msg}"
 
 
