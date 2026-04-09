@@ -1,9 +1,12 @@
 """Parkour MCP Server - Web browsing and content extraction tools for Claude."""
 
 import argparse
+import base64
 import logging
+import pathlib
 
 from mcp.server.fastmcp import FastMCP
+from mcp.types import Icon, ToolAnnotations
 
 from .kagi import search, summarize
 from .fetch_js import web_fetch_js
@@ -19,7 +22,60 @@ from .common import TOOL_NAMES, init_tool_names
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-mcp = FastMCP("parkour-mcp")
+# ---------------------------------------------------------------------------
+# Tool icons — SVG glyphs extracted from Noto fonts (SIL OFL 1.1 licensed).
+# Source files live in assets/icons/*.svg; encoded to data: URIs at startup
+# since the MCP Icon spec requires https:// or data: URIs (no local paths).
+# ---------------------------------------------------------------------------
+_ICONS_DIR = pathlib.Path(__file__).parent.parent / "assets" / "icons"
+
+# Internal tool key → SVG filename (without .svg extension)
+_ICON_FILES = {
+    "search": "search",             # 🔍 U+1F50D MAGNIFYING GLASS (NotoSansSymbols2)
+    "summarize": "summarize",       # Σ  U+03A3 GREEK CAPITAL SIGMA (NotoSansMono)
+    "web_fetch_sections": "sections",  # §  U+00A7 SECTION SIGN (NotoSansMono)
+    "web_fetch_direct": "exact",    # ⌖  U+2316 POSITION INDICATOR (NotoSansSymbols2)
+    "web_fetch_js": "js",           # ⚡ U+26A1 HIGH VOLTAGE (NotoSansSymbols2)
+    "arxiv": "arxiv",               # χ  U+03C7 GREEK SMALL CHI (NotoSansMono)
+    "semantic_scholar": "scholar",  # ∴  U+2234 THEREFORE (NotoSansMono)
+    "research_shelf": "shelf",      # ⊞  U+229E SQUARED PLUS (NotoSansMath)
+    "github": "github",             # ⑂  U+2442 OCR FORK (NotoSansSymbols2)
+    "ietf": "ietf",                 # 🐌 U+1F40C SNAIL (NotoEmoji)
+    "packages": "packages",         # ⬡  U+2B21 WHITE HEXAGON (NotoSansMath)
+}
+_SERVER_ICON_FILE = "server"        # ∮  U+222E CONTOUR INTEGRAL (NotoSansMath)
+
+
+def _load_icon(filename: str) -> Icon | None:
+    """Read an SVG file from assets/icons/ and return it as a data: URI Icon."""
+    path = _ICONS_DIR / f"{filename}.svg"
+    if not path.is_file():
+        logger.warning("Icon file not found: %s", path)
+        return None
+    svg_bytes = path.read_bytes()
+    b64 = base64.b64encode(svg_bytes).decode("ascii")
+    return Icon(src=f"data:image/svg+xml;base64,{b64}", mimeType="image/svg+xml")
+
+
+def _load_tool_icon(key: str) -> list[Icon] | None:
+    """Load a tool icon by internal tool key, or None if unavailable."""
+    filename = _ICON_FILES.get(key)
+    if filename is None:
+        return None
+    icon = _load_icon(filename)
+    return [icon] if icon else None
+
+
+def _load_server_icons() -> list[Icon] | None:
+    """Load the server-level icon."""
+    icon = _load_icon(_SERVER_ICON_FILE)
+    return [icon] if icon else None
+
+
+mcp = FastMCP(
+    "parkour-mcp",
+    icons=_load_server_icons(),
+)
 
 # Per-profile template variables — tool names and description overrides.
 # code profile: PascalCase (WebSearch, WebFetch)
@@ -265,7 +321,13 @@ def main():
     for internal_name, func in tools:
         name = TOOL_NAMES[internal_name][args.profile]
         desc = _build_description(internal_name, args.profile)
-        mcp.add_tool(func, name=name, description=desc)
+        icons = _load_tool_icon(internal_name)
+        if internal_name == "research_shelf":
+            annotations = ToolAnnotations(destructiveHint=True)
+        else:
+            annotations = ToolAnnotations(readOnlyHint=True)
+        mcp.add_tool(func, name=name, description=desc, icons=icons,
+                      annotations=annotations)
 
     # MCP resource: read-only shelf summary
     @mcp.resource("research://shelf")

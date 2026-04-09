@@ -1,0 +1,29 @@
+# Development artifacts
+.venv/
+.git/
+.github/
+.claude/
+.pytest_cache/
+.ruff_cache/
+__pycache__/
+*.egg-info/
+tmp/
+
+# Development files
+tests/
+scripts/
+docs/
+pyrightconfig.json
+CLAUDE.md
+.gitignore
+server.py
+
+# Build artifacts
+build/
+dist/
+wheels/
+*.py[oc]
+
+# Temporary icon workfiles
+assets/icons/preview.html
+assets/icons/candidates.html

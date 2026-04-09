@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <defs>
+    <linearGradient id="g1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#6366f1"/>
+      <stop offset="100%" stop-color="#a855f7"/>
+    </linearGradient>
+    <linearGradient id="g2" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#818cf8"/>
+      <stop offset="100%" stop-color="#c084fc"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background rounded square -->
+  <rect x="4" y="4" width="120" height="120" rx="24" fill="url(#g1)"/>
+
+  <!-- Parkour figure: stylized leaping silhouette -->
+  <g fill="#fff" transform="translate(64,62)">
+    <!-- Head -->
+    <circle cx="-4" cy="-28" r="8"/>
+
+    <!-- Torso — angled forward for momentum -->
+    <path d="M-6,-20 L4,-20 L10,4 L-2,6 Z"/>
+
+    <!-- Leading arm — reaching forward and up -->
+    <path d="M2,-16 L18,-26 L22,-22 L6,-12 Z"/>
+
+    <!-- Trailing arm — swept back -->
+    <path d="M-4,-14 L-20,-8 L-22,-13 L-6,-18 Z"/>
+
+    <!-- Leading leg — extended forward, mid-stride -->
+    <path d="M6,2 L26,14 L24,20 L4,10 Z"/>
+
+    <!-- Trailing leg — kicked back -->
+    <path d="M-2,4 L-14,26 L-20,24 L-8,4 Z"/>
+  </g>
+
+  <!-- Motion trails — three arced streaks behind the figure -->
+  <g stroke="rgba(255,255,255,0.45)" stroke-width="3" stroke-linecap="round" fill="none">
+    <path d="M16,52 Q26,48 30,42"/>
+    <path d="M14,64 Q24,60 30,54"/>
+    <path d="M16,76 Q26,72 30,66"/>
+  </g>
+</svg>

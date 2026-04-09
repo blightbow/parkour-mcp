@@ -1,0 +1,138 @@
+{
+  "manifest_version": "0.4",
+  "name": "parkour-mcp",
+  "display_name": "Parkour",
+  "version": "0.2.0",
+  "description": "Research synthesis pipeline: web search, content extraction, academic papers, GitHub, RFCs, and package metadata",
+  "long_description": "MCP server providing a content exploration and research synthesis pipeline. Uses clean first-party APIs to surface and explore web content without summarization. Integrates Kagi, Semantic Scholar, arXiv, deps.dev, IETF, GitHub, MediaWiki, Reddit, and DOI resolution APIs into a unified tool suite.\n\n**Note:** The web_fetch_js tool (for JavaScript-rendered pages) requires a one-time browser install. Run `playwright install webkit` from any terminal. The other 10 tools work without this step.",
+  "homepage": "https://github.com/blightbow/kagi-research-mcp",
+  "icon": "assets/icon.png",
+  "author": {
+    "name": "blightbow",
+    "url": "https://github.com/blightbow"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/blightbow/kagi-research-mcp"
+  },
+  "license": "MIT",
+  "privacy_policies": [
+    "https://github.com/blightbow/kagi-research-mcp/blob/main/privacy-policy.md"
+  ],
+  "keywords": [
+    "research",
+    "web",
+    "search",
+    "academic",
+    "papers",
+    "arxiv",
+    "github",
+    "kagi"
+  ],
+  "server": {
+    "type": "uv",
+    "entry_point": "parkour_mcp/__main__.py",
+    "mcp_config": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--directory",
+        "${__dirname}",
+        "--extra",
+        "grammars",
+        "-m",
+        "parkour_mcp",
+        "--profile",
+        "desktop"
+      ],
+      "env": {
+        "KAGI_API_KEY": "${user_config.KAGI_API_KEY}",
+        "S2_API_KEY": "${user_config.S2_API_KEY}",
+        "GITHUB_TOKEN": "${user_config.GITHUB_TOKEN}",
+        "MCP_CONTACT_EMAIL": "${user_config.MCP_CONTACT_EMAIL}"
+      }
+    }
+  },
+  "compatibility": {
+    "platforms": ["darwin", "linux", "win32"],
+    "runtimes": {
+      "python": ">=3.12"
+    }
+  },
+  "user_config": {
+    "KAGI_API_KEY": {
+      "type": "string",
+      "title": "Kagi API Key",
+      "description": "Enables Kagi web search and summarization tools. Get one at https://kagi.com/settings?p=api",
+      "sensitive": true,
+      "required": false
+    },
+    "GITHUB_TOKEN": {
+      "type": "string",
+      "title": "GitHub Token",
+      "description": "Personal access token for GitHub API (5000 req/hr vs 60/hr unauthenticated). No special scopes needed for public repos.",
+      "sensitive": true,
+      "required": false
+    },
+    "S2_API_KEY": {
+      "type": "string",
+      "title": "Semantic Scholar API Key",
+      "description": "Free API key for higher rate limits on academic paper lookups. Get one at https://www.semanticscholar.org/product/api#api-key",
+      "sensitive": true,
+      "required": false
+    },
+    "MCP_CONTACT_EMAIL": {
+      "type": "string",
+      "title": "Contact Email",
+      "description": "Optional email in API User-Agent headers. Enables CrossRef polite pool (10 req/s vs 5 req/s).",
+      "sensitive": false,
+      "required": false
+    }
+  },
+  "tools": [
+    {
+      "name": "kagi_search",
+      "description": "Search the web using Kagi's curated search index"
+    },
+    {
+      "name": "kagi_summarize",
+      "description": "Summarize content from a URL or text using Kagi's Universal Summarizer"
+    },
+    {
+      "name": "web_fetch_sections",
+      "description": "List a document's section headings to understand page structure"
+    },
+    {
+      "name": "web_fetch_exact",
+      "description": "Fetch and extract unsummarized content from URLs as markdown"
+    },
+    {
+      "name": "web_fetch_js",
+      "description": "Fetch and interact with JavaScript-rendered web content"
+    },
+    {
+      "name": "arxiv",
+      "description": "Search and retrieve academic papers from arXiv"
+    },
+    {
+      "name": "semantic_scholar",
+      "description": "Search and retrieve academic paper data from Semantic Scholar"
+    },
+    {
+      "name": "github",
+      "description": "Search and retrieve code, issues, and pull requests from GitHub"
+    },
+    {
+      "name": "ietf",
+      "description": "Search and retrieve IETF RFCs, Internet-Drafts, and standards-track documents"
+    },
+    {
+      "name": "packages",
+      "description": "Search and inspect software packages across language ecosystems via deps.dev"
+    },
+    {
+      "name": "research_shelf",
+      "description": "Manage the research shelf — an in-memory citation tracker for papers inspected during research"
+    }
+  ]
+}
