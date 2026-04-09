@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-**kagi-research-mcp** — an MCP server providing a research synthesis pipeline for targeted content extraction from websites and research papers. Integrates Kagi, Semantic Scholar, arXiv, deps.dev, MediaWiki, and DOI resolution APIs into a unified tool suite for Claude Code and Claude Desktop.
+**parkour-mcp** — an MCP server providing a content exploration and research synthesis pipeline. Uses clean first-party APIs to surface and explore web content without summarization. Integrates Kagi, Semantic Scholar, arXiv, deps.dev, IETF, GitHub, MediaWiki, Reddit, and DOI resolution APIs into a unified tool suite for Claude Code and Claude Desktop.
 
 ## Commands
 
@@ -68,10 +68,10 @@ API integration modules (each ~300-650 LOC, self-contained):
 
 | Variable | Purpose |
 |---|---|
-| `KAGI_API_KEY` | Kagi API key (fallback: `~/.config/kagi/api_key`) |
-| `S2_API_KEY` | Semantic Scholar API key (fallback: `~/.config/kagi/s2_api_key`) |
+| `KAGI_API_KEY` | Kagi API key (fallback: `~/.config/parkour/kagi_api_key`) |
+| `S2_API_KEY` | Semantic Scholar API key (fallback: `~/.config/parkour/s2_api_key`) |
 | `MCP_CONTACT_EMAIL` | Enables CrossRef "polite pool" (10 req/s vs 5 req/s) |
-| `GITHUB_TOKEN` | GitHub personal access token (fallback: `~/.config/kagi/github_token`). 5000 req/hr vs 60/hr unauthenticated |
+| `GITHUB_TOKEN` | GitHub personal access token (fallback: `~/.config/parkour/github_token`). 5000 req/hr vs 60/hr unauthenticated |
 | `PLAYWRIGHT_BROWSER` | Override browser for JS rendering |
 | `MCP_ALLOW_PRIVATE_IPS` | Set to `1` to allow fetching from private/loopback/link-local IPs (default: blocked) |
 

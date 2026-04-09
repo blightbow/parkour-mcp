@@ -4,7 +4,7 @@ Skipped by default. Run with:
     GITHUB_TOKEN=$(gh auth token) uv run pytest tests/test_github_live.py -v
     GITHUB_TOKEN=$(gh auth token) uv run pytest -m live -v
 
-Requires GITHUB_TOKEN to be set (or ~/.config/kagi/github_token to exist).
+Requires GITHUB_TOKEN to be set (or ~/.config/parkour/github_token to exist).
 Tests are individually skipped if no token is available.
 """
 
@@ -214,7 +214,7 @@ class TestGitHubRequest:
     async def test_raw_file_fetch(self):
         """Verify raw.githubusercontent.com serves file content."""
         async with httpx.AsyncClient(timeout=15.0) as client:
-            headers = {"User-Agent": "kagi-research-mcp-test"}
+            headers = {"User-Agent": "parkour-mcp-test"}
             token = _get_github_token()
             if token:
                 headers["Authorization"] = f"token {token}"

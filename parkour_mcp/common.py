@@ -39,7 +39,7 @@ _CONTACT_EMAIL = os.environ.get("MCP_CONTACT_EMAIL", "")
 _CONTACT_PART = f" mailto:{_CONTACT_EMAIL};" if _CONTACT_EMAIL else ""
 _API_USER_AGENT = (
     f"parkour-mcp/{_VERSION} "
-    f"(MCP content tool;{_CONTACT_PART} +https://github.com/blightbow/kagi-research-mcp) "
+    f"(MCP content tool;{_CONTACT_PART} +https://github.com/blightbow/parkour-mcp) "
     f"httpx/{_HTTPX_VERSION} markdownify/{_MARKDOWNIFY_VERSION} "
     f"Python/{_PYTHON_VERSION} {_PLATFORM}"
 )

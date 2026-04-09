@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 _s2_limiter = RateLimiter(1.0)
 
 S2_BASE_URL = "https://api.semanticscholar.org/graph/v1"
-S2_CONFIG_PATH = Path.home() / ".config" / "kagi" / "s2_api_key"
+S2_CONFIG_PATH = Path.home() / ".config" / "parkour" / "s2_api_key"
 
 # Matches semanticscholar.org/paper/ URLs, captures 40-char hex paper ID
 S2_URL_RE = re.compile(
@@ -35,7 +35,7 @@ S2_URL_RE = re.compile(
 _NO_KEY_MSG = (
     "Rate limited (HTTP 429). Unauthenticated requests share a global pool.\n"
     "To get your own rate limit, set S2_API_KEY env var or create "
-    "~/.config/kagi/s2_api_key with a free key from:\n"
+    "~/.config/parkour/s2_api_key with a free key from:\n"
     "https://www.semanticscholar.org/product/api#api-key-form"
 )
 

@@ -33,12 +33,12 @@ logger = logging.getLogger(__name__)
 # Configuration
 # ---------------------------------------------------------------------------
 
-GITHUB_CONFIG_PATH = Path.home() / ".config" / "kagi" / "github_token"
+GITHUB_CONFIG_PATH = Path.home() / ".config" / "parkour" / "github_token"
 _GITHUB_API_VERSION = "2022-11-28"
 
 _NO_TOKEN_MSG = (
     "Rate limited. Unauthenticated GitHub API allows only 60 requests/hour.\n"
-    "Set GITHUB_TOKEN env var or create ~/.config/kagi/github_token "
+    "Set GITHUB_TOKEN env var or create ~/.config/parkour/github_token "
     "with a personal access token.\n"
     "No special scopes needed for public repos. "
     "See: https://github.com/settings/tokens"

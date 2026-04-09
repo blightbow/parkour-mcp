@@ -177,7 +177,7 @@ Query formats vary by action:
 - file/tree: "owner/repo/path" (e.g. "pallets/flask/src/flask/app.py") — use ref= for branch/tag
 - repo: "owner/repo" (e.g. "pallets/flask")
 
-Authentication: Set GITHUB_TOKEN env var or create ~/.config/kagi/github_token
+Authentication: Set GITHUB_TOKEN env var or create ~/.config/parkour/github_token
 for 5000 req/hr (vs 60/hr unauthenticated). No special scopes needed for public repos.""",
 
     "ietf": """Search and retrieve IETF RFCs, Internet-Drafts, and standards-track documents.

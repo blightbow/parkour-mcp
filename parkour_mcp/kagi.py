@@ -11,9 +11,9 @@ from .markdown import _build_frontmatter, _fence_content, _TRUST_ADVISORY
 
 logger = logging.getLogger(__name__)
 
-CONFIG_PATH = Path.home() / ".config" / "kagi" / "api_key"
+CONFIG_PATH = Path.home() / ".config" / "parkour" / "kagi_api_key"
 
-_NO_KEY_MSG = "Error: API key not found. Create ~/.config/kagi/api_key or set KAGI_API_KEY env var."
+_NO_KEY_MSG = "Error: API key not found. Create ~/.config/parkour/kagi_api_key or set KAGI_API_KEY env var."
 
 _LOW_BALANCE_THRESHOLD = 1.00  # dollars
 
@@ -62,7 +62,7 @@ def _handle_kagi_error(e: Exception) -> str:
     """Format a Kagi API exception into a user-facing error string."""
     error_msg = str(e)
     if "401" in error_msg or "Unauthorized" in error_msg:
-        return "Error: Invalid API key. Check ~/.config/kagi/api_key or KAGI_API_KEY env var."
+        return "Error: Invalid API key. Check ~/.config/parkour/kagi_api_key or KAGI_API_KEY env var."
     if "402" in error_msg:
         return "Error: Insufficient API credits. Add funds at https://kagi.com/settings?p=billing"
     return f"Error: {error_msg}"
