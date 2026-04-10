@@ -495,31 +495,6 @@ class TestBuildFrontmatter:
         fm = _build_frontmatter({"title": "Test", "truncated": None})
         assert "truncated" not in fm
 
-    def test_single_section_requested(self):
-        meta = [{"name": "Intro", "ancestry_path": "Page > Intro"}]
-        fm = _build_frontmatter({"title": "T"}, sections_requested=meta)
-        assert "# Page > Intro" in fm
-        assert "section: Intro" in fm
-
-    def test_multiple_sections_requested(self):
-        meta = [
-            {"name": "A", "ancestry_path": "Root > A"},
-            {"name": "B", "ancestry_path": "Root > B"},
-        ]
-        fm = _build_frontmatter({"title": "T"}, sections_requested=meta)
-        assert "sections:" in fm
-        assert "  # Root > A" in fm
-        assert "  - A" in fm
-        assert "  # Root > B" in fm
-        assert "  - B" in fm
-
-    def test_sections_available(self):
-        section_lines = ["- Alpha", "  - Beta", "  - Gamma"]
-        fm = _build_frontmatter({"title": "T"}, sections_available=section_lines)
-        assert "sections:" in fm
-        assert "  - Alpha" in fm
-        assert "    - Beta" in fm
-
     def test_sections_not_found(self):
         fm = _build_frontmatter({"title": "T"}, sections_not_found=["Missing", "Also Missing"])
         assert "sections_not_found:" in fm
@@ -553,58 +528,6 @@ class TestBuildFrontmatter:
         fm = _build_frontmatter({"title": "T"})
         assert "sections:" not in fm
         assert "section:" not in fm
-
-    def test_fragment_match_single_section(self):
-        """Frontmatter for a single section matched via URL fragment slug."""
-        meta = [{"name": "4. Native INT4 Quantization",
-                 "ancestry_path": "Kimi-K2 > 4. Native INT4 Quantization",
-                 "matched_fragment": "4-native-int4-quantization"}]
-        fm = _build_frontmatter({"title": "Kimi-K2", "source": "https://example.com"},
-                                sections_requested=meta)
-        assert fm == "\n".join([
-            "---",
-            "title: Kimi-K2",
-            "source: https://example.com",
-            "# Kimi-K2 > 4. Native INT4 Quantization",
-            "section: 4. Native INT4 Quantization",
-            'matched_fragment: "#4-native-int4-quantization"',
-            "---",
-        ])
-
-    def test_fragment_match_multiple_sections(self):
-        """Frontmatter for multiple sections, one matched via fragment."""
-        meta = [
-            {"name": "Overview", "ancestry_path": "Page > Overview"},
-            {"name": "Details", "ancestry_path": "Page > Details",
-             "matched_fragment": "details"},
-        ]
-        fm = _build_frontmatter({"title": "T"}, sections_requested=meta)
-        assert "  - Overview" in fm
-        assert "  - Details  # matched #details" in fm
-
-    def test_unmatched_fragment_with_slugged_section_list(self):
-        """When fragment doesn't match, sections_available should include slugs."""
-        section_lines = [
-            "- Main Title (#main-title)",
-            "  - Section One (#section-one)",
-            "  - Section Two (#section-two)",
-        ]
-        fm = _build_frontmatter(
-            {"title": "T"},
-            sections_not_found=["nonexistent-fragment"],
-            sections_available=section_lines,
-        )
-        assert fm == "\n".join([
-            "---",
-            "title: T",
-            "sections:",
-            "  - Main Title (#main-title)",
-            "    - Section One (#section-one)",
-            "    - Section Two (#section-two)",
-            "sections_not_found:",
-            '  - "nonexistent-fragment"',
-            "---",
-        ])
 
 
 class TestApplyHardTruncation:

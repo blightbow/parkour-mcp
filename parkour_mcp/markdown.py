@@ -590,18 +590,21 @@ def _filter_markdown_by_sections(
 
 def _build_frontmatter(
     entries: dict,
-    sections_requested: Optional[list[dict]] = None,
     sections_not_found: Optional[list[str]] = None,
-    sections_available: Optional[list[str]] = None,
 ) -> str:
     """Build YAML frontmatter block.
 
+    Attacker-controlled section metadata (names, matched fragments,
+    ancestry paths, sections_available truncation hints) used to live
+    in the frontmatter but was moved into the fenced content zone in
+    commits a0ec740 and fa714ee — anything derived from page headings
+    belongs in the untrusted zone, not the trusted server-generated one.
+
     Args:
         entries: Key-value pairs for frontmatter (None values are skipped).
-        sections_requested: Matched section metadata from _filter_markdown_by_sections.
-            Takes precedence over sections_available if both are provided.
-        sections_not_found: Section names that were requested but not matched.
-        sections_available: Formatted section list from _build_section_list (for truncation hints).
+        sections_not_found: Section names that were requested but not
+            matched. These come from the user's request parameter, not
+            from page content, so they stay in the trusted zone.
     """
     lines = ["---"]
     for key, value in entries.items():
@@ -616,26 +619,6 @@ def _build_frontmatter(
                     lines.append(f"  - {item}")
         else:
             lines.append(f"{key}: {value}")
-
-    if sections_requested:
-        if len(sections_requested) == 1:
-            sec = sections_requested[0]
-            lines.append(f"# {sec['ancestry_path']}")
-            lines.append(f"section: {sec['name']}")
-            if sec.get("matched_fragment"):
-                lines.append(f"matched_fragment: \"#{sec['matched_fragment']}\"")
-        else:
-            lines.append("sections:")
-            for sec in sections_requested:
-                lines.append(f"  # {sec['ancestry_path']}")
-                if sec.get("matched_fragment"):
-                    lines.append(f"  - {sec['name']}  # matched #{sec['matched_fragment']}")
-                else:
-                    lines.append(f"  - {sec['name']}")
-    elif sections_available:
-        lines.append("sections:")
-        for entry in sections_available:
-            lines.append(f"  {entry}")
 
     if sections_not_found:
         lines.append("sections_not_found:")
