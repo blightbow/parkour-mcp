@@ -24,3 +24,16 @@ benchmark *args:
 # Regenerate README examples
 readme:
     uv run python3 scripts/regenerate_readme_examples.py
+
+# Install repo git hooks (one-time setup after cloning)
+install-hooks:
+    git config core.hooksPath scripts/git-hooks
+    chmod +x scripts/git-hooks/*
+    @echo "Git hooks installed. pre-push will run live tests on version tag pushes."
+
+# Usage: just tag v1.2.3 — runs live tests, then creates annotated tag (no push)
+tag version:
+    @echo "Running live tests before creating tag {{version}}..."
+    uv run pytest -m live
+    git tag -a "{{version}}" -m "{{version}}"
+    @echo "Tag {{version}} created locally. Push with: git push origin {{version}}"

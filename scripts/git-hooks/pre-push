@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# Pre-push hook: block version tag pushes unless the live test suite passes.
+#
+# Live tests hit real endpoints, so they can't run unattended in CI without
+# credentials. Running them at tag-push time is our stand-in: format drift
+# that would otherwise escape to a release gets caught at the last moment.
+#
+# Only engages when a refs/tags/v* ref is being pushed. Regular branch pushes
+# are unaffected and pay no latency cost.
+#
+# Git passes refs on stdin in the format:
+#     <local ref> <local sha1> <remote ref> <remote sha1>
+# one line per ref being pushed.
+
+set -euo pipefail
+
+pushing_version_tag=0
+tag_names=()
+
+while read -r _local_ref _local_sha remote_ref _remote_sha; do
+    case "$remote_ref" in
+        refs/tags/v*)
+            pushing_version_tag=1
+            tag_names+=("${remote_ref#refs/tags/}")
+            ;;
+    esac
+done
+
+if [[ "$pushing_version_tag" -eq 0 ]]; then
+    exit 0
+fi
+
+echo "pre-push: version tag(s) detected: ${tag_names[*]}"
+echo "pre-push: running live test suite before allowing tag push..."
+echo
+
+repo_root="$(git rev-parse --show-toplevel)"
+if uv run --directory "$repo_root" pytest -m live --tb=short; then
+    echo
+    echo "pre-push: live tests passed — tag push allowed"
+    exit 0
+fi
+
+echo
+echo "pre-push: LIVE TESTS FAILED — refusing to push version tag"
+echo "pre-push:"
+echo "pre-push: If the failure is caused by an external endpoint outage"
+echo "pre-push: (not a format regression in our code), you can bypass with:"
+echo "pre-push:     git push --no-verify"
+echo "pre-push: Verify the failure is upstream before using that escape hatch."
+exit 1

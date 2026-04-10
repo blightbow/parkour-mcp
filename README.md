@@ -483,18 +483,7 @@ export MCP_ALLOW_PRIVATE_IPS=1
 
 ## Development
 
-### Running Tests
-
-```bash
-# Unit tests (mocked, no network)
-uv run pytest
-
-# Live integration tests (hits real endpoints)
-uv run pytest -m live
-
-# Pack Claude Desktop Extension bundle
-just pack
-```
+Working on parkour-mcp itself? See [`docs/developing.md`](docs/developing.md) for test layout, release flow, and the `pre-push` hook that guards version tags against format drift.
 
 ## FAQ
 
