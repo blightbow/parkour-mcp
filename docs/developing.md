@@ -47,10 +47,13 @@ Runs `vulture` against `parkour_mcp/` to surface unused functions, variables,
 and branches that no production caller reaches. Cross-file analysis of this
 shape is deliberately outside ruff's scope, so vulture fills the gap.
 
-The scan is advisory — it prints findings but does not fail the recipe
-while a known backlog of real findings still exists. Drop the leading `-`
-in the `lint-deep` recipe once the backlog is cleared to convert it into
-a hard gate.
+The recipe is a **hard gate** — vulture exits non-zero on any finding,
+failing the recipe. Real findings should be fixed at the source (delete
+dead code, wire up orphaned callers, rename loop variables). For the
+narrow set of genuine vulture blind spots (decorator-registered handlers,
+base-class method dispatch, test-only hooks), add an entry to
+`.vulture_whitelist.py` with a comment explaining why the finding is
+unreachable to vulture.
 
 `tests/` is intentionally **not** scanned: pytest idioms (`pytestmark`,
 autouse fixtures, `mock.return_value` attribute writes) produce ~45 false
