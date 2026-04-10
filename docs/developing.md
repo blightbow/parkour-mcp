@@ -37,6 +37,37 @@ runs in under 30 seconds. Live tests are opt-in via the `-m live` marker and
 hit real endpoints — they require network access and some of them skip
 gracefully if optional credentials (`GITHUB_TOKEN`, etc.) aren't available.
 
+## Dead-code scanning
+
+```bash
+just lint-deep
+```
+
+Runs `vulture` against `parkour_mcp/` to surface unused functions, variables,
+and branches that no production caller reaches. Cross-file analysis of this
+shape is deliberately outside ruff's scope, so vulture fills the gap.
+
+The scan is advisory — it prints findings but does not fail the recipe
+while a known backlog of real findings still exists. Drop the leading `-`
+in the `lint-deep` recipe once the backlog is cleared to convert it into
+a hard gate.
+
+`tests/` is intentionally **not** scanned: pytest idioms (`pytestmark`,
+autouse fixtures, `mock.return_value` attribute writes) produce ~45 false
+positives with essentially no signal, so the cost/benefit is negative.
+
+False positives for code vulture cannot see through (decorator-registered
+handlers, base-class method dispatch, test-only hooks) live in
+`.vulture_whitelist.py`. Real findings must not be added to the whitelist —
+they get fixed in the source. To regenerate the candidate list for triage:
+
+```bash
+uv run vulture parkour_mcp/ --make-whitelist
+```
+
+Then copy **only** the false positives over, with a comment explaining why
+each one is unreachable to vulture.
+
 ## Cutting a release
 
 Live tests don't run in CI — they need real API endpoints and credentials

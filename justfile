@@ -25,6 +25,13 @@ benchmark *args:
 readme:
     uv run python3 scripts/regenerate_readme_examples.py
 
+# Run vulture dead-code scan on production code (honors .vulture_whitelist.py).
+# Advisory — vulture exits 3 on findings, the leading '-' lets just report
+# the findings without marking the recipe as failed. Drop the '-' once the
+# known backlog is addressed to convert this into a hard gate.
+lint-deep:
+    -uv run vulture parkour_mcp/ .vulture_whitelist.py
+
 # Install repo git hooks (one-time setup after cloning)
 install-hooks:
     git config core.hooksPath scripts/git-hooks

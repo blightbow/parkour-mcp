@@ -67,6 +67,17 @@ addopts = "-m 'not live and not perf' --ruff"
 venvPath = "."
 venv = ".venv"
 
+[tool.ty.src]
+# Vulture whitelist uses bare name references that don't resolve at parse
+# time; vulture only parses the file, never imports it.
+exclude = [".vulture_whitelist.py"]
+
+[tool.ruff.lint.per-file-ignores]
+# Vulture whitelist: bare name references are the format vulture requires
+# to count a symbol as "used". Those references are undefined at parse
+# time by design — ruff's F821 would otherwise flag every entry.
+".vulture_whitelist.py" = ["F821"]
+
 [dependency-groups]
 dev = [
     "pytest>=9.0.2",
@@ -74,4 +85,5 @@ dev = [
     "pytest-ruff>=0.5",
     "respx>=0.22.0",
     "tree-sitter-python>=0.23",
+    "vulture>=2.16",
 ]
