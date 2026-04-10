@@ -120,11 +120,14 @@ async def _get_label_for_element(page, element) -> Optional[str]:
     return None
 
 
-async def _extract_interactive_elements(page, max_elements: int = 25) -> tuple[list[dict], bool]:
+async def _extract_interactive_elements(page, max_elements: int = 25) -> tuple[list[dict], int]:
     """Extract interactive elements from page for ReAct chaining.
 
     Returns:
-        Tuple of (elements list, was_truncated bool)
+        Tuple of ``(elements_list, total_count)`` where ``elements_list``
+        is truncated to ``max_elements`` and ``total_count`` is the number
+        of elements discovered before truncation. Callers should compare
+        the two to detect truncation and surface a hint to the agent.
     """
     elements = []
 
@@ -225,9 +228,7 @@ async def _extract_interactive_elements(page, max_elements: int = 25) -> tuple[l
         except Exception:
             pass
 
-    # Check if we hit the limit
-    was_truncated = len(elements) > max_elements
-    return elements[:max_elements], was_truncated
+    return elements[:max_elements], len(elements)
 
 
 async def web_fetch_js(
@@ -591,10 +592,10 @@ async def web_fetch_js(
                         continue
 
             # Extract interactive elements for ReAct chaining
-            interactive_elements = []
-            elements_truncated = False
+            interactive_elements: list[dict] = []
+            elements_total = 0
             if include_interactive:
-                interactive_elements, elements_truncated = await _extract_interactive_elements(
+                interactive_elements, elements_total = await _extract_interactive_elements(
                     page, max_elements
                 )
 
@@ -631,6 +632,11 @@ async def web_fetch_js(
 
     if interactive_elements:
         elem_lines = ["## Interactive Elements (for follow-up actions)\n"]
+        if elements_total > len(interactive_elements):
+            elem_lines.append(
+                f"_Showing {len(interactive_elements)} of {elements_total} "
+                f"elements — raise max_elements to see more._\n"
+            )
         for elem in interactive_elements:
             elem_lines.append(f"- **{elem['type']}**: `{elem['selector']}`")
             if elem.get('options'):
