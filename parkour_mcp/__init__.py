@@ -218,17 +218,19 @@ Use paper_id to scope to a single paper, or omit for corpus-wide search.
 Example: action="snippets", query="multi-head attention",
 paper_id="204e3073870fae3d05bcbc2f6a8e263d9b72e776".""",
 
-    "github": """Search and retrieve code, issues, and pull requests from GitHub.
+    "github": """Search and retrieve code, issues, pull requests, and repositories from GitHub.
 
-Use this for GitHub lookups: search issues/PRs across repositories, search code,
-get issue or PR details with comments, fetch file content from a specific ref, or
-get repo metadata with README. GitHub URLs are also handled automatically by
-{fetch_direct} — this tool is for structured queries by owner/repo/number.
+Use this for GitHub lookups: search issues/PRs across repositories, search for
+repositories by topic/stars/language, search code, get issue or PR details with
+comments, fetch file content from a specific ref, or get repo metadata with README.
+GitHub URLs are also handled automatically by {fetch_direct} — this tool is for
+structured queries by owner/repo/number.
 
-Actions: search_issues, search_code, issue, pull_request, file, repo, tree.
+Actions: search_issues, search_repos, search_code, issue, pull_request, file, repo, tree.
 
 Query formats vary by action:
 - search_issues/search_code: GitHub search query with qualifiers (repo:, is:, label:, language:, path:)
+- search_repos: GitHub search query with qualifiers (topic:, stars:, language:, forks:, license:)
 - issue/pull_request: "owner/repo#number" (e.g. "pallets/flask#5618")
 - file/tree: "owner/repo/path" (e.g. "pallets/flask/src/flask/app.py") — use ref= for branch/tag
 - repo: "owner/repo" (e.g. "pallets/flask")

@@ -282,6 +282,49 @@ class TestSearchIssues:
 
 
 # ---------------------------------------------------------------------------
+# Action: search_repos (mocked)
+# ---------------------------------------------------------------------------
+
+class TestSearchRepos:
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_returns_results(self):
+        respx.get("https://api.github.com/search/repositories").mock(
+            return_value=httpx.Response(200, json={
+                "total_count": 1,
+                "incomplete_results": False,
+                "items": [{
+                    "full_name": "owner/repo",
+                    "description": "A cool project",
+                    "stargazers_count": 1234,
+                    "language": "Python",
+                    "updated_at": "2025-01-01T00:00:00Z",
+                    "topics": ["ai", "ml"],
+                    "license": {"spdx_id": "MIT"},
+                }],
+            })
+        )
+        result = await github("search_repos", "topic:ai stars:>100", limit=5)
+        assert "owner/repo" in result
+        assert "A cool project" in result
+        assert "1,234" in result
+        assert "Python" in result
+        assert "MIT" in result
+        assert "ai" in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_no_results(self):
+        respx.get("https://api.github.com/search/repositories").mock(
+            return_value=httpx.Response(200, json={
+                "total_count": 0, "incomplete_results": False, "items": [],
+            })
+        )
+        result = await github("search_repos", "nothing", limit=5)
+        assert "No results" in result
+
+
+# ---------------------------------------------------------------------------
 # Action: issue (mocked)
 # ---------------------------------------------------------------------------
 
