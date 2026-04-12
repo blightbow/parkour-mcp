@@ -19,6 +19,7 @@ dependencies = [
     "tantivy>=0.25.1",
     "pyyaml>=6.0.3",
     "tree-sitter>=0.24",
+    "htmd-py>=0.1.0",
 ]
 classifiers = [
     "Programming Language :: Python :: 3",
@@ -54,6 +55,9 @@ exclude = ["tmp*", "tests*", "scripts*"]
 
 [tool.uv]
 package = true
+
+[tool.uv.sources]
+htmd-py = { git = "https://github.com/blightbow/htmd-py", rev = "feat/text-only-handlers" }
 
 [tool.pytest.ini_options]
 asyncio_mode = "strict"

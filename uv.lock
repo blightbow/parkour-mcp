@@ -295,6 +295,11 @@ wheels = [
 ]
 
 [[package]]
+name = "htmd-py"
+version = "0.1.0"
+source = { git = "https://github.com/blightbow/htmd-py?rev=feat%2Ftext-only-handlers#3a5e97b49f4e77357fde66294bb9435a89064520" }
+
+[[package]]
 name = "httpcore"
 version = "1.0.9"
 source = { registry = "https://pypi.org/simple" }
@@ -469,6 +474,7 @@ version = "1.0.1"
 source = { editable = "." }
 dependencies = [
     { name = "beautifulsoup4" },
+    { name = "htmd-py" },
     { name = "httpx" },
     { name = "kagiapi" },
     { name = "markdownify" },
@@ -507,6 +513,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "beautifulsoup4" },
+    { name = "htmd-py", git = "https://github.com/blightbow/htmd-py?rev=feat%2Ftext-only-handlers" },
     { name = "httpx" },
     { name = "kagiapi" },
     { name = "markdownify" },

@@ -292,7 +292,7 @@ def _install_capture_hook(sink: list[bytes]) -> None:
 def _remove_capture_hook() -> None:
     global _original_send
     if _original_send is not None:
-        httpx.AsyncClient.send = _original_send  # ty: ignore[invalid-assignment]
+        httpx.AsyncClient.send = _original_send
         _original_send = None
 
 

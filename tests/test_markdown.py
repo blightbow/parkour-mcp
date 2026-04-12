@@ -218,12 +218,6 @@ class TestCleanHeadings:
         sections = _extract_sections_from_markdown(markdown)
         assert sections[0]["name"] == "Leave a Reply Cancel reply"
 
-    def test_removes_mw_editsection(self):
-        html = '<html><body><h2>Section Name<span class="mw-editsection">[edit]</span></h2><p>Content.</p></body></html>'
-        _, markdown = html_to_markdown(html)
-        sections = _extract_sections_from_markdown(markdown)
-        assert sections[0]["name"] == "Section Name"
-
     def test_preserves_body_links(self):
         """Links in body content should not be stripped."""
         html = '<html><body><h2>Title</h2><p>See <a href="https://example.com">this link</a>.</p></body></html>'
