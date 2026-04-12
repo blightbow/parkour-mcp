@@ -2,7 +2,7 @@
   "manifest_version": "0.4",
   "name": "parkour-mcp",
   "display_name": "Parkour",
-  "version": "1.1.0-rc1",
+  "version": "1.1.0-rc2",
   "description": "A content exploration toolkit that helps LLMs surface high signal, unsummarized web content.",
   "long_description": "MCP server providing a content exploration and research synthesis pipeline. Uses clean first-party APIs to surface and explore web content without summarization. Integrates Kagi, Semantic Scholar, arXiv, deps.dev, IETF, GitHub, MediaWiki, Reddit, Discourse, and DOI resolution APIs into a unified tool suite.\n\n**Note:** The web_fetch_js tool (for JavaScript-rendered pages) requires a one-time browser install. Run `playwright install webkit` from any terminal. The other 11 tools work without this step.",
   "homepage": "https://github.com/blightbow/parkour-mcp",
