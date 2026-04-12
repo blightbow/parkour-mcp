@@ -18,12 +18,6 @@ from pathlib import Path
 from typing import Annotated, Optional
 from urllib.parse import quote as _urlquote_raw
 
-
-def _urlquote(s: str) -> str:
-    """URL-encode a GitHub search query, preserving : and / for readability."""
-    return _urlquote_raw(s, safe=":/")
-
-
 import httpx
 from pydantic import Field
 
@@ -34,6 +28,11 @@ from .markdown import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _urlquote(s: str) -> str:
+    """URL-encode a GitHub search query, preserving : and / for readability."""
+    return _urlquote_raw(s, safe=":/")
 
 # ---------------------------------------------------------------------------
 # Configuration
