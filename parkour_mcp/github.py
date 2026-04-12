@@ -1065,6 +1065,44 @@ async def _fetch_issue_template_listing(
     return await _cached_repo_fetch(api_path, _do_fetch)
 
 
+async def _fetch_issue_form_yaml(
+    owner: str, repo: str, filename: str,
+) -> Optional[dict]:
+    """Fetch and parse an individual issue form YAML via contents API.
+
+    Returns the parsed header (name, description, title, labels,
+    assignees, ...) as a dict, with the ``body`` field dropped — body
+    entries are the form's field definitions, too verbose for advisory
+    output. Returns ``None`` on any failure. Cached.
+    """
+    import yaml
+
+    api_path = (
+        f"/repos/{owner}/{repo}/contents/{_ISSUE_TEMPLATE_DIR}/{filename}"
+    )
+
+    async def _do_fetch() -> Optional[dict]:
+        result = await _github_request("GET", api_path)
+        if not isinstance(result, dict):
+            return None
+        encoded = result.get("content")
+        if not isinstance(encoded, str):
+            return None
+        try:
+            text = base64.b64decode(encoded).decode("utf-8")
+            parsed = yaml.safe_load(text)
+        except Exception:
+            return None
+        if not isinstance(parsed, dict):
+            return None
+        # Drop the `body` array — it's verbose field definitions, not
+        # something we want in the advisory body.
+        parsed.pop("body", None)
+        return parsed
+
+    return await _cached_repo_fetch(api_path, _do_fetch)
+
+
 async def _fetch_issue_template_config_yml(
     owner: str, repo: str,
 ) -> Optional[dict]:
@@ -1135,19 +1173,36 @@ async def _probe_issue_templates(
         elif lower.endswith(".md"):
             markdown_templates.append(name)
 
-    config: Optional[dict] = None
-    if has_config:
-        config = await _fetch_issue_template_config_yml(owner, repo)
+    # Fetch config.yml and all form YAMLs concurrently. Each form YAML
+    # costs one contents-API request but all are cached, so repeated
+    # calls in-session are free.
+    fetch_coros: list = []
+    fetch_coros.append(
+        _fetch_issue_template_config_yml(owner, repo) if has_config else _noop_none()
+    )
+    for form_name in forms:
+        fetch_coros.append(_fetch_issue_form_yaml(owner, repo, form_name))
+
+    results = await asyncio.gather(*fetch_coros)
+    config = results[0]
+    form_details_raw = results[1:]
 
     blank_issues_enabled: Optional[bool] = None
     contact_links: Optional[list[dict]] = None
-    if config is not None:
+    if isinstance(config, dict):
         raw_flag = config.get("blank_issues_enabled")
         if isinstance(raw_flag, bool):
             blank_issues_enabled = raw_flag
         raw_links = config.get("contact_links")
         if isinstance(raw_links, list):
             contact_links = [cl for cl in raw_links if isinstance(cl, dict)]
+
+    # Build forms_detail: {filename: parsed_header_dict_or_None}.
+    # None for forms that failed to parse — the formatter degrades
+    # gracefully to filename-only for those.
+    forms_detail: dict[str, Optional[dict]] = {}
+    for form_name, detail in zip(forms, form_details_raw):
+        forms_detail[form_name] = detail if isinstance(detail, dict) else None
 
     if (
         not forms
@@ -1159,10 +1214,16 @@ async def _probe_issue_templates(
 
     return {
         "forms": forms,
+        "forms_detail": forms_detail,
         "markdown_templates": markdown_templates,
         "blank_issues_enabled": blank_issues_enabled,
         "contact_links": contact_links,
     }
+
+
+async def _noop_none() -> None:
+    """Awaitable that returns None. Used as a no-op slot in gather()."""
+    return None
 
 
 def _build_issue_template_hint(owner: str, repo: str) -> str:
@@ -1272,6 +1333,7 @@ def _format_issue_submission_section(probe: Optional[dict]) -> Optional[str]:
         return None
 
     forms = probe.get("forms") or []
+    forms_detail = probe.get("forms_detail") or {}
     markdown_templates = probe.get("markdown_templates") or []
     contact_links = probe.get("contact_links") or []
     blank_issues_enabled = probe.get("blank_issues_enabled")
@@ -1293,7 +1355,30 @@ def _format_issue_submission_section(probe: Optional[dict]) -> Optional[str]:
         lines.append("")
         lines.append("**Custom issue forms:**")
         for name in forms:
-            lines.append(f"- {name}")
+            detail = forms_detail.get(name)
+            if not isinstance(detail, dict):
+                # Malformed or missing form YAML — filename only.
+                lines.append(f"- `{name}`")
+                continue
+
+            form_title = detail.get("name") or name
+            description = detail.get("description") or ""
+            title_prefix = detail.get("title") or ""
+            labels = detail.get("labels") or []
+            assignees = detail.get("assignees") or []
+
+            header = f"- **{form_title}** (`{name}`)"
+            if description:
+                header += f" — {description}"
+            lines.append(header)
+            if title_prefix:
+                lines.append(f"  Title prefix: `{title_prefix}`")
+            if isinstance(labels, list) and labels:
+                label_str = ", ".join(str(lb) for lb in labels)
+                lines.append(f"  Labels: {label_str}")
+            if isinstance(assignees, list) and assignees:
+                assignee_str = ", ".join(str(a) for a in assignees)
+                lines.append(f"  Assignees: {assignee_str}")
 
     if markdown_templates:
         lines.append("")
