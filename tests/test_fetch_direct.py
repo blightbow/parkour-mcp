@@ -181,6 +181,50 @@ class TestWebFetchDirectErrors:
 
     @pytest.mark.asyncio
     @respx.mock
+    async def test_response_too_large_content_length(self):
+        """Layer 1: Content-Length header exceeds size cap."""
+        # 10 MB Content-Length header on a small body — gate should reject
+        # before reading the body.
+        respx.get("https://example.com/huge.json").mock(
+            return_value=httpx.Response(
+                200,
+                text='{"small": true}',
+                headers={
+                    "content-type": "application/json",
+                    "content-length": str(10 * 1024 * 1024),
+                },
+            )
+        )
+
+        result = await web_fetch_direct("https://example.com/huge.json")
+        assert "Error:" in result
+        assert "too large" in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_response_too_large_streaming(self):
+        """Layer 2: body exceeds size cap mid-transfer (no Content-Length).
+
+        Uses stream= to build the mock response so httpx does not inject a
+        Content-Length header — this forces guarded_fetch to discover the
+        oversized body via the streaming chunk loop instead of the
+        Content-Length gate.
+        """
+        oversized = b"x" * (6 * 1024 * 1024)  # 6 MiB, exceeds 5 MiB default
+        respx.get("https://example.com/firehose.json").mock(
+            return_value=httpx.Response(
+                200,
+                stream=httpx.ByteStream(oversized),
+                headers={"content-type": "application/json"},
+            )
+        )
+
+        result = await web_fetch_direct("https://example.com/firehose.json")
+        assert "Error:" in result
+        assert "too large" in result
+
+    @pytest.mark.asyncio
+    @respx.mock
     async def test_unsupported_content_type(self):
         respx.get("https://example.com/file.bin").mock(
             return_value=httpx.Response(

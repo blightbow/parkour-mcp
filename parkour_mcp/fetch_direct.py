@@ -7,7 +7,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from .common import _FETCH_HEADERS, check_url_ssrf, tool_name
+from .common import ResponseTooLarge, check_url_ssrf, guarded_fetch, tool_name
 from .markdown import (
     html_to_markdown, _detect_js_dependent,
     _extract_sections_from_markdown, _build_section_list,
@@ -300,9 +300,10 @@ async def web_fetch_direct(
 
     # --- HTTP fetch ---
     try:
-        async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
-            response = await client.get(url, headers=_FETCH_HEADERS)
-            response.raise_for_status()
+        response = await guarded_fetch(url)
+        response.raise_for_status()
+    except ResponseTooLarge as e:
+        return f"Error: Response too large for {url} — {e}"
     except httpx.TimeoutException:
         return f"Error: Request timed out for {url}"
     except httpx.HTTPStatusError as e:
@@ -462,8 +463,7 @@ async def _github_sections(
                 headers["Authorization"] = f"token {token}"
 
             try:
-                async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
-                    resp = await client.get(raw_url, headers=headers)
+                resp = await guarded_fetch(raw_url, headers=headers)
                 if resp.status_code != 200:
                     return None
                 source_text = resp.text
@@ -752,9 +752,10 @@ async def web_fetch_sections(url: str) -> str:
 
     # --- HTTP fetch ---
     try:
-        async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
-            response = await client.get(url, headers=_FETCH_HEADERS)
-            response.raise_for_status()
+        response = await guarded_fetch(url)
+        response.raise_for_status()
+    except ResponseTooLarge as e:
+        return f"Error: Response too large for {url} — {e}"
     except httpx.TimeoutException:
         return f"Error: Request timed out for {url}"
     except httpx.HTTPStatusError as e:

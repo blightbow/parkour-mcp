@@ -27,7 +27,7 @@ from .mediawiki import _detect_mediawiki, _fetch_mediawiki_page, _mediawiki_html
 from .arxiv import _detect_arxiv_url, _fetch_arxiv_paper
 from .doi import _detect_doi_url, _fetch_doi_paper
 from .reddit import _detect_reddit_url, _fetch_reddit_content, _split_by_comments
-from .common import tool_name
+from .common import ResponseTooLarge, guarded_fetch, tool_name
 
 logger = logging.getLogger(__name__)
 
@@ -696,8 +696,9 @@ async def _github_fast_path(
             headers["Authorization"] = f"token {token}"
 
         try:
-            async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
-                resp = await client.get(raw_url, headers=headers)
+            resp = await guarded_fetch(raw_url, headers=headers)
+        except ResponseTooLarge as e:
+            return f"Error: Response too large for {raw_url} — {e}"
         except httpx.TimeoutException:
             return f"Error: Request timed out for {raw_url}"
         except httpx.RequestError as e:
@@ -974,9 +975,8 @@ async def _github_fast_path(
             headers["Authorization"] = f"token {token}"
 
         try:
-            async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
-                resp = await client.get(raw_url, headers=headers)
-        except httpx.RequestError:
+            resp = await guarded_fetch(raw_url, headers=headers, timeout=15.0)
+        except (ResponseTooLarge, httpx.RequestError):
             return f"Error: Failed to fetch wiki page '{page_name}'."
 
         if resp.status_code == 404:
