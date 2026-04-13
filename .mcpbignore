@@ -36,7 +36,7 @@ wheels/
 *.py[oc]
 
 # Temporary icon workfiles
-assets/icons/preview.html
-assets/icons/candidates.html
-assets/icon-contour.svg
-assets/icon_preview.png
+parkour_mcp/assets/icons/preview.html
+parkour_mcp/assets/icons/candidates.html
+parkour_mcp/assets/icon-contour.svg
+parkour_mcp/assets/icon_preview.png

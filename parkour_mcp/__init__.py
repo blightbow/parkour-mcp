@@ -27,10 +27,12 @@ logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Tool icons — SVG glyphs extracted from Noto fonts (SIL OFL 1.1 licensed).
-# Source files live in assets/icons/*.svg; encoded to data: URIs at startup
-# since the MCP Icon spec requires https:// or data: URIs (no local paths).
+# Source files live in parkour_mcp/assets/icons/*.svg; encoded to data: URIs
+# at startup since the MCP Icon spec requires https:// or data: URIs (no
+# local paths). Shipped as package-data so the wheel and the mcpb bundle
+# both carry them — see [tool.setuptools.package-data] in pyproject.toml.
 # ---------------------------------------------------------------------------
-_ICONS_DIR = pathlib.Path(__file__).parent.parent / "assets" / "icons"
+_ICONS_DIR = pathlib.Path(__file__).parent / "assets" / "icons"
 
 # Internal tool key → SVG filename (without .svg extension)
 _ICON_FILES = {

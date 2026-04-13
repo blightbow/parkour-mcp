@@ -53,6 +53,17 @@ parkour-mcp = "parkour_mcp:main"
 [tool.setuptools.packages.find]
 exclude = ["tmp*", "tests*", "scripts*"]
 
+[tool.setuptools.package-data]
+# Ship image assets inside the wheel so they resolve under site-packages
+# when installed via `uv tool install parkour-mcp` (or `uvx parkour-mcp`).
+# The mcpb bundle references the same package-local path via manifest.json,
+# giving us one source of truth for both distribution channels.
+parkour_mcp = [
+    "assets/icon.png",
+    "assets/icon.svg",
+    "assets/icons/*.svg",
+]
+
 [tool.uv]
 package = true
 
