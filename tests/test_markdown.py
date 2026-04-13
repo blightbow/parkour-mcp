@@ -571,6 +571,145 @@ class TestApplySemanticTruncation:
         assert "showing first" in hint
         assert "Full page is" in hint
 
+    # --- Regression tests for issue #5 ---
+    #
+    # MarkdownSplitter treats headings as the highest-priority semantic
+    # boundary.  For "## Heading\n\n<large body>" where the body exceeds
+    # char_limit, it emits chunk 0 = "## Heading" alone and the body in
+    # subsequent chunks.  The old implementation returned only chunks[0],
+    # destroying the body.  These tests pin the pack-chunks behavior.
+
+    def test_heading_plus_oversized_table_packs_body(self):
+        """Heading followed by an oversized markdown table must pack body rows.
+
+        Regression for issue #5: ``section="Film"`` on Wikipedia filmography
+        pages previously returned just the ``## Film`` heading line.
+        """
+        rows = "\n".join(
+            f"| {y} | Title {y} | Role {y} | Notes {y} |"
+            for y in range(1967, 2100)
+        )
+        content = (
+            "## Film\n\n"
+            "| Year | Title | Role | Notes |\n"
+            "| --- | --- | --- | --- |\n"
+            f"{rows}\n"
+        )
+        # Budget large enough for the heading plus several rows but not all.
+        result, hint = _apply_semantic_truncation(content, max_tokens=200)
+
+        assert hint is not None
+        assert "## Film" in result
+        # The body must be present — at least the first few rows.
+        assert "| 1967 | Title 1967 |" in result
+        assert "| 1968 | Title 1968 |" in result
+        # And the result must be meaningfully larger than just the heading.
+        assert len(result) > 100
+
+    def test_heading_plus_oversized_paragraph_packs_body(self):
+        """Same shape but with a paragraph body instead of a table."""
+        sentences = " ".join(
+            f"This is sentence number {i} in a long paragraph."
+            for i in range(500)
+        )
+        content = f"## Overview\n\n{sentences}\n"
+
+        result, hint = _apply_semantic_truncation(content, max_tokens=200)
+
+        assert hint is not None
+        assert "## Overview" in result
+        assert "This is sentence number 0" in result
+        assert len(result) > 100
+
+    def test_multi_section_packing_preserves_body(self):
+        """Multi-section content whose first section overflows the budget
+        must still return body content for that section, not just a heading.
+
+        Tests the soft-overflow guard: when the heading becomes its own
+        tiny chunk, the packer must include the following body chunk even
+        if it pushes slightly over char_limit.
+        """
+        body_a = " ".join(f"alpha{i}" for i in range(200))
+        body_b = " ".join(f"beta{i}" for i in range(200))
+        content = f"## Section A\n\n{body_a}\n\n## Section B\n\n{body_b}\n"
+
+        # char_limit=1200 (max_tokens=300) is smaller than section A alone,
+        # forcing the splitter to cleave "## Section A" into its own chunk.
+        result, hint = _apply_semantic_truncation(content, max_tokens=300)
+
+        assert hint is not None
+        assert "## Section A" in result
+        assert "alpha0" in result, (
+            "body content must be packed alongside the heading"
+        )
+        # Output must be meaningfully larger than a bare heading line.
+        assert len(result) > 500
+
+    def test_pathological_single_oversized_chunk_returned(self):
+        """If chunk 0 already exceeds char_limit, return it anyway.
+
+        The MarkdownSplitter may emit an atomic chunk (e.g. a single giant
+        table row) larger than char_limit.  The function must not return
+        an empty string or loop forever — it should emit the oversized
+        chunk with the truncation hint.
+        """
+        # A single markdown table row with an enormous cell.
+        giant_cell = "x" * 20000
+        content = f"| col |\n| --- |\n| {giant_cell} |\n"
+
+        result, hint = _apply_semantic_truncation(content, max_tokens=100)
+
+        assert hint is not None
+        assert len(result) > 0
+        # The oversized chunk still contains recognizable table structure.
+        assert "col" in result or "x" in result
+
+    def test_hint_shown_tokens_matches_truncated_length(self):
+        """The hint's 'showing first ~N tokens' must reflect len(truncated)//4."""
+        rows = "\n".join(
+            f"| {i} | data {i} | more {i} |" for i in range(500)
+        )
+        content = f"## Data\n\n| A | B | C |\n| - | - | - |\n{rows}\n"
+
+        result, hint = _apply_semantic_truncation(content, max_tokens=300)
+
+        assert hint is not None
+        expected_tokens = len(result) // 4
+        # Hint format: "showing first ~{N:,} tokens"
+        assert f"showing first ~{expected_tokens:,} tokens" in hint
+
+    def test_wikipedia_filmography_fixture_regression(self):
+        """End-to-end regression using a captured Wikipedia filmography page.
+
+        Runs the full ``_extract_sections_from_markdown`` +
+        ``_filter_markdown_by_sections`` + ``_apply_semantic_truncation``
+        pipeline against a real rendered MediaWiki page and asserts that
+        requesting ``section="Film"`` returns actual filmography rows, not
+        just the heading line.  Network-free — fixture is checked in.
+        """
+        from pathlib import Path
+
+        fixture_path = (
+            Path(__file__).parent / "fixtures" / "malcolm_mcdowell_filmography.md"
+        )
+        content = fixture_path.read_text()
+
+        sections = _extract_sections_from_markdown(content)
+        filtered, matched, unmatched = _filter_markdown_by_sections(
+            content, ["Film"], sections
+        )
+        assert unmatched == []
+        assert matched, "Film section should have matched"
+
+        # Apply the same budget the default pipeline uses for section fetches.
+        truncated, hint = _apply_semantic_truncation(filtered, max_tokens=3000)
+
+        assert hint is not None, "Film section should overflow default budget"
+        assert "## Film" in truncated
+        # Recognizable entries from the real page.  These pin the regression.
+        assert "A Clockwork Orange" in truncated
+        assert "1971" in truncated
+
 
 class TestFenceContent:
     def test_basic_fencing(self):

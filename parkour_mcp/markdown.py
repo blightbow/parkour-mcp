@@ -265,14 +265,42 @@ def _apply_semantic_truncation(
     if len(content) <= char_limit:
         return content, None
 
-    splitter = MarkdownSplitter(char_limit)
+    # trim=False guarantees "".join(chunks) == content, so packing a prefix
+    # of chunks is lossless and requires no joiner (no \n\n math, no risk of
+    # doubled blank lines).  This matters because MarkdownSplitter treats
+    # headings as the highest-priority semantic boundary: content shaped like
+    # "## Heading\n\n<large body>" where the body exceeds char_limit will
+    # emit chunk 0 = "## Heading\n\n" alone, with the body in subsequent
+    # chunks.  Returning chunks[0] would drop the entire body.
+    splitter = MarkdownSplitter(char_limit, trim=False)
     chunks = splitter.chunks(content)
 
     if len(chunks) <= 1:
         return content, None
 
-    truncated = chunks[0]
-    shown_tokens = len(chunks[0]) // 4
+    # Pack chunks up to char_limit.  Two guards:
+    #
+    # * ``not packed`` — always return at least chunk 0, even if it already
+    #   exceeds char_limit (pathological atomic chunk, e.g. a single
+    #   megabyte-sized table row).
+    # * ``used >= char_limit // 2`` — allow one chunk of soft overflow when
+    #   the packed prefix is still small.  Without this, a tiny heading-alone
+    #   chunk 0 (e.g. ``"## Film\n\n"``, 9 chars) paired with a body chunk
+    #   that just barely crosses the budget would cause us to break after the
+    #   heading, reproducing the original bug.  The splitter guarantees each
+    #   chunk ≤ char_limit in normal cases, so the worst-case overflow is
+    #   bounded at ~2×.
+    packed: list[str] = []
+    used = 0
+    for chunk in chunks:
+        next_size = used + len(chunk)
+        if packed and next_size > char_limit and used >= char_limit // 2:
+            break
+        packed.append(chunk)
+        used += len(chunk)
+    truncated = "".join(packed).rstrip()
+
+    shown_tokens = len(truncated) // 4
     total_kb = len(content) / 1024
     total_tokens_est = len(content) // 4
     hint = (
