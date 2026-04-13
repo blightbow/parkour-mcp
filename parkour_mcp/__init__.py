@@ -155,6 +155,9 @@ Targeted extraction (preferred over fetching full pages):
 - search="terms" — BM25 keyword search over ~500-token slices
 - slices=[3, 4, 5] — retrieve specific slices by index
 - footnotes=[1, 3] — retrieve specific [^N] entries from MediaWiki pages
+- citations=["#CITEREFFoo2005"] — resolve inline author-date CITEREF
+  links on MediaWiki pages to full bibliography entries (frontmatter
+  hint advertises keys when they are present in the page)
 - URL fragments (#section-name) are resolved automatically as sections
 
 Always use this tool for Reddit URLs — built-in fetch tools cannot access
@@ -166,8 +169,8 @@ Supports HTML, plain text, JSON, and XML content types.""",
 
 Use this when {fetch_direct} returns incomplete content from JS-heavy sites
 (SPAs, React/Vue/Angular apps, dynamically loaded content). Supports the
-same targeted extraction as {fetch_direct}: section, search, slices, and
-footnotes parameters.
+same targeted extraction as {fetch_direct}: section, search, slices,
+footnotes, and citations parameters.
 
 Supports ReAct-style interaction chains:
 1. First call: Fetch page, observe available interactive elements

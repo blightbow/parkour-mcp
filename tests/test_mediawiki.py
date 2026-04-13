@@ -11,6 +11,9 @@ from parkour_mcp.mediawiki import (
     _mediawiki_html_to_markdown,
     _extract_citations,
     _format_citations,
+    _extract_inline_citations,
+    _format_inline_citations,
+    _INLINE_CITEREF_MD_RE,
 )
 
 from .conftest import (
@@ -387,3 +390,139 @@ class TestFormatCitations:
         result = _format_citations(citations)
         assert "**[A](https://a.com)**" in result
         assert "**[B](https://b.com)**" in result
+
+
+# --- _extract_inline_citations ---
+
+class TestExtractInlineCitations:
+    def test_extracts_single_inline_citeref(self):
+        """Inline author-date anchor resolves to its bibliography entry."""
+        html = (
+            '<p>Several authors, including '
+            '<a href="#CITEREFFranzén2005">Franzén (2005)</a>, '
+            'have commented.</p>'
+            '<cite id="CITEREFFranzén2005">'
+            'Franzén, Torkel (2005). '
+            '<a class="external" href="https://example.com/book">Gödel\'s Theorem</a>.'
+            '</cite>'
+        )
+        entries = _extract_inline_citations(html)
+        assert len(entries) == 1
+        e = entries[0]
+        assert e["key"] == "CITEREFFranzén2005"
+        assert e["href"] == "#CITEREFFranzén2005"
+        assert e["shorthand"] == "Franzén (2005)"
+        assert "Franzén, Torkel (2005)" in e["text"]
+        assert e["url"] == "https://example.com/book"
+        assert e["title"] == "Gödel's Theorem"
+
+    def test_dedupes_repeated_inline_reference(self):
+        """Multiple inline uses of the same CITEREF collapse to one entry."""
+        html = (
+            '<p><a href="#CITEREFSokalBricmont1999">Sokal & Bricmont (1999)</a> '
+            'argue. Later, '
+            '<a href="#CITEREFSokalBricmont1999">Sokal & Bricmont (1999)</a> '
+            'also note.</p>'
+            '<cite id="CITEREFSokalBricmont1999">'
+            'Sokal, A.; Bricmont, J. (1999). Fashionable Nonsense.'
+            '</cite>'
+        )
+        entries = _extract_inline_citations(html)
+        assert len(entries) == 1
+        assert entries[0]["key"] == "CITEREFSokalBricmont1999"
+
+    def test_extracts_multiple_distinct_inline_citerefs(self):
+        """Two distinct inline CITEREFs produce two entries in document order."""
+        html = (
+            '<p>See '
+            '<a href="#CITEREFAlpha2020">Alpha (2020)</a> and '
+            '<a href="#CITEREFBeta2021">Beta (2021)</a>.</p>'
+            '<cite id="CITEREFAlpha2020">Alpha, A. (2020). Work One.</cite>'
+            '<cite id="CITEREFBeta2021">Beta, B. (2021). Work Two.</cite>'
+        )
+        entries = _extract_inline_citations(html)
+        assert len(entries) == 2
+        assert entries[0]["key"] == "CITEREFAlpha2020"
+        assert entries[1]["key"] == "CITEREFBeta2021"
+
+    def test_skips_anchors_inside_references_block(self):
+        """CITEREFs inside .mw-references-wrap are handled by footnote path,
+        not the inline path, to avoid double-counting."""
+        html = (
+            '<div class="mw-references-wrap">'
+            '<ol class="references">'
+            '<li><span class="reference-text">'
+            '<a href="#CITEREFInsideRef2020">Inside (2020)</a>, p. 1.'
+            '</span></li>'
+            '</ol>'
+            '</div>'
+            '<p>Prose with <a href="#CITEREFOutside2021">Outside (2021)</a>.</p>'
+            '<cite id="CITEREFOutside2021">Outside, O. (2021). Prose Work.</cite>'
+            '<cite id="CITEREFInsideRef2020">Inside, I. (2020). Footnote Work.</cite>'
+        )
+        entries = _extract_inline_citations(html)
+        assert len(entries) == 1
+        assert entries[0]["key"] == "CITEREFOutside2021"
+
+    def test_skips_unresolvable_citeref(self):
+        """Anchor pointing at a missing bibliography target is dropped."""
+        html = (
+            '<p><a href="#CITEREFGhost1999">Ghost (1999)</a> said so.</p>'
+        )
+        entries = _extract_inline_citations(html)
+        assert entries == []
+
+    def test_mediawiki_markdown_preserves_native_citeref_links(self):
+        """The HTML→markdown pass leaves inline CITEREFs as native markdown
+        links — provenance is carried by the link itself, not an invented
+        marker."""
+        html = (
+            '<p>See <a href="#CITEREFFoo2005">Foo (2005)</a> for details.</p>'
+        )
+        md_out = _mediawiki_html_to_markdown(html)
+        assert "[Foo (2005)](#CITEREFFoo2005)" in md_out
+
+    def test_inline_citeref_md_regex_counts_matches(self):
+        """The regex used for the JIT advisory matches the markdown form."""
+        md_text = (
+            "Several authors — [Franzén (2005)](#CITEREFFranzén2005), "
+            "[Sokal & Bricmont (1999)](#CITEREFSokalBricmont1999) — "
+            "commented."
+        )
+        matches = _INLINE_CITEREF_MD_RE.findall(md_text)
+        assert len(matches) == 2
+        assert matches[0][1] == "#CITEREFFranzén2005"
+        assert matches[1][1] == "#CITEREFSokalBricmont1999"
+
+
+# --- _format_inline_citations ---
+
+class TestFormatInlineCitations:
+    def test_formats_single_entry_with_external_link(self):
+        entries = [{
+            "key": "CITEREFFoo2005",
+            "href": "#CITEREFFoo2005",
+            "shorthand": "Foo (2005)",
+            "text": "Foo, F. (2005). A Book.",
+            "url": "https://example.com/book",
+            "title": "A Book",
+        }]
+        result = _format_inline_citations(entries)
+        # First line reproduces the anchor shape so the caller can map it
+        # back to the in-prose reference.
+        assert "[Foo (2005)](#CITEREFFoo2005)" in result
+        assert "Foo, F. (2005). A Book." in result
+        assert "**[A Book](https://example.com/book)**" in result
+
+    def test_formats_entry_without_external_link(self):
+        entries = [{
+            "key": "CITEREFPlainAuthor2020",
+            "href": "#CITEREFPlainAuthor2020",
+            "shorthand": "Author (2020)",
+            "text": "Author, A. (2020). No link attached.",
+        }]
+        result = _format_inline_citations(entries)
+        assert "[Author (2020)](#CITEREFPlainAuthor2020)" in result
+        assert "Author, A. (2020). No link attached." in result
+        # No external link line.
+        assert "**" not in result

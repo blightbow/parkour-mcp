@@ -169,6 +169,37 @@ MEDIAWIKI_PARSE_FULL_RESPONSE = {
     }
 }
 
+MEDIAWIKI_PARSE_WITH_INLINE_CITATIONS = {
+    "parse": {
+        "displaytitle": "Test Page",
+        "text": {
+            "*": (
+                '<h2>Appeals in other fields</h2>'
+                '<p>Several authors have commented, including '
+                '<a href="#CITEREFFranzén2005">Franzén (2005)</a>, and '
+                '<a href="#CITEREFSokalBricmont1999">Sokal &amp; Bricmont (1999)</a>. '
+                'A second mention of '
+                '<a href="#CITEREFFranzén2005">Franzén (2005)</a> '
+                'appears later.</p>'
+                '<h2>Bibliography</h2>'
+                '<cite id="CITEREFFranzén2005">'
+                'Franzén, Torkel (2005). '
+                '<a class="external" href="https://example.com/franzen">'
+                "Gödel's Theorem: An Incomplete Guide"
+                '</a>.'
+                '</cite>'
+                '<cite id="CITEREFSokalBricmont1999">'
+                'Sokal, A.; Bricmont, J. (1999). Fashionable Nonsense.'
+                '</cite>'
+            ),
+        },
+        "sections": [
+            {"index": "1", "line": "Appeals in other fields", "level": "2"},
+            {"index": "2", "line": "Bibliography", "level": "2"},
+        ],
+    }
+}
+
 MEDIAWIKI_PARSE_WITH_CITATIONS = {
     "parse": {
         "displaytitle": "Test Page",

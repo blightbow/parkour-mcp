@@ -122,6 +122,31 @@ async def _fetch_mediawiki_page(
         }
 
 
+def _resolve_citeref_target(soup, target_id: str) -> Optional[dict]:
+    """Resolve a #CITEREF target id to its bibliography entry.
+
+    Looks up the element with the given id, walks to its parent (the
+    bibliography <cite>/<li>/<dd> that carries the surrounding text), and
+    extracts the plain text plus the first external link found inside.
+
+    Returns None if the target is not present or has no usable parent.
+    Returns {"text": str, "url"?: str, "title"?: str} otherwise.
+    """
+    target_el = soup.find(id=target_id)
+    if not target_el:
+        return None
+    bib_el = target_el.parent
+    if not bib_el:
+        return None
+    bib_text = re.sub(r"\s+", " ", bib_el.get_text(separator=" ", strip=True))
+    entry: dict = {"text": bib_text}
+    bib_ext = bib_el.find("a", class_="external")
+    if bib_ext and bib_ext.get("href"):
+        entry["url"] = bib_ext["href"]
+        entry["title"] = bib_ext.get_text(strip=True)
+    return entry
+
+
 def _extract_citations(html: str) -> list[dict]:
     """Extract numbered citations from MediaWiki HTML.
 
@@ -171,27 +196,94 @@ def _extract_citations(html: str) -> list[dict]:
         sources = []
         for citeref_link in citeref_links:
             target_id = citeref_link["href"].lstrip("#")
-            target_el = soup.find(id=target_id)
-            if not target_el:
-                continue
-            bib_el = target_el.parent
-            if not bib_el:
-                continue
-            bib_text = re.sub(
-                r"\s+", " ", bib_el.get_text(separator=" ", strip=True)
-            )
-            source: dict = {"text": bib_text}
-            bib_ext = bib_el.find("a", class_="external")
-            if bib_ext and bib_ext.get("href"):
-                source["url"] = bib_ext["href"]
-                source["title"] = bib_ext.get_text(strip=True)
-            sources.append(source)
+            resolved = _resolve_citeref_target(soup, target_id)
+            if resolved is not None:
+                sources.append(resolved)
         if sources:
             entry["sources"] = sources
 
         citations.append(entry)
 
     return citations
+
+
+def _extract_inline_citations(html: str) -> list[dict]:
+    """Extract in-prose author-date citations from MediaWiki HTML.
+
+    Walks every ``<a href="#CITEREF...">`` anchor that appears outside the
+    numbered references block (``.mw-references-wrap``), dedupes by target
+    id (first-encounter wins), and resolves each to its bibliography
+    entry.  Returns a list of:
+
+        {
+            "key":       "CITEREFFranzén2005",      # raw anchor id
+            "href":      "#CITEREFFranzén2005",     # exact fragment as it
+                                                    # appears in the markdown
+                                                    # link, for verbatim lookup
+            "shorthand": "Franzén (2005)",          # visible link text
+            "text":      "<full bibliography entry>",
+            "url":       "https://example.com/...", # optional external link
+            "title":     "Book Title",              # optional
+        }
+
+    Inline CITEREFs are intentionally tracked separately from the
+    numbered-footnote ``sources`` field produced by ``_extract_citations``:
+    the two mechanisms share resolution logic but serve different
+    retrieval modes.  Inline refs are the natural provenance of author-date
+    shortcuts embedded directly in prose (``Franzén (2005)``), which the
+    markdown pass preserves verbatim as ``[Franzén (2005)](#CITEREFFranzén2005)``.
+    """
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(html, "html.parser")
+
+    # Skip anchors inside the numbered footnote block — those already feed
+    # _extract_citations' sources field and would otherwise be
+    # double-counted here.
+    for el in soup.select(".mw-references-wrap"):
+        el.decompose()
+
+    seen: set[str] = set()
+    entries: list[dict] = []
+
+    for a in soup.find_all(
+        "a", href=lambda h: h and h.startswith("#CITEREF")  # type: ignore[reportArgumentType]
+    ):
+        href_attr = a["href"]
+        # BeautifulSoup returns a list for multi-valued attrs; href is
+        # single-valued in valid HTML but ty flags the union.
+        href = href_attr if isinstance(href_attr, str) else href_attr[0]
+        target_id = href.lstrip("#")
+        if target_id in seen:
+            continue
+        seen.add(target_id)
+
+        shorthand = re.sub(r"\s+", " ", a.get_text(separator=" ", strip=True))
+        resolved = _resolve_citeref_target(soup, target_id)
+        if resolved is None:
+            # Anchor points at a bibliography entry we can't find — skip,
+            # since the whole point of lookup is to return the full entry.
+            continue
+
+        entry: dict = {
+            "key": target_id,
+            "href": href,
+            "shorthand": shorthand,
+            "text": resolved["text"],
+        }
+        if "url" in resolved:
+            entry["url"] = resolved["url"]
+        if "title" in resolved:
+            entry["title"] = resolved["title"]
+        entries.append(entry)
+
+    return entries
+
+
+# Matches the native markdown form that _mediawiki_html_to_markdown leaves
+# for inline author-date shortcuts: [visible text](#CITEREFFoo2005).
+# Used by the fast path to count + sample keys for the JIT advisory.
+_INLINE_CITEREF_MD_RE = re.compile(r"\[([^\]]+)\]\((#CITEREF[^)\s]+)\)")
 
 
 def _format_citations(citations: list[dict]) -> str:
@@ -218,6 +310,29 @@ def _format_citations(citations: list[dict]) -> str:
 
         lines.append(line)
     return "\n".join(lines)
+
+
+def _format_inline_citations(citations: list[dict]) -> str:
+    """Format inline author-date citations as a compact bibliography block.
+
+    Each entry becomes:
+
+        [Franzén (2005)](#CITEREFFranzén2005)
+        : Franzén, Torkel (2005). Gödel's Theorem: An Incomplete Guide...
+        : **[Book Title](https://example.com/book)**
+
+    The first line reproduces the same markdown link shape that appears
+    in the page body, so the output ties directly back to the inline
+    reference the caller is looking up.
+    """
+    lines: list[str] = []
+    for c in citations:
+        lines.append(f"[{c['shorthand']}]({c['href']})")
+        lines.append(f": {c['text']}")
+        if "url" in c and "title" in c:
+            lines.append(f": **[{c['title']}]({c['url']})**")
+        lines.append("")
+    return "\n".join(lines).rstrip()
 
 
 def _mediawiki_html_to_markdown(html: str) -> str:

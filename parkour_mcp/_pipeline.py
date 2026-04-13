@@ -23,7 +23,12 @@ from .markdown import (
     _fence_content,
     _TRUST_ADVISORY,
 )
-from .mediawiki import _detect_mediawiki, _fetch_mediawiki_page, _mediawiki_html_to_markdown
+from .mediawiki import (
+    _detect_mediawiki,
+    _fetch_mediawiki_page,
+    _mediawiki_html_to_markdown,
+    _INLINE_CITEREF_MD_RE,
+)
 from .arxiv import _detect_arxiv_url, _fetch_arxiv_paper
 from .doi import _detect_doi_url, _fetch_doi_paper
 from .reddit import _detect_reddit_url, _fetch_reddit_content, _split_by_comments
@@ -460,13 +465,39 @@ async def _mediawiki_fast_path(
     markdown_content = _mediawiki_html_to_markdown(wiki_page["html"])
 
     title = wiki_page["title"]
-    frontmatter_entries = {
+    frontmatter_entries: dict = {
         "source": url,
         "site": wiki_info["sitename"] or None,
         "generator": wiki_info["generator"] or None,
     }
     if extra_entries:
         frontmatter_entries.update(extra_entries)
+
+    # JIT discoverability for inline author-date citations.  Markdown
+    # preserves Wikipedia's native shape: [Author (Year)](#CITEREFAuthorYear).
+    # When any are present in the rendered content, tell the caller how to
+    # resolve them without bloating the tool description for every page.
+    citeref_matches = _INLINE_CITEREF_MD_RE.findall(markdown_content)
+    if citeref_matches:
+        # Dedupe by fragment, preserve first-occurrence order, sample a few
+        # to make the hint concrete without listing the full roster.
+        seen_frags: set[str] = set()
+        sample: list[str] = []
+        for _text, frag in citeref_matches:
+            if frag in seen_frags:
+                continue
+            seen_frags.add(frag)
+            if len(sample) < 2:
+                sample.append(frag)
+        total = len(seen_frags)
+        example = ", ".join(f'"{f}"' for f in sample)
+        if total > len(sample):
+            example += ", ..."
+        frontmatter_entries["hint"] = (
+            f"{total} inline author-date citation"
+            f"{'s' if total != 1 else ''} — resolve via "
+            f"citations=[{example}] for full bibliography entries"
+        )
 
     return _process_markdown_sections(
         markdown_content, section_names, max_tokens, frontmatter_entries,
