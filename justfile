@@ -25,6 +25,10 @@ benchmark *args:
 readme:
     uv run python3 scripts/regenerate_readme_examples.py
 
+# Regenerate tool/server icon SVGs from Noto fonts (downloads fonts on first run)
+icons:
+    uv run python3 scripts/generate_icons.py
+
 # Run vulture dead-code scan on production code (honors .vulture_whitelist.py).
 # Hard gate — vulture exits 3 on findings, which fails the recipe and
 # any wrapping pipeline. Real findings should be fixed at the source

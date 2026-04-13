@@ -48,6 +48,7 @@ _ICON_FILES = {
     "ietf": "ietf",                 # 🐌 U+1F40C SNAIL (NotoEmoji)
     "packages": "packages",         # ⬡  U+2B21 WHITE HEXAGON (NotoSansMath)
     "discourse": "discourse",       # 💬 U+1F4AC SPEECH BALLOON (NotoEmoji)
+    "mediawiki": "mediawiki",       # 🤙 U+1F919 SHAKA — "wiki" is Hawaiian (NotoEmoji)
 }
 _SERVER_ICON_FILE = "server"        # ∮  U+222E CONTOUR INTEGRAL (NotoSansMath)
 

@@ -21,6 +21,7 @@ import httpx
 import respx
 
 from parkour_mcp.fetch_direct import web_fetch_direct, web_fetch_sections
+from parkour_mcp.mediawiki import mediawiki
 from parkour_mcp.semantic_scholar import semantic_scholar
 from parkour_mcp.arxiv import arxiv
 
@@ -190,10 +191,10 @@ async def main() -> None:
         out,
     ))
 
-    # ── 7. web_fetch_direct — Wikipedia footnotes ───────────────────────
-    out = await web_fetch_direct(WIKI_42, footnotes=[14, 15])
+    # ── 7. mediawiki — Wikipedia footnotes ──────────────────────────────
+    out = await mediawiki(action="references", title=WIKI_42, footnotes=[14, 15])
     results.append((
-        'web_fetch_direct(WIKI_42, footnotes=[14, 15])',
+        'mediawiki(action="references", title=WIKI_42, footnotes=[14, 15])',
         'README line ~211  [VOLATILE: footnote numbering may shift]',
         out,
     ))

@@ -95,6 +95,7 @@ exclude = [".vulture_whitelist.py"]
 
 [dependency-groups]
 dev = [
+    "fonttools>=4.62",
     "pytest>=9.0.2",
     "pytest-asyncio>=1.3.0",
     "pytest-ruff>=0.5",
