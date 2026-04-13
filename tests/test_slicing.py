@@ -620,21 +620,6 @@ class TestSlicingValidation:
 
     @pytest.mark.asyncio
     @respx.mock
-    async def test_search_with_footnotes_warns(self):
-        """search + footnotes should honor search and warn about footnotes."""
-        respx.get("https://example.com").mock(
-            return_value=httpx.Response(
-                200, text="<html><body><p>Content</p></body></html>",
-                headers={"content-type": "text/html"},
-            )
-        )
-        result = await web_fetch_direct(
-            "https://example.com", search="foo", footnotes=[1]
-        )
-        assert "footnotes parameter ignored" in result
-
-    @pytest.mark.asyncio
-    @respx.mock
     async def test_search_on_json_returns_error(self):
         respx.get("https://example.com/data.json").mock(
             return_value=httpx.Response(

@@ -266,130 +266,6 @@ class TestWebFetchDirectErrors:
         assert "ConnectError" in result
 
 
-class TestWebFetchDirectParameterDowngrade:
-    """Tests for soft parameter downgrades instead of hard errors."""
-
-    @pytest.mark.asyncio
-    @respx.mock
-    async def test_section_plus_footnotes_ignores_footnotes(self):
-        """section + footnotes should honor section and warn about footnotes."""
-        respx.get("https://example.com/page").mock(
-            return_value=httpx.Response(
-                200,
-                text=SAMPLE_HTML_PAGE,
-                headers={"content-type": "text/html"},
-            )
-        )
-        result = await web_fetch_direct(
-            "https://example.com/page", section="Second Section", footnotes=[1, 2]
-        )
-        fm, fence = split_output(result)
-        # Section extraction should succeed
-        assert fenced_heading(2, "Second Section") in fence
-        # Footnotes warning should appear in frontmatter
-        assert "warning:" in fm
-        assert "footnotes parameter ignored" in fm
-
-    @pytest.mark.asyncio
-    @respx.mock
-    async def test_section_plus_citations_ignores_citations(self):
-        """section + citations should honor section and warn about citations."""
-        respx.get("https://example.com/page").mock(
-            return_value=httpx.Response(
-                200,
-                text=SAMPLE_HTML_PAGE,
-                headers={"content-type": "text/html"},
-            )
-        )
-        result = await web_fetch_direct(
-            "https://example.com/page",
-            section="Second Section",
-            citations=["#CITEREFFoo2005"],
-        )
-        fm, _fence = split_output(result)
-        assert "warning:" in fm
-        assert "citations parameter ignored" in fm
-
-
-class TestWebFetchDirectInlineCitations:
-    """Tests for the citations= parameter (inline author-date lookup)."""
-
-    @pytest.mark.asyncio
-    @respx.mock
-    async def test_citations_by_href_fragment(self):
-        """Caller passes the verbatim markdown href fragment."""
-        respx.get("https://wiki.example.com/api.php").mock(
-            side_effect=[
-                httpx.Response(200, json=MEDIAWIKI_QUERY_RESPONSE),
-                httpx.Response(200, json=MEDIAWIKI_PARSE_WITH_INLINE_CITATIONS),
-            ]
-        )
-        result = await web_fetch_direct(
-            "https://wiki.example.com/wiki/Test_Page",
-            citations=["#CITEREFFranzén2005"],
-        )
-        fm, fence = split_output(result)
-        assert "citations_only: True" in fm
-        assert "Franzén, Torkel (2005)" in fence
-        assert "**[Gödel's Theorem: An Incomplete Guide](https://example.com/franzen)**" in fence
-
-    @pytest.mark.asyncio
-    @respx.mock
-    async def test_citations_by_bare_key(self):
-        """Caller passes the bare author-year id without the CITEREF prefix."""
-        respx.get("https://wiki.example.com/api.php").mock(
-            side_effect=[
-                httpx.Response(200, json=MEDIAWIKI_QUERY_RESPONSE),
-                httpx.Response(200, json=MEDIAWIKI_PARSE_WITH_INLINE_CITATIONS),
-            ]
-        )
-        result = await web_fetch_direct(
-            "https://wiki.example.com/wiki/Test_Page",
-            citations=["SokalBricmont1999"],
-        )
-        _fm, fence = split_output(result)
-        assert "Sokal, A.; Bricmont, J. (1999). Fashionable Nonsense." in fence
-
-    @pytest.mark.asyncio
-    @respx.mock
-    async def test_citations_not_found_advisory(self):
-        """Missing keys are surfaced in frontmatter without failing the request."""
-        respx.get("https://wiki.example.com/api.php").mock(
-            side_effect=[
-                httpx.Response(200, json=MEDIAWIKI_QUERY_RESPONSE),
-                httpx.Response(200, json=MEDIAWIKI_PARSE_WITH_INLINE_CITATIONS),
-            ]
-        )
-        result = await web_fetch_direct(
-            "https://wiki.example.com/wiki/Test_Page",
-            citations=["#CITEREFFranzén2005", "#CITEREFMissing2099"],
-        )
-        fm, fence = split_output(result)
-        assert "citations_not_found" in fm
-        assert "#CITEREFMissing2099" in fm
-        # The valid entry still resolves.
-        assert "Franzén, Torkel (2005)" in fence
-
-    @pytest.mark.asyncio
-    @respx.mock
-    async def test_inline_citation_hint_on_content_path(self):
-        """The normal fetch of a page with inline citerefs surfaces a JIT
-        hint teaching the citations= syntax."""
-        respx.get("https://wiki.example.com/api.php").mock(
-            side_effect=[
-                httpx.Response(200, json=MEDIAWIKI_QUERY_RESPONSE),
-                httpx.Response(200, json=MEDIAWIKI_PARSE_WITH_INLINE_CITATIONS),
-            ]
-        )
-        result = await web_fetch_direct("https://wiki.example.com/wiki/Test_Page")
-        fm, fence = split_output(result)
-        assert "hint:" in fm
-        assert "inline author-date citation" in fm
-        assert "citations=" in fm
-        # Native markdown link shape is preserved inside the fence.
-        assert "[Franzén (2005)](#CITEREFFranzén2005)" in fence
-
-
 class TestWebFetchDirectMediawikiFastPath:
     @pytest.mark.asyncio
     @respx.mock
@@ -412,6 +288,27 @@ class TestWebFetchDirectMediawikiFastPath:
         assert fenced_heading(1, "Test Page") in fence
         assert "site: Test Wiki" in fm
         assert "generator: MediaWiki" in fm
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_wiki_see_also_points_at_mediawiki_tool(self):
+        """Pages with references surface a see_also pointing at the MediaWiki tool."""
+        respx.get("https://wiki.example.com/api.php").mock(
+            side_effect=[
+                httpx.Response(200, json=MEDIAWIKI_QUERY_RESPONSE),
+                httpx.Response(200, json=MEDIAWIKI_PARSE_WITH_INLINE_CITATIONS),
+            ]
+        )
+        result = await web_fetch_direct("https://wiki.example.com/wiki/Test_Page")
+        fm, fence = split_output(result)
+        # see_also replaces the old same-tool hint
+        assert "see_also:" in fm
+        assert "MediaWiki" in fm
+        assert "references" in fm
+        # Inline citation sample should appear in the see_also message
+        assert "inline author-date citation" in fm
+        # Native markdown link shape preserved inside the fence
+        assert "[Franzén (2005)](#CITEREFFranzén2005)" in fence
 
     @pytest.mark.asyncio
     @respx.mock

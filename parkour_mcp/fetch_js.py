@@ -14,17 +14,10 @@ from .markdown import (
     html_to_markdown, _build_frontmatter, _apply_hard_truncation,
     _fence_content, _TRUST_ADVISORY,
 )
-from .mediawiki import (
-    _extract_citations,
-    _format_citations,
-    _extract_inline_citations,
-    _format_inline_citations,
-)
 from ._pipeline import (
     _extract_fragment, _normalize_sections, _resolve_fragment_source,
     _mediawiki_fast_path, _arxiv_fast_path, _s2_fast_path, _doi_fast_path, _discourse_fast_path, _github_fast_path,
     _process_markdown_sections,
-    _cached_mediawiki_fetch,
     _page_cache, _dispatch_slicing,
 )
 
@@ -245,12 +238,15 @@ async def web_fetch_js(
     max_elements: int = 25,
     max_tokens: int = 5000,
     section: Optional[Union[str, list[str]]] = None,
-    footnotes: Optional[Union[int, list[int]]] = None,
-    citations: Optional[Union[str, list[str]]] = None,
     search: Optional[str] = None,
     slices: Optional[Union[int, list[int]]] = None,
 ) -> str:
     """Fetch web content with full JavaScript rendering and optional interactions.
+
+    For MediaWiki pages (Wikipedia, etc.), footnote and inline-citation
+    lookup live on the dedicated ``MediaWiki`` tool's ``references``
+    action; the fast path here surfaces a ``see_also`` hint pointing
+    at it when a page has either reference type.
 
     Args:
         url: The URL to fetch
@@ -263,10 +259,6 @@ async def web_fetch_js(
         max_elements: Maximum number of interactive elements to extract (default 25)
         max_tokens: Limit on output length in approximate token count (default 5000)
         section: Section name or list of section names to extract from the page
-        footnotes: Footnote number or list of numbers to retrieve from the page
-        citations: CITEREF fragment(s) to resolve from MediaWiki pages — accepts
-            the ``#CITEREFFoo2005`` form as it appears in the rendered markdown
-            link, or the bare ``CITEREFFoo2005`` / ``Foo2005`` id
         search: Search terms for BM25 keyword matching within cached page content
         slices: Slice index or list of indices to retrieve from cached page content
     """
@@ -297,49 +289,6 @@ async def web_fetch_js(
     if want_slicing and section_names:
         return "Error: 'search'/'slices' and 'section' are mutually exclusive."
 
-    if footnotes is not None and (want_slicing or section_names):
-        _fn_warn = (
-            "footnotes parameter ignored — use footnotes as the sole parameter "
-            "to retrieve bibliography entries"
-        )
-        if fragment_warning:
-            fragment_warning = [fragment_warning, _fn_warn]
-        else:
-            fragment_warning = _fn_warn
-        footnotes = None
-
-    # Citations follow the same "companion ask" rule as footnotes.
-    # citations+footnotes together: citations wins (more explicit,
-    # newer affordance), footnotes gets a warn.
-    if citations is not None and (want_slicing or section_names):
-        _cit_warn = (
-            "citations parameter ignored — use citations as the sole parameter "
-            "to retrieve bibliography entries"
-        )
-        if fragment_warning:
-            fragment_warning = (
-                [*fragment_warning, _cit_warn]
-                if isinstance(fragment_warning, list)
-                else [fragment_warning, _cit_warn]
-            )
-        else:
-            fragment_warning = _cit_warn
-        citations = None
-    if citations is not None and footnotes is not None:
-        _fn_vs_cit = (
-            "footnotes parameter ignored — citations takes precedence when "
-            "both are supplied"
-        )
-        if fragment_warning:
-            fragment_warning = (
-                [*fragment_warning, _fn_vs_cit]
-                if isinstance(fragment_warning, list)
-                else [fragment_warning, _fn_vs_cit]
-            )
-        else:
-            fragment_warning = _fn_vs_cit
-        footnotes = None
-
     # --- Search/slices cache-first path ---
     # Skip cache entries produced by WebFetchIncisive ("direct") — its static
     # HTML may be sparse for JS-heavy pages.  Entries from "js" (Playwright)
@@ -351,82 +300,6 @@ async def web_fetch_js(
                 url, search, slices, slices_list if slices is not None else [],
                 max_tokens, source_url, warning=fragment_warning,
             )
-
-    # --- Footnote-only path (MediaWiki pages) ---
-    if footnotes is not None:
-        requested = [footnotes] if isinstance(footnotes, int) else list(footnotes)
-        try:
-            wiki_info, wiki_page = await _cached_mediawiki_fetch(url)
-            if wiki_info and wiki_page:
-                all_footnotes = _extract_citations(wiki_page["html"])
-                if not all_footnotes:
-                    return f"Error: No footnotes found for {url}"
-                selected = [c for c in all_footnotes if c["n"] in requested]
-                not_found = sorted(set(requested) - {c["n"] for c in selected})
-                title = wiki_page["title"]
-                fm_entries: dict[str, str | bool | list[int]] = {
-                    "source": source_url,
-                    "trust": _TRUST_ADVISORY,
-                    "footnotes_only": True,
-                }
-                if not_found:
-                    available = sorted(c["n"] for c in all_footnotes)
-                    fm_entries["footnotes_not_found"] = not_found
-                    fm_entries["footnotes_available"] = f"1-{available[-1]}"
-                fm = _build_frontmatter(fm_entries)
-                if selected:
-                    return fm + "\n\n" + _fence_content(
-                        _format_citations(selected), title=title,
-                    )
-                return fm + "\n\n" + _fence_content("", title=title)
-        except Exception:
-            pass
-        return "Error: Footnote retrieval requires a MediaWiki page (Wikipedia, etc.)"
-
-    # --- Citations-only path (MediaWiki pages) ---
-    if citations is not None:
-        requested_raw = [citations] if isinstance(citations, str) else list(citations)
-
-        def _normalize_key(k: str) -> str:
-            k = k.lstrip("#")
-            if not k.startswith("CITEREF"):
-                k = "CITEREF" + k
-            return k
-
-        requested_norm = [_normalize_key(k) for k in requested_raw]
-        try:
-            wiki_info, wiki_page = await _cached_mediawiki_fetch(url)
-            if wiki_info and wiki_page:
-                all_inline = _extract_inline_citations(wiki_page["html"])
-                if not all_inline:
-                    return f"Error: No inline citations found for {url}"
-                by_key = {c["key"]: c for c in all_inline}
-                selected: list[dict] = []
-                not_found: list[str] = []
-                for original, norm in zip(requested_raw, requested_norm):
-                    match = by_key.get(norm)
-                    if match is None:
-                        not_found.append(original)
-                    else:
-                        selected.append(match)
-                title = wiki_page["title"]
-                cit_fm: dict[str, str | bool | list[str]] = {
-                    "source": source_url,
-                    "trust": _TRUST_ADVISORY,
-                    "citations_only": True,
-                }
-                if not_found:
-                    cit_fm["citations_not_found"] = not_found
-                    cit_fm["citations_available_count"] = str(len(all_inline))
-                fm = _build_frontmatter(cit_fm)
-                if selected:
-                    return fm + "\n\n" + _fence_content(
-                        _format_inline_citations(selected), title=title,
-                    )
-                return fm + "\n\n" + _fence_content("", title=title)
-        except Exception:
-            pass
-        return "Error: Citation retrieval requires a MediaWiki page (Wikipedia, etc.)"
 
     # --- arXiv fast path (before launching browser) ---
     try:

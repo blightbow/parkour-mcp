@@ -14,7 +14,6 @@ from parkour_mcp._pipeline import _wiki_cache, _page_cache
 from .conftest import (
     MEDIAWIKI_QUERY_RESPONSE,
     MEDIAWIKI_PARSE_FULL_RESPONSE,
-    MEDIAWIKI_PARSE_WITH_CITATIONS,
 )
 from ._output import (
     fenced_heading,
@@ -211,25 +210,6 @@ class TestWebFetchJsSearchSlices:
 
     @pytest.mark.asyncio
     @respx.mock
-    async def test_footnotes_with_section_warns(self):
-        """section + footnotes should honor section and warn about footnotes."""
-        respx.get("https://wiki.example.com/api.php").mock(
-            side_effect=[
-                httpx.Response(200, json=MEDIAWIKI_QUERY_RESPONSE),
-                httpx.Response(200, json=MEDIAWIKI_PARSE_FULL_RESPONSE),
-            ]
-        )
-
-        result = await web_fetch_js(
-            "https://wiki.example.com/wiki/Test_Page",
-            section="Section Two",
-            footnotes=[1, 2],
-        )
-        assert "footnotes parameter ignored" in result
-        assert "Content of section two" in result
-
-    @pytest.mark.asyncio
-    @respx.mock
     async def test_cache_first_path(self):
         """Second slicing call should use cache without re-fetching."""
         respx.get("https://wiki.example.com/api.php").mock(
@@ -251,57 +231,6 @@ class TestWebFetchJsSearchSlices:
             slices=[0],
         )
         assert "--- slice 0" in result
-
-
-class TestWebFetchJsFootnotes:
-    """Tests for footnote retrieval via MediaWiki fast path."""
-
-    @pytest.mark.asyncio
-    @respx.mock
-    async def test_footnotes_returns_citations(self):
-        """footnotes= should return formatted citation entries."""
-        respx.get("https://wiki.example.com/api.php").mock(
-            side_effect=[
-                httpx.Response(200, json=MEDIAWIKI_QUERY_RESPONSE),
-                httpx.Response(200, json=MEDIAWIKI_PARSE_WITH_CITATIONS),
-            ]
-        )
-
-        result = await web_fetch_js(
-            "https://wiki.example.com/wiki/Test_Page",
-            footnotes=[1, 2],
-        )
-        assert "footnotes_only: True" in result
-        assert "First reference source" in result
-        assert "Second reference source" in result
-
-    @pytest.mark.asyncio
-    @respx.mock
-    async def test_footnotes_not_found_shows_available(self):
-        """Requesting nonexistent footnotes should show available range."""
-        respx.get("https://wiki.example.com/api.php").mock(
-            side_effect=[
-                httpx.Response(200, json=MEDIAWIKI_QUERY_RESPONSE),
-                httpx.Response(200, json=MEDIAWIKI_PARSE_WITH_CITATIONS),
-            ]
-        )
-
-        result = await web_fetch_js(
-            "https://wiki.example.com/wiki/Test_Page",
-            footnotes=[99],
-        )
-        assert "footnotes_not_found" in result
-        assert "footnotes_available" in result
-
-    @pytest.mark.asyncio
-    async def test_footnotes_non_wiki_returns_error(self):
-        """Non-wiki URL should return error about MediaWiki requirement."""
-        result = await web_fetch_js(
-            "https://example.com/page",
-            footnotes=[1],
-        )
-        assert "Error:" in result
-        assert "MediaWiki" in result
 
 
 class TestWebFetchJsContentTypePrecheck:

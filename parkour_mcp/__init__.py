@@ -18,6 +18,7 @@ from .github import github
 from .ietf import ietf
 from .packages import packages
 from .discourse import discourse
+from .mediawiki import mediawiki
 from .shelf import research_shelf, _get_shelf
 from .common import TOOL_NAMES, init_tool_names, s2_enabled
 
@@ -89,6 +90,7 @@ PROFILE_VARS = {
         "fetch": "WebFetch",
         "fetch_direct": "WebFetchIncisive",
         "summarize": "KagiSummarize",
+        "mediawiki_tool": "MediaWiki",
         "fetch_direct_when_to_use": (
             "Unlike WebFetch, fetches through the user's device instead of proxying through\n"
             "Anthropic's servers. Uses precise content extraction techniques and clean\n"
@@ -103,6 +105,7 @@ PROFILE_VARS = {
         "fetch": "web_fetch",
         "fetch_direct": "web_fetch_incisive",
         "summarize": "kagi_summarize",
+        "mediawiki_tool": "mediawiki",
         "fetch_direct_when_to_use": (
             "Unlike web_fetch, fetches through the user's device instead of proxying through\n"
             "Anthropic's servers. Uses precise content extraction techniques and clean\n"
@@ -154,11 +157,12 @@ Targeted extraction (preferred over fetching full pages):
 - section="Syntax" — extract a specific section by heading name
 - search="terms" — BM25 keyword search over ~500-token slices
 - slices=[3, 4, 5] — retrieve specific slices by index
-- footnotes=[1, 3] — retrieve specific [^N] entries from MediaWiki pages
-- citations=["#CITEREFFoo2005"] — resolve inline author-date CITEREF
-  links on MediaWiki pages to full bibliography entries (frontmatter
-  hint advertises keys when they are present in the page)
 - URL fragments (#section-name) are resolved automatically as sections
+
+For MediaWiki pages (Wikipedia, etc.), footnote and inline-citation
+lookup lives on {mediawiki_tool}'s references action — the fast path
+here surfaces a see_also hint pointing at it when a page has either
+reference type.
 
 Always use this tool for Reddit URLs — built-in fetch tools cannot access
 Reddit content when proxied.
@@ -169,8 +173,8 @@ Supports HTML, plain text, JSON, and XML content types.""",
 
 Use this when {fetch_direct} returns incomplete content from JS-heavy sites
 (SPAs, React/Vue/Angular apps, dynamically loaded content). Supports the
-same targeted extraction as {fetch_direct}: section, search, slices,
-footnotes, and citations parameters.
+same targeted extraction as {fetch_direct}: section, search, and slices
+parameters. For MediaWiki bibliography lookup, see {mediawiki_tool}.
 
 Supports ReAct-style interaction chains:
 1. First call: Fetch page, observe available interactive elements
@@ -311,6 +315,34 @@ or remove tracked papers, and to export citations in BibTeX or RIS format.
 The shelf survives context compaction within the same session. For cross-session
 persistence, use export json to save the shelf to a memory file, then import
 it in a future session.""",
+
+    "mediawiki": """Search and retrieve content from Wikipedia and other MediaWiki sites.
+
+Use this for direct Wikipedia access without resorting to {search} with site: filters.
+Fetches articles by title (no URL guessing), runs native full-text wiki search, and
+resolves footnotes/inline citations on a specific article. Wikipedia URLs are also
+handled automatically by {fetch_direct}.
+
+Actions: page, search, references.
+
+PARAMETER SPLIT: unlike other dedicated tools, this one uses two primary parameters:
+- title= for 'page' and 'references' (article identifier: title or URL)
+- query= for 'search' only (search terms)
+The dispatcher will reject mismatches with a specific error.
+
+Query formats:
+- page: title (e.g. "Gödel's incompleteness theorems") or full Wikipedia URL.
+  Supports section=, search= (within-page BM25), and slices= for targeted extraction.
+- search: keywords (e.g. "quantum entanglement"). Supports MediaWiki search operators.
+- references: title identifying the page; supply footnotes=[1,2] and/or
+  citations=["#CITEREFFoo2005"] to resolve numbered footnotes and/or inline
+  author-date citations. Both can be passed in one call.
+
+Wiki instance via wiki= parameter:
+- Language code: "en" (default), "de", "simple", "zh-yue", "pt-br"
+- Sister project: "commons", "wikidata", "meta", "species"
+- Hostname/URL: "en.wikipedia.org", "https://wiki.archlinux.org"
+- Ignored when title= is a full URL (URL wins)""",
 }
 
 
@@ -357,6 +389,7 @@ def main():
         ("ietf", ietf),
         ("packages", packages),
         ("discourse", discourse),
+        ("mediawiki", mediawiki),
     ]
     if _s2_on:
         from .semantic_scholar import semantic_scholar

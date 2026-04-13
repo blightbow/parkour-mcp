@@ -5,6 +5,7 @@ assembly that is common to both web_fetch_js and web_fetch_direct.
 """
 
 import logging
+import re
 from collections import OrderedDict
 from typing import Optional
 from urllib.parse import urldefrag
@@ -473,30 +474,57 @@ async def _mediawiki_fast_path(
     if extra_entries:
         frontmatter_entries.update(extra_entries)
 
-    # JIT discoverability for inline author-date citations.  Markdown
-    # preserves Wikipedia's native shape: [Author (Year)](#CITEREFAuthorYear).
-    # When any are present in the rendered content, tell the caller how to
-    # resolve them without bloating the tool description for every page.
+    # JIT discoverability for MediaWiki references.  Markdown preserves
+    # Wikipedia's native shapes: ``[^N]`` numbered footnotes and
+    # ``[Author (Year)](#CITEREFAuthorYear)`` inline author-date links.
+    # When either shape is present, point the caller at the dedicated
+    # MediaWiki tool's ``references`` action without bloating the tool
+    # description for every page.
+    #
+    # Key: ``see_also`` (different tool), not ``hint`` (same tool).  See
+    # docs/frontmatter-standard.md for the convention.
+    see_also_parts: list[str] = []
+
+    # Numbered footnotes — unique numbers, not total occurrences.
+    footnote_nums = sorted(
+        {int(n) for n in re.findall(r"\[\^(\d+)\]", markdown_content)}
+    )
+    if footnote_nums:
+        fn_sample = footnote_nums[:2]
+        fn_example = ", ".join(str(n) for n in fn_sample)
+        if len(footnote_nums) > len(fn_sample):
+            fn_example += ", ..."
+        see_also_parts.append(
+            f"{len(footnote_nums)} numbered footnote"
+            f"{'s' if len(footnote_nums) != 1 else ''} "
+            f"(footnotes=[{fn_example}])"
+        )
+
+    # Inline author-date citations — dedupe fragments, sample for concreteness.
     citeref_matches = _INLINE_CITEREF_MD_RE.findall(markdown_content)
     if citeref_matches:
-        # Dedupe by fragment, preserve first-occurrence order, sample a few
-        # to make the hint concrete without listing the full roster.
         seen_frags: set[str] = set()
-        sample: list[str] = []
+        frag_sample: list[str] = []
         for _text, frag in citeref_matches:
             if frag in seen_frags:
                 continue
             seen_frags.add(frag)
-            if len(sample) < 2:
-                sample.append(frag)
+            if len(frag_sample) < 2:
+                frag_sample.append(frag)
         total = len(seen_frags)
-        example = ", ".join(f'"{f}"' for f in sample)
-        if total > len(sample):
-            example += ", ..."
-        frontmatter_entries["hint"] = (
+        cit_example = ", ".join(f'"{f}"' for f in frag_sample)
+        if total > len(frag_sample):
+            cit_example += ", ..."
+        see_also_parts.append(
             f"{total} inline author-date citation"
-            f"{'s' if total != 1 else ''} — resolve via "
-            f"citations=[{example}] for full bibliography entries"
+            f"{'s' if total != 1 else ''} "
+            f"(citations=[{cit_example}])"
+        )
+
+    if see_also_parts:
+        frontmatter_entries["see_also"] = (
+            f"Use {tool_name('mediawiki')} action='references' to resolve: "
+            + "; ".join(see_also_parts)
         )
 
     return _process_markdown_sections(

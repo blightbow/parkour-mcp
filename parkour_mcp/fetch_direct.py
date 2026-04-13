@@ -22,13 +22,7 @@ from ._pipeline import (
     _page_cache, _search_slices, _get_slices,
     _dispatch_slicing,
 )
-from .mediawiki import (
-    _mediawiki_html_to_markdown,
-    _extract_citations,
-    _format_citations,
-    _extract_inline_citations,
-    _format_inline_citations,
-)
+from .mediawiki import _mediawiki_html_to_markdown
 
 logger = logging.getLogger(__name__)
 
@@ -40,8 +34,6 @@ async def web_fetch_direct(
     url: str,
     max_tokens: int = 5000,
     section: Optional[Union[str, list[str]]] = None,
-    footnotes: Optional[Union[int, list[int]]] = None,
-    citations: Optional[Union[str, list[str]]] = None,
     search: Optional[str] = None,
     slices: Optional[Union[int, list[int]]] = None,
 ) -> str:
@@ -51,12 +43,10 @@ async def web_fetch_direct(
     and XML content types. For HTML pages, use the section parameter to extract
     specific sections by heading name.
 
-    For MediaWiki pages (Wikipedia, etc.), inline footnotes appear as [^N]
-    markers; use the footnotes parameter to retrieve specific entries
-    (e.g. footnotes=4 or footnotes=[1,3,8]).  Inline author-date shortcuts
-    appear as ``[Author (Year)](#CITEREFAuthorYear)`` markdown links; pass
-    the fragment(s) to the citations parameter to retrieve the full
-    bibliography entries (e.g. citations=["#CITEREFFranzén2005"]).
+    For MediaWiki pages (Wikipedia, etc.), footnote and inline-citation
+    lookup live on the dedicated ``MediaWiki`` tool's ``references``
+    action; the fast path here surfaces a ``see_also`` hint pointing
+    at it when a page has either reference type.
 
     For long or poorly-sectioned pages, use search for BM25 keyword search
     (returns matching ~500-token slices ranked by relevance, terms matched
@@ -66,10 +56,6 @@ async def web_fetch_direct(
         url: The URL to fetch
         max_tokens: Limit on content length in approximate token count (default 5000)
         section: Section name or list of section names to extract from the page
-        footnotes: Footnote number or list of numbers to retrieve from the page
-        citations: CITEREF fragment(s) to resolve from MediaWiki pages — accepts
-            the ``#CITEREFFoo2005`` form as it appears in the rendered markdown
-            link, or the bare ``CITEREFFoo2005`` / ``Foo2005`` id
         search: Search terms for BM25 keyword matching within cached page content
         slices: Slice index or list of indices to retrieve from cached page content
     """
@@ -114,54 +100,6 @@ async def web_fetch_direct(
     if want_slicing and section_names:
         return "Error: 'search'/'slices' and 'section' are mutually exclusive."
 
-    # Footnotes are a companion ask — when combined with another mode,
-    # honor the primary intent and warn that footnotes were ignored.
-    # Footnotes-only mode is for when you specifically want bibliography entries.
-    if footnotes is not None and (want_slicing or section_names):
-        _fn_warn = (
-            "footnotes parameter ignored — use footnotes as the sole parameter "
-            "to retrieve bibliography entries"
-        )
-        if fragment_warning:
-            fragment_warning = [fragment_warning, _fn_warn]
-        else:
-            fragment_warning = _fn_warn
-        footnotes = None
-
-    # Citations follow the same "companion ask" rule as footnotes: if the
-    # caller has already declared a primary targeting mode, honor it and
-    # warn that citations were ignored.  citations+footnotes together is
-    # also ambiguous — pick citations (the newer, more explicit affordance)
-    # and warn on footnotes.
-    if citations is not None and (want_slicing or section_names):
-        _cit_warn = (
-            "citations parameter ignored — use citations as the sole parameter "
-            "to retrieve bibliography entries"
-        )
-        if fragment_warning:
-            fragment_warning = (
-                [*fragment_warning, _cit_warn]
-                if isinstance(fragment_warning, list)
-                else [fragment_warning, _cit_warn]
-            )
-        else:
-            fragment_warning = _cit_warn
-        citations = None
-    if citations is not None and footnotes is not None:
-        _fn_vs_cit = (
-            "footnotes parameter ignored — citations takes precedence when "
-            "both are supplied"
-        )
-        if fragment_warning:
-            fragment_warning = (
-                [*fragment_warning, _fn_vs_cit]
-                if isinstance(fragment_warning, list)
-                else [fragment_warning, _fn_vs_cit]
-            )
-        else:
-            fragment_warning = _fn_vs_cit
-        footnotes = None
-
     # --- Search/slices cache-first path ---
     # Only reuse "direct" or "wiki" entries.  A "js" entry was produced by
     # Playwright and should not be served from a tool that does static HTTP.
@@ -177,86 +115,6 @@ async def web_fetch_direct(
                 return _get_slices(url, slices_list, max_tokens, fm_base) or \
                     "Error: Page cache unavailable."
         # Cache miss — fall through to fetch, which populates the cache
-
-    # --- Footnote-only path (MediaWiki pages) ---
-    if footnotes is not None:
-        requested = [footnotes] if isinstance(footnotes, int) else list(footnotes)
-        try:
-            wiki_info, wiki_page = await _cached_mediawiki_fetch(url)
-            if wiki_info and wiki_page:
-                all_footnotes = _extract_citations(wiki_page["html"])
-                if not all_footnotes:
-                    return f"Error: No footnotes found for {url}"
-                # Filter to requested footnote numbers
-                selected = [c for c in all_footnotes if c["n"] in requested]
-                not_found = sorted(set(requested) - {c["n"] for c in selected})
-                title = wiki_page["title"]
-                fm_entries: dict[str, str | bool | list[int]] = {
-                    "source": source_url,
-                    "trust": _TRUST_ADVISORY,
-                    "footnotes_only": True,
-                }
-                if not_found:
-                    available = sorted(c["n"] for c in all_footnotes)
-                    fm_entries["footnotes_not_found"] = not_found
-                    fm_entries["footnotes_available"] = f"1-{available[-1]}"
-                fm = _build_frontmatter(fm_entries)
-                if selected:
-                    return fm + "\n\n" + _fence_content(
-                        _format_citations(selected), title=title,
-                    )
-                return fm + "\n\n" + _fence_content("", title=title)
-        except Exception:
-            pass
-        return "Error: Footnote retrieval requires a MediaWiki page (Wikipedia, etc.)"
-
-    # --- Citations-only path (MediaWiki pages) ---
-    if citations is not None:
-        requested_raw = [citations] if isinstance(citations, str) else list(citations)
-        # Normalize requested keys to the bare anchor id form (CITEREFFoo2005).
-        # Accept: "#CITEREFFoo2005", "CITEREFFoo2005", and bare "Foo2005".
-        def _normalize_key(k: str) -> str:
-            k = k.lstrip("#")
-            if not k.startswith("CITEREF"):
-                k = "CITEREF" + k
-            return k
-
-        requested_norm = [_normalize_key(k) for k in requested_raw]
-        try:
-            wiki_info, wiki_page = await _cached_mediawiki_fetch(url)
-            if wiki_info and wiki_page:
-                all_inline = _extract_inline_citations(wiki_page["html"])
-                if not all_inline:
-                    return f"Error: No inline citations found for {url}"
-                # Filter to requested keys; preserve caller order so the
-                # output reads like the request.
-                by_key = {c["key"]: c for c in all_inline}
-                selected: list[dict] = []
-                not_found: list[str] = []
-                for original, norm in zip(requested_raw, requested_norm):
-                    match = by_key.get(norm)
-                    if match is None:
-                        not_found.append(original)
-                    else:
-                        selected.append(match)
-                title = wiki_page["title"]
-                cit_fm: dict[str, str | bool | list[str]] = {
-                    "source": source_url,
-                    "trust": _TRUST_ADVISORY,
-                    "citations_only": True,
-                }
-                if not_found:
-                    cit_fm["citations_not_found"] = not_found
-                    cit_fm["citations_available_count"] = str(len(all_inline))
-                fm = _build_frontmatter(cit_fm)
-                if selected:
-                    return fm + "\n\n" + _fence_content(
-                        _format_inline_citations(selected), title=title,
-                    )
-                return fm + "\n\n" + _fence_content("", title=title)
-        except Exception:
-            pass
-        return "Error: Citation retrieval requires a MediaWiki page (Wikipedia, etc.)"
 
     # --- arXiv fast path (before S2 — arXiv URLs get arXiv-native metadata) ---
     try:

@@ -190,6 +190,7 @@ TOOL_NAMES: dict[str, dict[str, str]] = {
     "ietf": {"code": "IETF", "desktop": "ietf"},
     "packages": {"code": "Packages", "desktop": "packages"},
     "discourse": {"code": "Discourse", "desktop": "discourse"},
+    "mediawiki": {"code": "MediaWiki", "desktop": "mediawiki"},
 }
 
 # Populated by init_tool_names() at startup; keyed by internal tool name.

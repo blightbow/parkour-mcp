@@ -32,6 +32,9 @@ _packages_mod = sys.modules["parkour_mcp.packages"]
 import parkour_mcp.discourse  # noqa: E402, F401
 _discourse_mod = sys.modules["parkour_mcp.discourse"]
 
+import parkour_mcp.mediawiki  # noqa: E402, F401
+_mediawiki_mod = sys.modules["parkour_mcp.mediawiki"]
+
 
 @pytest.fixture(autouse=True)
 def _enable_s2_for_tests(monkeypatch):
@@ -77,6 +80,12 @@ def _disable_discourse_rate_limit(monkeypatch):
     """Disable Discourse per-host rate limiters in unit tests."""
     monkeypatch.setattr(_discourse_mod, "_DEFAULT_DISCOURSE_INTERVAL", 0.0)
     _discourse_mod._discourse_limiters.clear()
+
+
+@pytest.fixture(autouse=True)
+def _disable_mediawiki_rate_limit(monkeypatch):
+    """Disable the 1s MediaWiki rate limiter in unit tests."""
+    monkeypatch.setattr(_mediawiki_mod._mediawiki_limiter, "min_interval", 0.0)
 
 
 # Sample markdown document used across multiple test modules
@@ -235,6 +244,57 @@ MEDIAWIKI_PARSE_SECTION_TEXT = {
             "*": "<h2>Section Two</h2><p>Content of section two.</p>"
         }
     }
+}
+
+# MediaWiki list=search API response fixture — for the MediaWiki tool's
+# search action.  Shape mirrors what action=query&list=search returns,
+# including the <span class="searchmatch"> highlighting around matched
+# terms in the snippet field.
+MEDIAWIKI_SEARCH_RESPONSE = {
+    "batchcomplete": "",
+    "query": {
+        "searchinfo": {
+            "totalhits": 1337,
+        },
+        "search": [
+            {
+                "ns": 0,
+                "title": "Gödel's incompleteness theorems",
+                "pageid": 12345,
+                "size": 85000,
+                "wordcount": 12500,
+                "snippet": (
+                    'Two theorems of mathematical logic by Kurt '
+                    '<span class="searchmatch">Gödel</span>, '
+                    'establishing limits of axiomatic systems.'
+                ),
+                "timestamp": "2025-11-01T08:30:00Z",
+            },
+            {
+                "ns": 0,
+                "title": "Kurt Gödel",
+                "pageid": 67890,
+                "size": 42000,
+                "wordcount": 6800,
+                "snippet": (
+                    'Austrian-American logician known for his work on '
+                    '<span class="searchmatch">incompleteness</span> '
+                    'theorems.'
+                ),
+                "timestamp": "2025-10-15T14:22:00Z",
+            },
+        ],
+    },
+}
+
+MEDIAWIKI_SEARCH_EMPTY_RESPONSE = {
+    "batchcomplete": "",
+    "query": {
+        "searchinfo": {
+            "totalhits": 0,
+        },
+        "search": [],
+    },
 }
 
 # Sample HTML responses for fetch_direct tests
