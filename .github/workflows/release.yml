@@ -70,8 +70,6 @@ jobs:
           gh release create "${{ steps.version.outputs.tag }}" \
             --title "${{ steps.version.outputs.tag }}" \
             --generate-notes \
-            dist/*.tar.gz \
-            dist/*.whl \
             dist/parkour-mcp.mcpb
 
       - name: Install mcp-publisher

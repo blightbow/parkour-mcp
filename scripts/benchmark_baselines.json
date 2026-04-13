@@ -1,0 +1,105 @@
+{
+  "captured_at": "2026-04-10T20:10:02.627194+00:00",
+  "hardware": "Darwin arm64",
+  "python": "3.14.3",
+  "generic_http": {
+    "small": {
+      "tier": "small",
+      "url": "https://peps.python.org/pep-0008/",
+      "html_bytes": 121734,
+      "md_bytes": 49497,
+      "n_slices": 43,
+      "n_sections": 43,
+      "fetch_ms": 93.35854183882475,
+      "html_to_markdown_ms": 87.76349993422627,
+      "splitter_ms": 0.7205000147223473,
+      "sections_ms": 0.8421249222010374,
+      "ancestry_ms": 0.07224990986287594,
+      "tantivy_ms": 5.416749976575375
+    },
+    "medium": {
+      "tier": "medium",
+      "url": "https://tc39.es/ecma262/",
+      "html_bytes": 7365937,
+      "md_bytes": 3137509,
+      "n_slices": 2377,
+      "n_sections": 2371,
+      "fetch_ms": 57.893167017027736,
+      "html_to_markdown_ms": 6936.178625095636,
+      "splitter_ms": 1236.5082909818739,
+      "sections_ms": 39.63849996216595,
+      "ancestry_ms": 130.5617499165237,
+      "tantivy_ms": 20.23383299820125
+    },
+    "pathological": {
+      "tier": "pathological",
+      "url": "https://html.spec.whatwg.org/",
+      "html_bytes": 15191359,
+      "md_bytes": 6337512,
+      "n_slices": 5072,
+      "n_sections": 1221,
+      "fetch_ms": 811.9838340207934,
+      "html_to_markdown_ms": 17200.542999897152,
+      "splitter_ms": 6477.112582884729,
+      "sections_ms": 100.29954090714455,
+      "ancestry_ms": 170.8870001602918,
+      "tantivy_ms": 44.02312496677041
+    }
+  },
+  "fast_paths": {
+    "mediawiki": {
+      "name": "mediawiki",
+      "url": "https://en.wikipedia.org/wiki/Transformer_(deep_learning_architecture)",
+      "end_to_end_ms": 398.8056250382215,
+      "result_bytes": 1130
+    },
+    "arxiv": {
+      "name": "arxiv",
+      "url": "https://arxiv.org/abs/1706.03762",
+      "end_to_end_ms": 854.8754169605672,
+      "result_bytes": 8157
+    },
+    "ietf": {
+      "name": "ietf",
+      "url": "https://www.rfc-editor.org/rfc/rfc9110.html",
+      "end_to_end_ms": 2823.2226248364896,
+      "result_bytes": 4776
+    },
+    "doi": {
+      "name": "doi",
+      "url": "https://doi.org/10.1038/nature14539",
+      "end_to_end_ms": 2232.365000061691,
+      "result_bytes": 646
+    },
+    "reddit": {
+      "name": "reddit",
+      "url": "https://www.reddit.com/r/Python/top/",
+      "end_to_end_ms": 227.40587498992682,
+      "result_bytes": 600
+    },
+    "discourse": {
+      "name": "discourse",
+      "url": "https://meta.discourse.org/t/about-the-meta-category/1",
+      "end_to_end_ms": 966.0937078297138,
+      "result_bytes": 2765
+    },
+    "github_blob": {
+      "name": "github_blob",
+      "url": "https://github.com/python/cpython/blob/v3.12.0/Lib/asyncio/base_events.py",
+      "end_to_end_ms": 73.47079087048769,
+      "result_bytes": 25061
+    },
+    "github_issue": {
+      "name": "github_issue",
+      "url": "https://github.com/python/cpython/issues/100000",
+      "end_to_end_ms": 1232.4613339733332,
+      "result_bytes": 654
+    },
+    "github_pull": {
+      "name": "github_pull",
+      "url": "https://github.com/python/cpython/pull/1",
+      "end_to_end_ms": 3017.7550830412656,
+      "result_bytes": 3847
+    }
+  }
+}

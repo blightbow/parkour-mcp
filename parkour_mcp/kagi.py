@@ -1,7 +1,6 @@
 """Kagi search and summarization tools."""
 
 import logging
-import os
 from pathlib import Path
 from typing import Any, Literal, Optional
 
@@ -84,8 +83,9 @@ def _handle_kagi_error(e: Exception) -> str:
 
 def get_api_key() -> str:
     """Load API key from config file or environment."""
+    from .common import clean_env
     # Environment variable takes precedence
-    if key := os.environ.get("KAGI_API_KEY"):
+    if key := clean_env("KAGI_API_KEY"):
         return key
     # Fall back to config file
     if CONFIG_PATH.exists():

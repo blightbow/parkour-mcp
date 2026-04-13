@@ -31,7 +31,6 @@ def sample_record():
         year=2017,
         venue="NeurIPS",
         source_tool="arxiv",
-        citation_apa="Vaswani, A. et al. (2017). Attention is all you need.",
     )
 
 
@@ -810,6 +809,31 @@ class TestShelfRetractionPartition:
         new_count, _ = await shelf.import_json(legacy)
         assert new_count == 1
         assert len(await shelf.list_all()) == 1
+
+    @pytest.mark.asyncio
+    async def test_import_tolerates_unknown_fields(self, shelf):
+        """Exports from other tool versions may carry fields this version
+        doesn't know. Unknown keys must be silently dropped, not crash the
+        import with TypeError from CitationRecord(**rec_dict).
+        """
+        payload = json.dumps({
+            "10.1234/future": {
+                "doi": "10.1234/future",
+                "title": "Exported by a future version",
+                "authors": ["Future, A"],
+                # Fields that don't exist on the current CitationRecord —
+                # previously raised TypeError, now silently dropped.
+                "citation_apa": "Future, A. (2099). Exported by a future version.",
+                "arxiv_version": "v42",
+                "totally_made_up_future_field": {"nested": "data"},
+            }
+        })
+        new_count, _ = await shelf.import_json(payload)
+        assert new_count == 1
+        records = await shelf.list_all()
+        assert len(records) == 1
+        assert records[0].doi == "10.1234/future"
+        assert records[0].title == "Exported by a future version"
 
 
 class TestResearchShelfToolRetraction:

@@ -17,6 +17,12 @@ from .conftest import (
     MEDIAWIKI_QUERY_RESPONSE,
     MEDIAWIKI_PARSE_FULL_RESPONSE,
 )
+from ._output import (
+    assert_fenced,
+    fenced_heading,
+    fenced_line,
+    split_output,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -44,10 +50,11 @@ class TestWebFetchDirectMarkdown:
         )
 
         result = await web_fetch_direct("https://example.com/page")
-        assert result.startswith("---")
-        assert "trust:" in result
-        assert "source:" in result
-        assert "│ # Main Heading" in result
+        fm, fence = split_output(result)
+        assert "trust:" in fm
+        assert "source:" in fm
+        assert_fenced(result)
+        assert fenced_heading(1, "Main Heading") in fence
         # Should NOT contain XML
         assert "<document" not in result
 
@@ -109,11 +116,11 @@ class TestWebFetchDirectMarkdown:
         )
 
         result = await web_fetch_direct("https://example.com/page", section="Second Section")
-        assert "Second Section" in result
-        assert "│ ## Second Section" in result
+        fm, fence = split_output(result)
+        assert fenced_heading(2, "Second Section") in fence
         # Second Section has a child Subsection — note should warn about depth
-        assert "note:" in result
-        assert "Subsections are separate entries" in result
+        assert "note:" in fm
+        assert "Subsections are separate entries" in fm
 
     @pytest.mark.asyncio
     @respx.mock
@@ -130,8 +137,9 @@ class TestWebFetchDirectMarkdown:
         )
 
         result = await web_fetch_direct("https://example.com/big", max_tokens=100)
-        assert "truncated:" in result
-        assert "Sections:" in result  # sections list rendered inside fence
+        fm, fence = split_output(result)
+        assert "truncated:" in fm
+        assert fenced_line("Sections:") in fence  # truncation section list
 
     @pytest.mark.asyncio
     @respx.mock
@@ -144,7 +152,8 @@ class TestWebFetchDirectMarkdown:
         )
 
         result = await web_fetch_direct("https://example.com/big.json", max_tokens=100)
-        assert "truncated:" in result
+        fm, _fence = split_output(result)
+        assert "truncated:" in fm
 
 
 class TestWebFetchDirectErrors:
@@ -169,6 +178,50 @@ class TestWebFetchDirectErrors:
         result = await web_fetch_direct("https://example.com/missing")
         assert "Error:" in result
         assert "404" in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_response_too_large_content_length(self):
+        """Layer 1: Content-Length header exceeds size cap."""
+        # 10 MB Content-Length header on a small body — gate should reject
+        # before reading the body.
+        respx.get("https://example.com/huge.json").mock(
+            return_value=httpx.Response(
+                200,
+                text='{"small": true}',
+                headers={
+                    "content-type": "application/json",
+                    "content-length": str(10 * 1024 * 1024),
+                },
+            )
+        )
+
+        result = await web_fetch_direct("https://example.com/huge.json")
+        assert "Error:" in result
+        assert "too large" in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_response_too_large_streaming(self):
+        """Layer 2: body exceeds size cap mid-transfer (no Content-Length).
+
+        Uses stream= to build the mock response so httpx does not inject a
+        Content-Length header — this forces guarded_fetch to discover the
+        oversized body via the streaming chunk loop instead of the
+        Content-Length gate.
+        """
+        oversized = b"x" * (6 * 1024 * 1024)  # 6 MiB, exceeds 5 MiB default
+        respx.get("https://example.com/firehose.json").mock(
+            return_value=httpx.Response(
+                200,
+                stream=httpx.ByteStream(oversized),
+                headers={"content-type": "application/json"},
+            )
+        )
+
+        result = await web_fetch_direct("https://example.com/firehose.json")
+        assert "Error:" in result
+        assert "too large" in result
 
     @pytest.mark.asyncio
     @respx.mock
@@ -229,11 +282,12 @@ class TestWebFetchDirectParameterDowngrade:
         result = await web_fetch_direct(
             "https://example.com/page", section="Second Section", footnotes=[1, 2]
         )
+        fm, fence = split_output(result)
         # Section extraction should succeed
-        assert "│ ## Second Section" in result
+        assert fenced_heading(2, "Second Section") in fence
         # Footnotes warning should appear in frontmatter
-        assert "warning:" in result
-        assert "footnotes parameter ignored" in result
+        assert "warning:" in fm
+        assert "footnotes parameter ignored" in fm
 
 
 class TestWebFetchDirectMediawikiFastPath:
@@ -252,9 +306,12 @@ class TestWebFetchDirectMediawikiFastPath:
         )
 
         result = await web_fetch_direct("https://wiki.example.com/wiki/Test_Page")
-        assert "│ # Test Page" in result
-        assert "site: Test Wiki" in result
-        assert "generator: MediaWiki" in result
+        fm, fence = split_output(result)
+        # Security invariant: page title lives in the fence, not the frontmatter.
+        assert "Test Page" not in fm
+        assert fenced_heading(1, "Test Page") in fence
+        assert "site: Test Wiki" in fm
+        assert "generator: MediaWiki" in fm
 
     @pytest.mark.asyncio
     @respx.mock
@@ -275,8 +332,9 @@ class TestWebFetchDirectMediawikiFastPath:
         )
 
         result = await web_fetch_direct("https://wiki.example.com/wiki/Test_Page")
+        _fm, fence = split_output(result)
         # Should still return content via normal fetch
-        assert "│ # Main Heading" in result
+        assert fenced_heading(1, "Main Heading") in fence
 
     @pytest.mark.asyncio
     @respx.mock
@@ -291,7 +349,8 @@ class TestWebFetchDirectMediawikiFastPath:
         )
 
         result = await web_fetch_direct("https://example.com/page", section="Second Section")
-        assert "│ ## Second Section" in result
+        _fm, fence = split_output(result)
+        assert fenced_heading(2, "Second Section") in fence
 
     @pytest.mark.asyncio
     @respx.mock
@@ -308,9 +367,10 @@ class TestWebFetchDirectMediawikiFastPath:
         result = await web_fetch_direct(
             "https://example.com/page", section=["Second Section", "Subsection"]
         )
+        _fm, fence = split_output(result)
         # Multi-section content appears inside the fence
-        assert "│ ## Second Section" in result
-        assert "│ ### Subsection" in result
+        assert fenced_heading(2, "Second Section") in fence
+        assert fenced_heading(3, "Subsection") in fence
 
 
 class TestWebFetchDirectFragmentExtraction:
@@ -329,9 +389,10 @@ class TestWebFetchDirectFragmentExtraction:
         )
 
         result = await web_fetch_direct("https://example.com/page#second-section")
-        assert "source: https://example.com/page#second-section" in result
-        assert "│ ## Second Section" in result
-        assert "Another paragraph" in result
+        fm, fence = split_output(result)
+        assert "source: https://example.com/page#second-section" in fm
+        assert fenced_heading(2, "Second Section") in fence
+        assert "Another paragraph" in fence
 
     @pytest.mark.asyncio
     @respx.mock
@@ -361,10 +422,13 @@ class TestWebFetchDirectFragmentExtraction:
         )
 
         result = await web_fetch_direct("https://example.com/page#nonexistent")
-        assert "source: https://example.com/page#nonexistent" in result
-        assert "sections_not_found:" in result
-        assert '"nonexistent"' in result
-        assert "(#" in result  # slugs should be present in section list
+        fm, fence = split_output(result)
+        assert "source: https://example.com/page#nonexistent" in fm
+        # sections_not_found names come from the user's request parameter,
+        # so they stay in the trusted frontmatter zone.
+        assert "sections_not_found:" in fm
+        assert '"nonexistent"' in fm
+        assert "(#" in fence  # slugs rendered in fenced section list
 
     @pytest.mark.asyncio
     @respx.mock
@@ -381,10 +445,11 @@ class TestWebFetchDirectFragmentExtraction:
         result = await web_fetch_direct(
             "https://example.com/page#subsection", section="Second Section"
         )
+        fm, fence = split_output(result)
         # Fragment dropped from source: explicit section= overrode it
-        assert "source: https://example.com/page\n" in result
-        assert "warning: URL fragment #subsection was ignored; explicit section parameter takes precedence" in result
-        assert "│ ## Second Section" in result
+        assert "source: https://example.com/page\n" in fm
+        assert "warning: URL fragment #subsection was ignored; explicit section parameter takes precedence" in fm
+        assert fenced_heading(2, "Second Section") in fence
 
 
 SAMPLE_PYTHON_FILE = """\
@@ -524,7 +589,8 @@ class TestWebFetchDirectGitHubLineAnchors:
         )
 
         result = await web_fetch_direct("https://example.com/page#second-section")
-        assert "│ ## Second Section" in result
+        _fm, fence = split_output(result)
+        assert fenced_heading(2, "Second Section") in fence
 
 
 class TestWebFetchDirectRawGitHub:
@@ -850,12 +916,13 @@ class TestWebFetchSections:
         )
 
         result = await web_fetch_sections("https://example.com/page")
-        assert "│ - Main Heading" in result
-        assert "(#main-heading)" in result
-        assert "(#second-section)" in result
-        assert "(#subsection)" in result
-        assert "hint:" in result
-        assert "section parameter" in result
+        fm, fence = split_output(result)
+        assert fenced_line("- Main Heading") in fence
+        assert "(#main-heading)" in fence
+        assert "(#second-section)" in fence
+        assert "(#subsection)" in fence
+        assert "hint:" in fm
+        assert "section parameter" in fm
         # Should NOT contain page content
         assert "paragraph" not in result
 
@@ -871,9 +938,10 @@ class TestWebFetchSections:
         )
 
         result = await web_fetch_sections("https://example.com/page#second-section")
-        assert "source: https://example.com/page#second-section" in result
+        fm, fence = split_output(result)
+        assert "source: https://example.com/page#second-section" in fm
         # Fragment match info no longer surfaced; full tree still shown
-        assert "│ - " in result
+        assert fenced_line("- ") in fence
 
     @pytest.mark.asyncio
     @respx.mock
@@ -887,10 +955,11 @@ class TestWebFetchSections:
         )
 
         result = await web_fetch_sections("https://example.com/page#nonexistent")
-        assert "source: https://example.com/page#nonexistent" in result
-        assert "sections_not_found:" in result
-        assert '"nonexistent"' in result
-        assert "│ - " in result
+        fm, fence = split_output(result)
+        assert "source: https://example.com/page#nonexistent" in fm
+        assert "sections_not_found:" in fm
+        assert '"nonexistent"' in fm
+        assert fenced_line("- ") in fence
 
     @pytest.mark.asyncio
     @respx.mock

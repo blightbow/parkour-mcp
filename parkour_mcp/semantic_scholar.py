@@ -2,7 +2,6 @@
 
 import asyncio
 import logging
-import os
 import re
 from pathlib import Path
 from typing import Annotated, Optional
@@ -63,7 +62,8 @@ _AUTHOR_PAPER_FIELDS = (
 
 def _get_s2_api_key() -> str:
     """Load Semantic Scholar API key from env or config file. Returns '' if missing."""
-    if key := os.environ.get("S2_API_KEY"):
+    from .common import clean_env
+    if key := clean_env("S2_API_KEY"):
         return key
     if S2_CONFIG_PATH.exists():
         return S2_CONFIG_PATH.read_text().strip()
@@ -408,7 +408,6 @@ async def _fetch_s2_paper(paper_id: str) -> str:
             alt_dois=alt_dois,
             source_tool="semantic_scholar",
             bibtex=citation_styles.get("bibtex"),
-            citation_apa=citation_text,
             orcids={
                 a.get("name", ""): (a.get("externalIds") or {}).get("ORCID", "")
                 for a in authors

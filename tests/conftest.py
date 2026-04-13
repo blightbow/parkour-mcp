@@ -8,7 +8,7 @@ from parkour_mcp.common import init_tool_names
 
 # Initialize tool display names once for the entire test session.
 # Uses "code" profile so tool_name() calls in hint/note strings resolve
-# to PascalCase names (WebFetchExact, SemanticScholar, etc.).
+# to PascalCase names (WebFetchIncisive, SemanticScholar, etc.).
 init_tool_names("code")
 
 import parkour_mcp.semantic_scholar  # noqa: E402

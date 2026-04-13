@@ -15,7 +15,6 @@ from parkour_mcp.github import (
     _detect_github_url,
     _get_github_token,
     _github_request,
-    _next_page_url,
     _rate_limits,
 )
 
@@ -286,17 +285,3 @@ class TestCitationCff:
         _reset_shelf()
 
 
-class TestLinkHeaderParsing:
-    def test_next_link(self):
-        header = '<https://api.github.com/repos/x/y/issues?page=2>; rel="next", <https://api.github.com/repos/x/y/issues?page=5>; rel="last"'
-        assert _next_page_url(header) == "https://api.github.com/repos/x/y/issues?page=2"
-
-    def test_no_next_link(self):
-        header = '<https://api.github.com/repos/x/y/issues?page=1>; rel="prev", <https://api.github.com/repos/x/y/issues?page=5>; rel="last"'
-        assert _next_page_url(header) is None
-
-    def test_none_header(self):
-        assert _next_page_url(None) is None
-
-    def test_empty_header(self):
-        assert _next_page_url("") is None

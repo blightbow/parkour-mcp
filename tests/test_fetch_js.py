@@ -16,6 +16,10 @@ from .conftest import (
     MEDIAWIKI_PARSE_FULL_RESPONSE,
     MEDIAWIKI_PARSE_WITH_CITATIONS,
 )
+from ._output import (
+    fenced_heading,
+    split_output,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -38,10 +42,13 @@ class TestWebFetchJsMediawikiFastPath:
         )
 
         result = await web_fetch_js("https://wiki.example.com/wiki/Test_Page")
-        assert "│ # Test Page" in result
-        assert "site: Test Wiki" in result
-        assert "generator: MediaWiki" in result
-        assert "Section One" in result
+        fm, fence = split_output(result)
+        # Security invariant: page title lives in the fence, not the frontmatter.
+        assert "Test Page" not in fm
+        assert fenced_heading(1, "Test Page") in fence
+        assert "site: Test Wiki" in fm
+        assert "generator: MediaWiki" in fm
+        assert "Section One" in fence
 
     @pytest.mark.asyncio
     @respx.mock
@@ -57,7 +64,8 @@ class TestWebFetchJsMediawikiFastPath:
         result = await web_fetch_js(
             "https://wiki.example.com/wiki/Test_Page", max_tokens=5
         )
-        assert "truncated:" in result
+        fm, _fence = split_output(result)
+        assert "truncated:" in fm
 
     @pytest.mark.asyncio
     @respx.mock
@@ -74,8 +82,9 @@ class TestWebFetchJsMediawikiFastPath:
             "https://wiki.example.com/wiki/Test_Page",
             section="Section Two",
         )
-        assert "│ ## Section Two" in result
-        assert "Content of section two" in result
+        _fm, fence = split_output(result)
+        assert fenced_heading(2, "Section Two") in fence
+        assert "Content of section two" in fence
 
     @pytest.mark.asyncio
     @respx.mock
@@ -91,10 +100,11 @@ class TestWebFetchJsMediawikiFastPath:
             "https://wiki.example.com/wiki/Test_Page",
             section=["Section One", "Section Two"],
         )
+        _fm, fence = split_output(result)
         # Multi-section content appears inside the fence
-        assert "│ ## Section One" in result
-        assert "Content of section one" in result
-        assert "Content of section two" in result
+        assert fenced_heading(2, "Section One") in fence
+        assert "Content of section one" in fence
+        assert "Content of section two" in fence
 
     @pytest.mark.asyncio
     async def test_non_wiki_url_no_mw_metadata(self):
@@ -136,7 +146,8 @@ class TestWebFetchJsMediawikiFastPath:
             "https://wiki.example.com/wiki/Test_Page",
             section="Section Two",
         )
-        assert "│ ## Section Two" in result
+        _fm, fence = split_output(result)
+        assert fenced_heading(2, "Section Two") in fence
 
 
 class TestWebFetchJsSearchSlices:

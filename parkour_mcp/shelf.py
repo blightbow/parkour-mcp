@@ -19,7 +19,7 @@ import json
 import logging
 import re
 import time
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field, fields, asdict
 from typing import Annotated, Optional
 
 from pydantic import Field as PydanticField
@@ -42,10 +42,8 @@ class CitationRecord:
     year: Optional[int] = None
     venue: Optional[str] = None
     alt_dois: list[str] = field(default_factory=list)  # alternate DOIs (preprint ↔ journal)
-    arxiv_version: Optional[str] = None          # e.g. "v7" — the specific arXiv revision inspected
     source_tool: Optional[str] = None           # "arxiv", "semantic_scholar", "doi"
     bibtex: Optional[str] = None
-    citation_apa: Optional[str] = None
     orcids: Optional[dict[str, str]] = None     # {"Author Name": "0000-..."}
     added: Optional[str] = None                 # ISO 8601 timestamp
     score: Optional[int] = None                 # LLM-assigned
@@ -84,11 +82,6 @@ def _doi_priority(doi: str) -> int:
     if doi.startswith("10.1101/"):
         return 1  # bioRxiv/medRxiv — preprint server
     return 2      # journal/publisher — highest
-
-
-def _is_preprint_doi(doi: str) -> bool:
-    """Return True if the DOI is a preprint/repository identifier."""
-    return _doi_priority(doi) < 2
 
 
 # ---------------------------------------------------------------------------
@@ -465,7 +458,18 @@ class ResearchShelf:
         Accepts both the new ``{"active": {...}, "retracted": {...}}``
         format and the legacy flat ``{doi: record}`` format for backward
         compatibility with older exports.
+
+        Unknown keys in the import payload are silently dropped so that
+        exports written by future versions (with new fields) or older
+        versions (with fields since removed) round-trip cleanly.
         """
+        # Known CitationRecord field names, computed once per call.
+        known_fields = {f.name for f in fields(CitationRecord)}
+
+        def _build_record(rec_dict: dict) -> CitationRecord:
+            filtered = {k: v for k, v in rec_dict.items() if k in known_fields}
+            return CitationRecord(**filtered)
+
         async with self._lock:
             parsed = json.loads(data)
             new_count = 0
@@ -480,7 +484,7 @@ class ResearchShelf:
                 for bucket_name in ("active", "retracted"):
                     for doi, rec_dict in (parsed.get(bucket_name) or {}).items():
                         is_new = doi not in self._records and doi not in self._retracted
-                        self._track_unlocked(CitationRecord(**rec_dict))
+                        self._track_unlocked(_build_record(rec_dict))
                         if is_new:
                             new_count += 1
                         else:
@@ -489,7 +493,7 @@ class ResearchShelf:
                 # Legacy flat format
                 for doi, rec_dict in parsed.items():
                     is_new = doi not in self._records and doi not in self._retracted
-                    self._track_unlocked(CitationRecord(**rec_dict))
+                    self._track_unlocked(_build_record(rec_dict))
                     if is_new:
                         new_count += 1
                     else:

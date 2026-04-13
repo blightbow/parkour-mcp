@@ -1,7 +1,0 @@
-{
-  "venvPath": ".",
-  "venv": ".venv",
-  "pythonVersion": "3.14",
-  "pythonPlatform": "Darwin",
-  "typeCheckingMode": "standard"
-}

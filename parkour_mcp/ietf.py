@@ -452,7 +452,6 @@ async def _fetch_rfc_paper(number: int) -> str:
         year=year,
         venue="IETF",
         source_tool="ietf",
-        citation_apa=citation_text,
     ))
 
     # Build frontmatter

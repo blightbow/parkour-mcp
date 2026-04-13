@@ -16,6 +16,13 @@ from parkour_mcp.mediawiki import (
 )
 from parkour_mcp.markdown import _extract_sections_from_markdown
 
+from ._output import (
+    assert_fenced,
+    fenced_heading,
+    fenced_line,
+    split_output,
+)
+
 pytestmark = pytest.mark.live
 
 WIKI_URL = "https://wiki.ultimacodex.com/wiki/Ultima_VIII_books"
@@ -82,31 +89,44 @@ class TestLiveWebFetchDirect:
     @pytest.mark.asyncio
     async def test_wiki_full_page_truncated(self):
         result = await web_fetch_direct(WIKI_URL, max_tokens=200)
-        assert result.startswith("---")
-        assert "title:" in result
-        assert "site: Ultima Codex" in result
-        assert "generator: MediaWiki" in result
-        assert "truncated:" in result
-        assert "sections:" in result
-        assert "Honor Lost" in result
-        assert "[content truncated]" in result
+        fm, fence = split_output(result)
+
+        # Frontmatter: trusted server-generated metadata only.
+        assert "site: Ultima Codex" in fm
+        assert "generator: MediaWiki" in fm
+        assert "truncated:" in fm
+
+        # Security invariant: attacker-controlled page title must not
+        # leak into the trusted frontmatter zone.
+        assert "Ultima VIII" not in fm
+        assert "title:" not in fm
+
+        # Fenced content: title as heading, sections list, body text.
+        assert_fenced(result)
+        assert fenced_heading(1, "Ultima VIII books") in fence
+        assert fenced_line("Sections:") in fence
+        assert "Honor Lost" in fence
 
     @pytest.mark.asyncio
     async def test_wiki_single_section(self):
         result = await web_fetch_direct(WIKI_URL, section="Honor Lost", max_tokens=500)
-        assert "section: Honor Lost" in result
-        assert "Meltzars" in result
+        _fm, fence = split_output(result)
+        assert_fenced(result)
+        # Section rendered as a markdown heading inside the fence.
+        assert fenced_heading(4, "Honor Lost") in fence
+        assert "Meltzars" in fence
 
     @pytest.mark.asyncio
     async def test_wiki_multiple_sections(self):
         result = await web_fetch_direct(
             WIKI_URL,
             section=["Honor Lost", "The Spell of Divination"],
-            max_tokens=500,
+            max_tokens=2000,
         )
-        assert "sections:" in result
-        assert "Honor Lost" in result
-        assert "The Spell of Divination" in result
+        _fm, fence = split_output(result)
+        assert_fenced(result)
+        assert fenced_heading(4, "Honor Lost") in fence
+        assert fenced_heading(5, "The Spell of Divination") in fence
 
     @pytest.mark.asyncio
     async def test_json_endpoint(self):
@@ -117,9 +137,10 @@ class TestLiveWebFetchDirect:
     @pytest.mark.asyncio
     async def test_html_endpoint_markdown_default(self):
         result = await web_fetch_direct("https://httpbin.org/html")
-        assert result.startswith("---")
-        assert "title:" in result
-        assert "Herman Melville" in result
+        _fm, fence = split_output(result)
+        assert_fenced(result)
+        # Title rendered as a heading inside the fence.
+        assert fenced_heading(1, "Herman Melville - Moby-Dick") in fence
         assert "<document" not in result  # not XML
 
     @pytest.mark.asyncio
@@ -136,18 +157,24 @@ class TestLiveWebFetchJs:
     async def test_wiki_full_page_via_api(self):
         """MediaWiki fast path should return content without launching browser."""
         result = await web_fetch_js(WIKI_URL, max_tokens=200)
-        assert "title:" in result
-        assert "site: Ultima Codex" in result
-        assert "generator: MediaWiki" in result
-        assert "truncated:" in result
-        assert "sections:" in result
-        assert "Honor Lost" in result
+        fm, fence = split_output(result)
+
+        assert "site: Ultima Codex" in fm
+        assert "generator: MediaWiki" in fm
+        assert "truncated:" in fm
+
+        assert_fenced(result)
+        assert fenced_heading(1, "Ultima VIII books") in fence
+        assert fenced_line("Sections:") in fence
+        assert "Honor Lost" in fence
 
     @pytest.mark.asyncio
     async def test_wiki_section_fetch_via_api(self):
         result = await web_fetch_js(WIKI_URL, section="Honor Lost", max_tokens=1000)
-        assert "section: Honor Lost" in result
-        assert "Meltzars" in result
+        _fm, fence = split_output(result)
+        assert_fenced(result)
+        assert fenced_heading(4, "Honor Lost") in fence
+        assert "Meltzars" in fence
         # Should NOT contain browser: key (fast path skips browser)
         assert "browser:" not in result
 
@@ -156,10 +183,12 @@ class TestLiveWebFetchJs:
         result = await web_fetch_js(
             WIKI_URL,
             section=["Honor Lost", "The Spell of Divination"],
-            max_tokens=1000,
+            max_tokens=2000,
         )
-        assert "sections:" in result
-        assert "Honor Lost" in result
+        _fm, fence = split_output(result)
+        assert_fenced(result)
+        assert fenced_heading(4, "Honor Lost") in fence
+        assert fenced_heading(5, "The Spell of Divination") in fence
 
     @pytest.mark.asyncio
     async def test_non_wiki_uses_browser(self):

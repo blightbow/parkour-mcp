@@ -27,7 +27,7 @@ from .mediawiki import _detect_mediawiki, _fetch_mediawiki_page, _mediawiki_html
 from .arxiv import _detect_arxiv_url, _fetch_arxiv_paper
 from .doi import _detect_doi_url, _fetch_doi_paper
 from .reddit import _detect_reddit_url, _fetch_reddit_content, _split_by_comments
-from .common import tool_name
+from .common import ResponseTooLarge, guarded_fetch, tool_name
 
 logger = logging.getLogger(__name__)
 
@@ -267,7 +267,7 @@ class _PageCache:
 
         When *renderer* is specified, only returns a hit if the cached entry
         was produced by the same renderer.  This prevents WebFetchJS from
-        reusing sparse content that WebFetchExact cached from a JS-heavy page.
+        reusing sparse content that WebFetchIncisive cached from a JS-heavy page.
         """
         # Check protected first (most likely for active pages)
         entry = self._protected.get(url)
@@ -696,8 +696,9 @@ async def _github_fast_path(
             headers["Authorization"] = f"token {token}"
 
         try:
-            async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
-                resp = await client.get(raw_url, headers=headers)
+            resp = await guarded_fetch(raw_url, headers=headers)
+        except ResponseTooLarge as e:
+            return f"Error: Response too large for {raw_url} — {e}"
         except httpx.TimeoutException:
             return f"Error: Request timed out for {raw_url}"
         except httpx.RequestError as e:
@@ -974,9 +975,8 @@ async def _github_fast_path(
             headers["Authorization"] = f"token {token}"
 
         try:
-            async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
-                resp = await client.get(raw_url, headers=headers)
-        except httpx.RequestError:
+            resp = await guarded_fetch(raw_url, headers=headers, timeout=15.0)
+        except (ResponseTooLarge, httpx.RequestError):
             return f"Error: Failed to fetch wiki page '{page_name}'."
 
         if resp.status_code == 404:
@@ -1231,7 +1231,7 @@ def _process_markdown_sections(
             use it.
         renderer: Tag stored with the cache entry ("direct" or "js") so
             that WebFetchJS won't reuse sparse content cached by
-            WebFetchExact.
+            WebFetchIncisive.
     """
     # Populate the page cache before any filtering/truncation
     if cache_url and markdown_content:
@@ -1396,10 +1396,20 @@ def _dispatch_slicing(
     max_tokens: int,
     source_url: str,
     warning=None,
+    fallback: Optional[str] = None,
 ) -> str:
-    """Dispatch to search or slice retrieval after cache has been populated."""
+    """Dispatch to search or slice retrieval after cache has been populated.
+
+    If the cache is empty (e.g. a fast path returned an error string before
+    caching anything), ``fallback`` is returned verbatim when provided.  This
+    lets callers surface the original upstream error (e.g. ``"Error: File
+    not found"``) instead of a misleading ``"Page cache could not be
+    populated"`` message.
+    """
     cached = _page_cache.get(url)
     if not cached:
+        if fallback is not None:
+            return fallback
         return "Error: Page cache could not be populated for this URL."
     # Reddit markdown already embeds "# {title}" as slice 0's first line
     # (kept so slice ancestry remains informative) — skip re-adding it via

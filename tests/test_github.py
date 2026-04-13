@@ -9,7 +9,6 @@ import respx
 from parkour_mcp.github import (
     _detect_github_url,
     _github_request,
-    _next_page_url,
     _parse_citation_cff,
     _parse_owner_repo,
     _parse_owner_repo_number,
@@ -204,23 +203,6 @@ class TestQueryParsing:
 
 
 # ---------------------------------------------------------------------------
-# Link header parsing
-# ---------------------------------------------------------------------------
-
-class TestNextPageUrl:
-    def test_extracts_next(self):
-        link = '<https://api.github.com/repos/x/y?page=2>; rel="next", <https://api.github.com/repos/x/y?page=5>; rel="last"'
-        assert _next_page_url(link) == "https://api.github.com/repos/x/y?page=2"
-
-    def test_no_next(self):
-        link = '<https://api.github.com/repos/x/y?page=1>; rel="prev"'
-        assert _next_page_url(link) is None
-
-    def test_none(self):
-        assert _next_page_url(None) is None
-
-
-# ---------------------------------------------------------------------------
 # _github_request (mocked)
 # ---------------------------------------------------------------------------
 
@@ -310,6 +292,86 @@ class TestSearchIssues:
             })
         )
         result = await github("search_issues", "nothing", limit=5)
+        assert "No results" in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_no_results_label_hint(self):
+        """Zero results with label: qualifier fetches repo labels for hint."""
+        respx.get("https://api.github.com/search/issues").mock(
+            return_value=httpx.Response(200, json={
+                "total_count": 0, "incomplete_results": False, "items": [],
+            })
+        )
+        respx.get("https://api.github.com/repos/owner/repo/labels").mock(
+            return_value=httpx.Response(200, json=[
+                {"name": "class:bug"},
+                {"name": "class:feature"},
+                {"name": "priority:high"},
+            ])
+        )
+        result = await github(
+            "search_issues", "repo:owner/repo is:open label:bug", limit=5,
+        )
+        assert "No results" in result
+        assert "label:bug matched nothing" in result
+        assert "class:bug" in result
+        assert "class:feature" in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_no_results_label_hint_skipped_without_repo(self):
+        """No label hint when repo: qualifier is absent."""
+        respx.get("https://api.github.com/search/issues").mock(
+            return_value=httpx.Response(200, json={
+                "total_count": 0, "incomplete_results": False, "items": [],
+            })
+        )
+        result = await github("search_issues", "label:bug is:open", limit=5)
+        assert "No results" in result
+        assert "matched nothing" not in result
+
+
+# ---------------------------------------------------------------------------
+# Action: search_repos (mocked)
+# ---------------------------------------------------------------------------
+
+class TestSearchRepos:
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_returns_results(self):
+        respx.get("https://api.github.com/search/repositories").mock(
+            return_value=httpx.Response(200, json={
+                "total_count": 1,
+                "incomplete_results": False,
+                "items": [{
+                    "full_name": "owner/repo",
+                    "description": "A cool project",
+                    "stargazers_count": 1234,
+                    "language": "Python",
+                    "updated_at": "2025-01-01T00:00:00Z",
+                    "topics": ["ai", "ml"],
+                    "license": {"spdx_id": "MIT"},
+                }],
+            })
+        )
+        result = await github("search_repos", "topic:ai stars:>100", limit=5)
+        assert "owner/repo" in result
+        assert "A cool project" in result
+        assert "1,234" in result
+        assert "Python" in result
+        assert "MIT" in result
+        assert "ai" in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_no_results(self):
+        respx.get("https://api.github.com/search/repositories").mock(
+            return_value=httpx.Response(200, json={
+                "total_count": 0, "incomplete_results": False, "items": [],
+            })
+        )
+        result = await github("search_repos", "nothing", limit=5)
         assert "No results" in result
 
 

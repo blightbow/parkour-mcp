@@ -9,7 +9,10 @@ import socket
 import time
 from importlib.metadata import version as _pkg_version
 from pathlib import Path
+from typing import Optional
 from urllib.parse import urlparse
+
+import httpx
 
 # ---------------------------------------------------------------------------
 # Package / runtime versions (used in User-Agent strings)
@@ -30,13 +33,32 @@ _FETCH_HEADERS = {
     "Accept-Language": "en-US,en;q=0.5",
 }
 
+def clean_env(name: str) -> str:
+    """Read an env var, treating empty / whitespace-only / unsubstituted
+    ``${...}`` templates as unset.
+
+    The Claude Desktop mcpb runtime passes the literal template string
+    (e.g. ``${user_config.GITHUB_TOKEN}``) through to the server's
+    environment when an optional ``user_config`` field is not filled in
+    by the user.  A naive ``os.environ.get`` treats that non-empty
+    string as a real value — producing malformed Authorization headers
+    and similarly broken configuration downstream.  This helper rejects
+    those sentinel shapes so callers can cleanly fall back to filesystem
+    config or unauthenticated mode.
+    """
+    val = os.environ.get(name, "").strip()
+    if not val or val.startswith("${"):
+        return ""
+    return val
+
+
 # Honest UA for structured API endpoints (MediaWiki, etc.) that expect
 # machine clients to identify themselves.  Follows RFC 9110 §10.1.5 and
 # Wikimedia User-Agent policy.
 #
 # Format: product/version (comment) http-library/version renderer/version
 # Optional mailto: enables CrossRef "polite pool" (10 req/s vs 5 req/s).
-_CONTACT_EMAIL = os.environ.get("MCP_CONTACT_EMAIL", "")
+_CONTACT_EMAIL = clean_env("MCP_CONTACT_EMAIL")
 _CONTACT_PART = f" mailto:{_CONTACT_EMAIL};" if _CONTACT_EMAIL else ""
 _API_USER_AGENT = (
     f"parkour-mcp/{_VERSION} "
@@ -152,10 +174,13 @@ def check_url_ssrf(url: str) -> str | None:
 # ---------------------------------------------------------------------------
 
 # Canonical mapping from internal tool key to profile-specific display names.
+# The ``code`` profile's PascalCase form doubles as the human-readable display
+# title surfaced in client UIs regardless of which profile is active — this is
+# the convention the README and tool docstrings have used since day one.
 TOOL_NAMES: dict[str, dict[str, str]] = {
     "search": {"code": "KagiSearch", "desktop": "kagi_search"},
     "web_fetch_sections": {"code": "WebFetchSections", "desktop": "web_fetch_sections"},
-    "web_fetch_direct": {"code": "WebFetchExact", "desktop": "web_fetch_exact"},
+    "web_fetch_direct": {"code": "WebFetchIncisive", "desktop": "web_fetch_incisive"},
     "web_fetch_js": {"code": "WebFetchJS", "desktop": "web_fetch_js"},
     "summarize": {"code": "KagiSummarize", "desktop": "kagi_summarize"},
     "semantic_scholar": {"code": "SemanticScholar", "desktop": "semantic_scholar"},
@@ -220,3 +245,103 @@ def tool_name(key: str) -> str:
         f"valid keys: {', '.join(sorted(_TOOL_DISPLAY_NAMES))}"
     )
     return _TOOL_DISPLAY_NAMES[key]
+
+
+# ---------------------------------------------------------------------------
+# Defense-in-depth HTTP fetch — Content-Length gate, streaming size cap,
+# wall-clock deadline
+# ---------------------------------------------------------------------------
+
+# Default maximum response body size: 5 MiB.  Generous enough for any page a
+# human would read; small enough to reject Socrata-style API payloads that
+# embed hundreds of megabytes of metadata alongside a handful of rows.
+_MAX_RESPONSE_BYTES = 5 * 1024 * 1024
+
+# Absolute wall-clock deadline for the entire fetch (connect + download).
+# httpx's ``timeout`` is per-phase — a slow-dripping server that sends one
+# byte every 29 s will never trip a 30 s read timeout.  This caps total time.
+_FETCH_DEADLINE_SECONDS = 60.0
+
+
+class ResponseTooLarge(Exception):
+    """Raised when a response exceeds the size cap."""
+
+
+async def guarded_fetch(
+    url: str,
+    *,
+    headers: Optional[dict[str, str]] = None,
+    timeout: float = 30.0,
+    max_bytes: int = _MAX_RESPONSE_BYTES,
+    deadline: float = _FETCH_DEADLINE_SECONDS,
+    follow_redirects: bool = True,
+) -> httpx.Response:
+    """Fetch *url* with three layers of protection against oversized responses.
+
+    1. **Content-Length gate** — if the server advertises a body larger than
+       *max_bytes* via the ``Content-Length`` header, the request is rejected
+       immediately without reading the body.
+
+    2. **Streaming size cap** — the body is read in chunks; if the cumulative
+       size exceeds *max_bytes* mid-transfer, the stream is closed and
+       ``ResponseTooLarge`` is raised.
+
+    3. **Wall-clock deadline** — an ``asyncio.timeout`` wraps the entire
+       operation (connect + all reads).  If *deadline* seconds elapse, an
+       ``httpx.TimeoutException`` propagates so callers can handle it the
+       same way they already handle per-phase timeouts.
+
+    Returns a fully-buffered ``httpx.Response`` (i.e. ``response.text`` works
+    synchronously after this call).
+
+    Raises:
+        ResponseTooLarge: body exceeded *max_bytes*
+        httpx.TimeoutException: per-phase or wall-clock timeout
+        httpx.HTTPStatusError: non-2xx status (caller must opt in via raise_for_status)
+        httpx.RequestError: connection / DNS / TLS failure
+    """
+    if headers is None:
+        headers = dict(_FETCH_HEADERS)
+
+    try:
+        async with asyncio.timeout(deadline):
+            async with httpx.AsyncClient(
+                follow_redirects=follow_redirects,
+                timeout=timeout,
+            ) as client:
+                async with client.stream("GET", url, headers=headers) as resp:
+                    # Layer 1: Content-Length gate
+                    cl = resp.headers.get("content-length")
+                    if cl is not None:
+                        try:
+                            if int(cl) > max_bytes:
+                                raise ResponseTooLarge(
+                                    f"Content-Length {cl} exceeds "
+                                    f"{max_bytes:,} byte limit"
+                                )
+                        except ValueError:
+                            pass  # malformed header — fall through to streaming
+
+                    # Layer 2: streaming size cap
+                    chunks: list[bytes] = []
+                    total = 0
+                    async for chunk in resp.aiter_bytes(chunk_size=65_536):
+                        total += len(chunk)
+                        if total > max_bytes:
+                            raise ResponseTooLarge(
+                                f"Response body exceeded {max_bytes:,} "
+                                f"byte limit at {total:,} bytes"
+                            )
+                        chunks.append(chunk)
+
+                    # Populate _content so .text / .json() work after the
+                    # stream context exits — same attr httpx uses internally.
+                    resp._content = b"".join(chunks)
+    except TimeoutError:
+        raise httpx.ReadTimeout(
+            f"Wall-clock deadline of {deadline}s exceeded for {url}"
+        )
+
+    # The response object (headers, status_code, _content) survives the
+    # context-manager exit; only the transport is closed.
+    return resp

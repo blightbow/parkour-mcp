@@ -87,7 +87,7 @@ PROFILE_VARS = {
     "code": {
         "search": "WebSearch",
         "fetch": "WebFetch",
-        "fetch_direct": "WebFetchExact",
+        "fetch_direct": "WebFetchIncisive",
         "summarize": "KagiSummarize",
         "fetch_direct_when_to_use": (
             "Unlike WebFetch, fetches through the user's device instead of proxying through\n"
@@ -101,7 +101,7 @@ PROFILE_VARS = {
     "desktop": {
         "search": "web_search",
         "fetch": "web_fetch",
-        "fetch_direct": "web_fetch_exact",
+        "fetch_direct": "web_fetch_incisive",
         "summarize": "kagi_summarize",
         "fetch_direct_when_to_use": (
             "Unlike web_fetch, fetches through the user's device instead of proxying through\n"
@@ -218,19 +218,21 @@ Use paper_id to scope to a single paper, or omit for corpus-wide search.
 Example: action="snippets", query="multi-head attention",
 paper_id="204e3073870fae3d05bcbc2f6a8e263d9b72e776".""",
 
-    "github": """Search and retrieve code, issues, and pull requests from GitHub.
+    "github": """Search and retrieve code, issues, pull requests, and repositories from GitHub.
 
-Use this for GitHub lookups: search issues/PRs across repositories, search code,
-get issue or PR details with comments, fetch file content from a specific ref, get
-repo metadata with README, or inspect a repo's custom issue submission flow
-(forms, markdown templates, contact-link routing) before filing a new issue.
-GitHub URLs are also handled automatically by {fetch_direct} — this tool is for
-structured queries by owner/repo/number.
+Use this for GitHub lookups: search issues/PRs across repositories, search for
+repositories by topic/stars/language, search code, get issue or PR details with
+comments, fetch file content from a specific ref, get repo metadata with README,
+or inspect a repo's custom issue submission flow (forms, markdown templates,
+contact-link routing) before filing a new issue. GitHub URLs are also handled
+automatically by {fetch_direct} — this tool is for structured queries by
+owner/repo/number.
 
-Actions: search_issues, search_code, issue, pull_request, file, repo, tree, issue_templates.
+Actions: search_issues, search_repos, search_code, issue, pull_request, file, repo, tree, issue_templates.
 
 Query formats vary by action:
 - search_issues/search_code: GitHub search query with qualifiers (repo:, is:, label:, language:, path:)
+- search_repos: GitHub search query with qualifiers (topic:, stars:, language:, forks:, license:)
 - issue/pull_request: "owner/repo#number" (e.g. "pallets/flask#5618")
 - file/tree: "owner/repo/path" (e.g. "pallets/flask/src/flask/app.py") — use ref= for branch/tag
 - repo: "owner/repo" (e.g. "pallets/flask")
@@ -358,14 +360,18 @@ def main():
         tools.append(("semantic_scholar", semantic_scholar))
     for internal_name, func in tools:
         name = TOOL_NAMES[internal_name][args.profile]
+        # Title is the canonical PascalCase form regardless of active profile
+        # — clients display this in tool pickers (Anthropic Software Directory
+        # Policy 5.E effectively requires it).
+        title = TOOL_NAMES[internal_name]["code"]
         desc = _build_description(internal_name, args.profile)
         icons = _load_tool_icon(internal_name)
         if internal_name == "research_shelf":
             annotations = ToolAnnotations(destructiveHint=True)
         else:
             annotations = ToolAnnotations(readOnlyHint=True)
-        mcp.add_tool(func, name=name, description=desc, icons=icons,
-                      annotations=annotations)
+        mcp.add_tool(func, name=name, title=title, description=desc,
+                     icons=icons, annotations=annotations)
 
     # MCP resource: read-only shelf summary
     @mcp.resource("research://shelf")

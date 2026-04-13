@@ -312,7 +312,7 @@ def _format_dependencies(
     # reqs_data has system-specific keys (e.g. "pypi", "npm", "maven")
     req_deps = []
     if reqs_data and isinstance(reqs_data, dict):
-        for sys_key, sys_reqs in reqs_data.items():
+        for _sys_key, sys_reqs in reqs_data.items():
             if isinstance(sys_reqs, dict):
                 req_deps = sys_reqs.get("dependencies") or []
                 break

@@ -12,12 +12,12 @@ the codebase.  Authentication is optional: unauthenticated requests get
 import asyncio
 import base64
 import logging
-import os
 import re
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Any, Awaitable, Callable, Optional
+from urllib.parse import quote as _urlquote_raw
 
 import httpx
 from pydantic import Field
@@ -29,6 +29,11 @@ from .markdown import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _urlquote(s: str) -> str:
+    """URL-encode a GitHub search query, preserving : and / for readability."""
+    return _urlquote_raw(s, safe=":/")
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -68,7 +73,8 @@ def _get_github_token() -> str:
     global _github_token_cache
     if _github_token_cache is not None:
         return _github_token_cache
-    if key := os.environ.get("GITHUB_TOKEN"):
+    from .common import clean_env
+    if key := clean_env("GITHUB_TOKEN"):
         _github_token_cache = key
         return key
     if GITHUB_CONFIG_PATH.exists():
@@ -127,20 +133,6 @@ _rate_limits: dict[str, _GitHubRateLimit] = {}
 
 _MAX_RETRIES = 3
 _RETRY_BACKOFF = 1.0  # seconds; constant backoff (gh CLI pattern)
-
-# Link header pagination regex
-_LINK_RE = re.compile(r'<([^>]+)>;\s*rel="([^"]+)"')
-
-
-def _next_page_url(link_header: Optional[str]) -> Optional[str]:
-    """Extract the 'next' URL from a Link response header."""
-    if not link_header:
-        return None
-    for match in _LINK_RE.finditer(link_header):
-        if match.group(2) == "next":
-            return match.group(1)
-    return None
-
 
 async def _github_request(
     method: str,
@@ -861,6 +853,46 @@ def _fm_base(source: str, api: str = "GitHub") -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Helpers: search qualifier extraction
+# ---------------------------------------------------------------------------
+
+# repo:owner/name — with or without quotes
+_RE_REPO_QUAL = re.compile(r'repo:(?:"([^"]+)"|(\S+))')
+# label:name — with or without quotes
+_RE_LABEL_QUAL = re.compile(r'label:(?:"([^"]+)"|(\S+))')
+
+
+async def _label_hint_for_empty_search(query: str) -> Optional[str]:
+    """When an issue search returns 0 results and uses label: + repo:
+    qualifiers, fetch the repo's labels and return a hint string listing
+    them.  Returns None if the qualifiers are absent or the label fetch
+    fails."""
+    repo_m = _RE_REPO_QUAL.search(query)
+    label_m = _RE_LABEL_QUAL.search(query)
+    if not repo_m or not label_m:
+        return None
+
+    repo = repo_m.group(1) or repo_m.group(2)
+    asked = label_m.group(1) or label_m.group(2)
+
+    labels_result = await _github_request(
+        "GET", f"/repos/{repo}/labels",
+        params={"per_page": "100"},
+    )
+    if isinstance(labels_result, str) or not isinstance(labels_result, list):
+        return None
+
+    names = sorted(lb["name"] for lb in labels_result if "name" in lb)
+    if not names:
+        return None
+
+    return (
+        f"label:{asked} matched nothing — "
+        f"{repo} uses: {', '.join(names)}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Action: search_issues
 # ---------------------------------------------------------------------------
 
@@ -880,15 +912,25 @@ async def _action_search_issues(
     total = result.get("total_count", 0)
     incomplete = result.get("incomplete_results", False)
 
-    fm_entries = _fm_base(f"https://github.com/search?q={query}&type=issues")
+    fm_entries = _fm_base(
+        f"https://github.com/search?q={_urlquote(query)}&type=issues",
+    )
     fm_entries["total_results"] = total
     fm_entries["showing"] = f"{len(items)} (page {page})"
     if incomplete:
         fm_entries["note"] = "Results may be incomplete (search timed out)"
-    fm = _build_frontmatter(fm_entries)
 
     if not items:
+        # When a label: qualifier produced zero results against a single
+        # repo, fetch the repo's actual labels so the agent can retry
+        # with a corrected name instead of guessing.
+        hint = await _label_hint_for_empty_search(query)
+        if hint:
+            fm_entries["hint"] = hint
+        fm = _build_frontmatter(fm_entries)
         return fm + "\n\nNo results found."
+
+    fm = _build_frontmatter(fm_entries)
 
     lines = []
     for item in items:
@@ -928,7 +970,7 @@ async def _action_search_code(
     items = result.get("items", [])
     total = result.get("total_count", 0)
 
-    fm_entries = _fm_base(f"https://github.com/search?q={query}&type=code")
+    fm_entries = _fm_base(f"https://github.com/search?q={_urlquote(query)}&type=code")
     fm_entries["total_results"] = total
     fm_entries["showing"] = f"{len(items)} (page {page})"
     fm = _build_frontmatter(fm_entries)
@@ -954,6 +996,66 @@ async def _action_search_code(
         lines.append("")
 
     body = "\n".join(lines).rstrip()
+    return fm + "\n\n" + _fence_content(body)
+
+
+# ---------------------------------------------------------------------------
+# Action: search_repos
+# ---------------------------------------------------------------------------
+
+async def _action_search_repos(
+    query: str, limit: int, page: int,
+) -> str:
+    """Search repositories across GitHub."""
+    result = await _github_request(
+        "GET", "/search/repositories",
+        params={"q": query, "per_page": str(min(limit, 100)), "page": str(page)},
+    )
+    if isinstance(result, str):
+        return result
+    assert isinstance(result, dict)
+
+    items = result.get("items", [])
+    total = result.get("total_count", 0)
+    incomplete = result.get("incomplete_results", False)
+
+    fm_entries = _fm_base(f"https://github.com/search?q={_urlquote(query)}&type=repositories")
+    fm_entries["total_results"] = total
+    fm_entries["showing"] = f"{len(items)} (page {page})"
+    if incomplete:
+        fm_entries["note"] = "Results may be incomplete (search timed out)"
+    fm = _build_frontmatter(fm_entries)
+
+    if not items:
+        return fm + "\n\nNo results found."
+
+    lines = []
+    for item in items:
+        full_name = item.get("full_name", "")
+        desc = item.get("description") or ""
+        stars = item.get("stargazers_count", 0)
+        lang = item.get("language") or ""
+        updated = _fmt_relative_time(item.get("updated_at", ""))
+        topics = item.get("topics", [])
+        license_info = item.get("license") or {}
+        license_name = license_info.get("spdx_id") or ""
+
+        meta_parts = []
+        if stars:
+            meta_parts.append(f"\u2605{stars:,}")
+        if lang:
+            meta_parts.append(lang)
+        if license_name and license_name != "NOASSERTION":
+            meta_parts.append(license_name)
+        meta_parts.append(updated)
+        meta = " \u00b7 ".join(meta_parts)
+
+        lines.append(f"- **{full_name}** — {desc}")
+        lines.append(f"  {meta}")
+        if topics:
+            lines.append(f"  Topics: {', '.join(topics[:8])}")
+
+    body = "\n".join(lines)
     return fm + "\n\n" + _fence_content(body)
 
 
@@ -2029,7 +2131,7 @@ async def _action_file(
 # ---------------------------------------------------------------------------
 
 _VALID_ACTIONS = (
-    "search_issues", "search_code", "repo", "tree",
+    "search_issues", "search_code", "search_repos", "repo", "tree",
     "issue", "pull_request", "file", "issue_templates",
 )
 
@@ -2039,6 +2141,7 @@ async def github(
         description=(
             "The operation to perform. "
             "search_issues: search issues/PRs by query (supports GitHub qualifiers like repo:, is:, label:). "
+            "search_repos: search repositories by query (supports qualifiers like topic:, stars:, language:, forks:). "
             "search_code: search code across GitHub (supports qualifiers like repo:, language:, path:). "
             "issue: get issue details + comments by owner/repo#number. "
             "pull_request: get PR details + review comments + diff stat by owner/repo#number. "
@@ -2050,7 +2153,7 @@ async def github(
     )],
     query: Annotated[str, Field(
         description=(
-            "For search_issues/search_code: search query with optional GitHub qualifiers. "
+            "For search_issues/search_repos/search_code: search query with optional GitHub qualifiers. "
             "For issue/pull_request: 'owner/repo#number' (e.g. 'facebook/react#1234'). "
             "For file/tree: 'owner/repo/path' (e.g. 'facebook/react/packages/react/src/React.js'). "
             "For repo and issue_templates: 'owner/repo' (e.g. 'facebook/react')."
@@ -2083,6 +2186,8 @@ async def github(
 
     if action == "search_issues":
         return await _action_search_issues(query, limit, page)
+    if action == "search_repos":
+        return await _action_search_repos(query, limit, page)
     if action == "search_code":
         return await _action_search_code(query, limit, page)
     if action == "repo":

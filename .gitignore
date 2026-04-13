@@ -19,3 +19,6 @@ wheels/
 # mcpb signing material (should never be committed)
 cert.pem
 key.pem
+
+# development artifacts
+tmp/
