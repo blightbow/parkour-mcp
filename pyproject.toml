@@ -69,13 +69,15 @@ package = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "strict"
-# Restrict collection to the project's test directory. Without this,
-# pytest walks the full tree and picks up test_*.py files under tmp/
-# (exploratory clones) or anywhere else, breaking default test runs
-# with stray ImportErrors. The setuptools exclude in
-# [tool.setuptools.packages.find] above covers packaging but not
-# pytest collection, which has its own walk rules.
-testpaths = ["tests"]
+# Opt-in collection: explicitly list the directories pytest should walk,
+# rather than excluding exploratory/build dirs one at a time. pytest-ruff
+# hooks `pytest_collect_file` and emits a ruff lint item for every `.py`
+# file pytest walks during collection, so putting `parkour_mcp/` and
+# `scripts/` in testpaths keeps them under ruff's watch alongside the
+# test suite itself. Directories not listed here (`tmp/`, `bakeoff/`,
+# `build/`, `.venv/`, `dist/`, etc.) are excluded by construction without
+# depending on pytest's internal default `norecursedirs` list.
+testpaths = ["parkour_mcp", "tests", "scripts"]
 markers = [
     "live: live integration tests hitting real endpoints (deselected by default, run with -m live)",
     "perf: performance regression tests using captured fixtures (deselected by default, run with -m perf)",
