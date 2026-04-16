@@ -27,6 +27,7 @@ import logging
 import httpx
 import respx
 
+import parkour_mcp.reddit as _reddit_mod
 from parkour_mcp.common import init_tool_names
 from parkour_mcp.fetch_direct import web_fetch_direct, web_fetch_sections
 from parkour_mcp.mediawiki import mediawiki
@@ -42,7 +43,6 @@ from parkour_mcp.github import github
 init_tool_names("code")
 
 # Disable Reddit rate limiter for fixture-based generation
-import parkour_mcp.reddit as _reddit_mod
 _reddit_mod._reddit_limiter.min_interval = 0.0
 
 # ── URLs used across examples ───────────────────────────────────────────────
