@@ -221,7 +221,20 @@ def html_to_markdown(html: str) -> tuple[str, str]:
     # per-call strip cost. Matches the pre-port ``_clean_headings`` output.
     markdown = _HEADING_LINE_RE.sub(_strip_heading_line, markdown)
 
-    first_h1 = _FIRST_H1_RE.search(markdown)
+    # Skip ATX ``# X`` lines inside fenced code blocks — shell/Python/Make
+    # comments in an example ``` block start with ``# `` and would otherwise
+    # be captured as the document's title.  Spec documents are the concrete
+    # motivator: WHATWG's real h1 lives inside ``<header>`` (decomposed by
+    # skip_tags), and the first surviving ``# `` line is a bash comment
+    # inside a ``<textarea>`` example (``# System-wide .bashrc file…``).
+    # _find_fenced_code_ranges is the same helper
+    # _extract_sections_from_markdown already uses to skip in-code headings.
+    code_ranges = _find_fenced_code_ranges(markdown)
+    first_h1 = None
+    for m in _FIRST_H1_RE.finditer(markdown):
+        if not any(start <= m.start() < end for start, end in code_ranges):
+            first_h1 = m
+            break
     title = first_h1.group(1).strip() if first_h1 else _extract_head_title(html)
     return title, markdown
 

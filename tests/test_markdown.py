@@ -245,6 +245,71 @@ class TestCleanHeadings:
         assert sections[0]["name"] == "1 Introduction"
 
 
+class TestHtmlTitleExtraction:
+    """Title resolution ladder inside html_to_markdown."""
+
+    def test_real_h1_outside_code_wins(self):
+        """When a real h1 is present, it's preferred over <title>."""
+        html = (
+            '<html><head><title>Head Title</title></head>'
+            '<body><h1>Real Heading</h1><p>body.</p></body></html>'
+        )
+        title, _ = html_to_markdown(html)
+        assert title == "Real Heading"
+
+    def test_shell_comment_in_code_block_does_not_become_title(self):
+        """ATX-looking lines inside fenced code blocks must not be captured.
+
+        Regression: shell/Python/Make comments in example code blocks
+        begin with ``# `` and used to be matched as a document-level h1
+        because the title regex searched the full markdown without
+        respecting fence boundaries.  Concretely, this broke the WHATWG
+        HTML Living Standard — WHATWG's real h1 lives inside ``<header>``
+        (which htmd decomposes), and the first surviving ``# `` line is
+        a bash comment inside a ``<textarea>`` example.
+        """
+        html = (
+            '<html><head><title>Real Page Title</title></head>'
+            '<body>'
+            '<p>Intro paragraph.</p>'
+            '<pre><code># This is a shell comment in a code block\n'
+            '# Another comment line\n'
+            'echo hello</code></pre>'
+            '<p>After code.</p>'
+            '</body></html>'
+        )
+        title, _ = html_to_markdown(html)
+        assert title == "Real Page Title"
+
+    def test_whatwg_fixture_title_falls_back_to_title_tag(self):
+        """End-to-end against the real WHATWG fixture.
+
+        WHATWG's ``<h1 class="allcaps">HTML</h1>`` is nested inside
+        ``<header><hgroup>``, which htmd's ``skip_tags`` decomposes as
+        site-chrome noise (the correct default for 99 % of the open
+        web, but too aggressive for spec docs).  With no surviving h1,
+        the title ladder falls through to ``<title>HTML Standard</title>``.
+        Before this fix the first ``# `` line in the rendered markdown
+        was a bash comment from a code example — ``"System-wide .bashrc
+        file for interactive bash(1) shells."`` — and that became the
+        document title.
+        """
+        import gzip
+        from pathlib import Path
+
+        fixture = (
+            Path(__file__).parent / "fixtures" / "perf" / "whatwg_html.html.gz"
+        )
+        if not fixture.exists():
+            import pytest
+            pytest.skip(f"Fixture {fixture} not present")
+        with gzip.open(fixture, "rt", encoding="utf-8") as f:
+            whatwg_html = f.read()
+
+        title, _ = html_to_markdown(whatwg_html)
+        assert title == "HTML Standard"
+
+
 # --- _build_section_list ---
 
 class TestBuildSectionList:
