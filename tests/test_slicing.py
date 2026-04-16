@@ -452,6 +452,256 @@ class TestPageCache:
 
 
 # ---------------------------------------------------------------------------
+# Lazy build + circuit breaker (issue #6)
+# ---------------------------------------------------------------------------
+
+class _CountingSplitter:
+    """Spy wrapper for _CacheEntry._SPLITTER.
+
+    MarkdownSplitter is a Rust-backed PyO3 object; its methods are
+    read-only so ``monkeypatch.setattr(_SPLITTER, "chunk_indices", …)``
+    fails.  Patching the class attribute ``_CacheEntry._SPLITTER`` with
+    a Python wrapper lets us count invocations without touching the
+    Rust object.
+    """
+
+    def __init__(self, real):
+        self._real = real
+        self.call_count = 0
+
+    def chunk_indices(self, markdown):
+        self.call_count += 1
+        return self._real.chunk_indices(markdown)
+
+
+def _install_counting_splitter(monkeypatch):
+    from parkour_mcp import _pipeline as pipeline_mod
+    spy = _CountingSplitter(pipeline_mod._CacheEntry._SPLITTER)
+    monkeypatch.setattr(pipeline_mod._CacheEntry, "_SPLITTER", spy)
+    return spy
+
+
+class TestLazyCacheEntry:
+    """``_CacheEntry`` defers MarkdownSplitter + tantivy build until first
+    access to slices, slice_ancestry, search(), or build_failed.  A
+    pre-scan circuit breaker refuses to run the splitter on single-line
+    content over 1 MB (issue #6 — pathological input hangs the event
+    loop for multi-second CPU bursts).
+    """
+
+    def test_store_does_not_trigger_splitter(self, monkeypatch):
+        spy = _install_counting_splitter(monkeypatch)
+
+        _page_cache.store(
+            "https://example.com/a", "Title",
+            "# T\n\nparagraph one.\n\nparagraph two.\n",
+        )
+        # Splitter must not fire during store — that's the whole point
+        # of Option C.  Consumers of slicing pay the cost on demand.
+        assert spy.call_count == 0
+
+    def test_slices_access_triggers_build_exactly_once(self, monkeypatch):
+        spy = _install_counting_splitter(monkeypatch)
+
+        _page_cache.store(
+            "https://example.com/b", "Title",
+            "# T\n\nparagraph one.\n\nparagraph two.\n",
+        )
+        cached = _page_cache.get("https://example.com/b")
+        assert cached is not None
+        assert not cached.is_built
+
+        _ = cached.slices
+        assert spy.call_count == 1
+        assert cached.is_built
+
+        # Subsequent accesses must not rebuild.
+        _ = cached.slices
+        _ = cached.slice_ancestry
+        assert spy.call_count == 1
+
+    def test_search_triggers_build(self):
+        _page_cache.store(
+            "https://example.com/c", "Doc",
+            "# Doc\n\nWe used the frobnicate algorithm extensively.\n",
+        )
+        cached = _page_cache.get("https://example.com/c")
+        assert cached is not None
+        assert not cached.is_built
+
+        results = cached.search("frobnicate")
+        assert cached.is_built
+        assert len(results) >= 1
+
+    def test_pathological_markdown_trips_circuit_breaker(self, monkeypatch):
+        """2 MiB single line → ``_safe_markdown_presplit`` returns None →
+        entry marked ``_build_failed`` → slices empty, search empty.
+
+        The splitter spy must NOT be invoked — the whole point of the
+        circuit breaker is to short-circuit before MarkdownSplitter's
+        char-level fallback can hang the loop.
+        """
+        spy = _install_counting_splitter(monkeypatch)
+
+        pathological = "x" * (2 * 1024 * 1024)
+        _page_cache.store("https://example.com/d", "Bad", pathological)
+        cached = _page_cache.get("https://example.com/d")
+        assert cached is not None
+
+        # Accessing .slices triggers the build attempt
+        assert cached.slices == []
+        assert cached.is_built is False
+        assert cached.build_failed is True
+        assert cached.search("x") == []
+        # Splitter was never invoked — breaker tripped before the call.
+        assert spy.call_count == 0
+
+    def test_estimated_bytes_cheap_when_lazy(self):
+        md = "# Title\n\n" + ("Some content. " * 500)
+        _page_cache.store("https://example.com/e", "Title", md)
+        cached = _page_cache.get("https://example.com/e")
+        assert cached is not None
+        assert not cached.is_built
+
+        lazy_estimate = cached.estimated_bytes
+        assert lazy_estimate > 0
+        # Cheap lazy estimate: ~3x markdown size.  Must not force build.
+        assert not cached.is_built
+
+        # Force build, re-check: exact accounting should be in the same
+        # ballpark as the cheap estimate (0.5x–2x).
+        _ = cached.slices
+        assert cached.is_built
+        built_estimate = cached.estimated_bytes
+        assert 0.5 * built_estimate <= lazy_estimate <= 2 * built_estimate
+
+
+class TestSafeMarkdownPresplit:
+    """Circuit-breaker helper for issue #6."""
+
+    def test_returns_chunks_for_normal_markdown(self):
+        from parkour_mcp._pipeline import _safe_markdown_presplit
+
+        md = "# Title\n\n" + "A normal paragraph. " * 200 + "\n\n"
+        result = _safe_markdown_presplit(md)
+        assert result is not None
+        assert len(result) >= 1
+        # Each entry is (offset, text)
+        for offset, text in result:
+            assert isinstance(offset, int)
+            assert isinstance(text, str)
+
+    def test_trips_on_single_mb_line(self):
+        from parkour_mcp._pipeline import _safe_markdown_presplit
+
+        pathological = "x" * (2 * 1024 * 1024)
+        assert _safe_markdown_presplit(pathological) is None
+
+    def test_passes_whatwg_fixture(self):
+        """Structural real-world content (WHATWG HTML spec) must not
+        trip the breaker — legitimate markdown never has 1 MB lines."""
+        import gzip
+        from pathlib import Path
+
+        fixture = (
+            Path(__file__).parent / "fixtures" / "perf" / "whatwg_html.html.gz"
+        )
+        if not fixture.exists():
+            pytest.skip(f"Fixture {fixture} not present")
+        with gzip.open(fixture, "rt", encoding="utf-8") as f:
+            whatwg_html = f.read()
+
+        from parkour_mcp.markdown import html_to_markdown
+        from parkour_mcp._pipeline import _safe_markdown_presplit
+
+        _, markdown = html_to_markdown(whatwg_html)
+        result = _safe_markdown_presplit(markdown)
+        # Well-formed spec content — breaker stays closed, splitter runs.
+        assert result is not None
+        assert len(result) > 10  # WHATWG produces thousands of chunks
+
+    def test_boundary(self):
+        """Threshold is inclusive: a line exactly at max_line_chars passes;
+        one char over fails.  Exposed via the max_line_chars parameter so
+        the test doesn't need to allocate a real 1 MB buffer."""
+        from parkour_mcp._pipeline import _safe_markdown_presplit
+
+        just_ok = "a" * 99 + "\n"  # line_len = 100 (nl - pos at nl=99 gives 99)
+        assert _safe_markdown_presplit(just_ok, max_line_chars=99) is not None
+
+        too_long = "a" * 101 + "\n"  # line 101 chars → trips
+        assert _safe_markdown_presplit(too_long, max_line_chars=99) is None
+
+
+# ---------------------------------------------------------------------------
+# Fail-closed frontmatter when the circuit breaker has tripped
+# ---------------------------------------------------------------------------
+
+class TestUnbuildablePageResponse:
+    """``search=``/``slices=`` against a cached-but-unbuildable page must
+    emit a structured frontmatter response instead of a bare empty
+    result — principle of least astonishment.  The LLM sees a ``note:``
+    explaining *why* slicing is unavailable and a ``hint:`` pointing at
+    the next viable action (``section=`` or higher ``max_tokens``).
+    """
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_search_surfaces_fail_closed_frontmatter(self):
+        # 2 MiB of ``x`` inside a single <p> produces a single 2 MiB
+        # markdown line after html_to_markdown — trips the circuit
+        # breaker in _safe_markdown_presplit.
+        pathological = "<p>" + ("x" * (2 * 1024 * 1024)) + "</p>"
+        html = f"<html><body><h1>Overview</h1>{pathological}</body></html>"
+        respx.get("https://example.com/bad-search").mock(
+            return_value=httpx.Response(
+                200, text=html,
+                headers={"content-type": "text/html; charset=utf-8"},
+            )
+        )
+
+        result = await web_fetch_direct(
+            "https://example.com/bad-search", search="anything",
+        )
+        # Must not be the bare cache-miss error string
+        assert "Error: Page cache unavailable." not in result
+        # Structured frontmatter signalling
+        assert "note:" in result
+        assert "BM25 slicing" in result
+        assert "hint:" in result
+        assert "section=" in result
+        assert "max_tokens" in result
+        assert "trust:" in result
+        # Distinguishes "search ran, nothing found" (which uses "none")
+        # from "can't run search at all" (which uses "unavailable").
+        assert "matched_slices: unavailable" in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_slices_surfaces_fail_closed_frontmatter(self):
+        pathological = "<p>" + ("x" * (2 * 1024 * 1024)) + "</p>"
+        html = f"<html><body><h1>Overview</h1>{pathological}</body></html>"
+        respx.get("https://example.com/bad-slices").mock(
+            return_value=httpx.Response(
+                200, text=html,
+                headers={"content-type": "text/html; charset=utf-8"},
+            )
+        )
+
+        result = await web_fetch_direct(
+            "https://example.com/bad-slices", slices=[0, 1, 2],
+        )
+        assert "Error: Page cache unavailable." not in result
+        assert "note:" in result
+        assert "BM25 slicing" in result
+        assert "hint:" in result
+        assert "section=" in result
+        assert "max_tokens" in result
+        assert "trust:" in result
+        assert "slices_not_found: unavailable" in result
+
+
+# ---------------------------------------------------------------------------
 # web_fetch_direct — search parameter
 # ---------------------------------------------------------------------------
 

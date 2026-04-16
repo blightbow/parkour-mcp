@@ -122,11 +122,69 @@ _wiki_cache = _WikiCache()
 # index-based retrieval.  Populated by _process_markdown_sections (all HTML
 # paths feed through it) and by fast-path handlers (Reddit, etc.).
 
-class _CacheEntry:
-    """A single cached page with sliced content and BM25 search index."""
+# Circuit-breaker threshold: any single line in the cached markdown
+# longer than this trips _safe_markdown_presplit and prevents
+# MarkdownSplitter from being invoked on the content.  Empirically,
+# 6 MiB of unbroken ``x`` characters spent 73.6 s in the splitter's
+# char-level fallback (issue #6); pre-scanning at 1 MB keeps us well
+# below the expensive regime while admitting legitimate content —
+# HTML→markdown conversion of a single long paragraph tops out in the
+# tens of KB even on spec documents.
+_MAX_MARKDOWN_LINE_CHARS = 1_000_000
 
-    __slots__ = ("url", "title", "markdown", "slices", "slice_ancestry",
-                 "_tantivy_index", "renderer", "group")
+
+def _safe_markdown_presplit(
+    markdown: str,
+    max_line_chars: int = _MAX_MARKDOWN_LINE_CHARS,
+) -> Optional[list[tuple[int, str]]]:
+    """Run MarkdownSplitter with a pre-check for pathological input.
+
+    Returns ``chunk_indices()`` output for well-formed markdown.
+    Returns ``None`` if any single line exceeds ``max_line_chars`` —
+    MarkdownSplitter's char-level fallback on such content hangs the
+    event loop for multi-second CPU bursts (issue #6).  Callers treat
+    ``None`` as "slicing unavailable for this page" and surface that to
+    the LLM via the fail-closed frontmatter in ``_build_failed_response``.
+
+    The pre-scan is O(n) with no allocations and completes in low-
+    microsecond time even on 15 MiB inputs.
+    """
+    pos = 0
+    n = len(markdown)
+    while pos < n:
+        nl = markdown.find("\n", pos)
+        if nl == -1:
+            if n - pos > max_line_chars:
+                return None
+            break
+        if nl - pos > max_line_chars:
+            return None
+        pos = nl + 1
+    return _CacheEntry._SPLITTER.chunk_indices(markdown)
+
+
+class _CacheEntry:
+    """A cached page with lazily-built slice and BM25 search index.
+
+    ``__init__`` stashes state only; the expensive work (MarkdownSplitter
+    pre-scan + chunking, section/ancestry extraction, tantivy index
+    build) runs exactly once on first access to ``.slices``,
+    ``.slice_ancestry``, ``.search()``, or ``.build_failed``.  This
+    keeps ``web_fetch_sections`` fast — it only reads the markdown and
+    heading tree — and narrows the window where pathological input can
+    trigger splitter DoS to callers that explicitly request slicing.
+
+    When the circuit breaker in ``_safe_markdown_presplit`` trips, the
+    entry is marked ``_build_failed``: ``.slices`` stays empty, search
+    returns nothing, and consumers (``_search_slices`` / ``_get_slices``)
+    emit a fail-closed frontmatter note explaining why instead of a
+    bare empty result.
+    """
+
+    __slots__ = ("url", "title", "markdown", "renderer", "group",
+                 "_presplit",
+                 "_slices", "_slice_ancestry", "_tantivy_index",
+                 "_built", "_build_failed")
 
     _SPLITTER = MarkdownSplitter((1600, 2000))
 
@@ -156,26 +214,85 @@ class _CacheEntry:
         self.markdown = markdown
         self.renderer = renderer
         self.group = group
+        self._presplit = presplit
+        self._slices: list[str] = []
+        self._slice_ancestry: list[str] = []
+        self._tantivy_index = None
+        self._built = False
+        self._build_failed = False
 
-        if presplit is not None:
-            self.slices: list[str] = [text for _, text in presplit]
-            offsets = [offset for offset, _ in presplit]
+    def _ensure_built(self) -> None:
+        """Run MarkdownSplitter + tantivy build on first access.
+
+        No-op if already built or already known to be unbuildable.
+        When the circuit breaker in ``_safe_markdown_presplit`` returns
+        ``None``, sets ``_build_failed`` and leaves slice state empty —
+        a re-fetch of the same content would land the same state, so
+        consumers treat this as terminal rather than retrying.
+        """
+        if self._built or self._build_failed:
+            return
+
+        if self._presplit is not None:
+            presplit = self._presplit
         else:
-            chunks = self._SPLITTER.chunk_indices(markdown)
-            self.slices = [text for _, text in chunks]
-            offsets = [offset for offset, _ in chunks]
+            try:
+                presplit = _safe_markdown_presplit(self.markdown)
+            except Exception:
+                logger.debug("safe_markdown_presplit failed", exc_info=True)
+                self._build_failed = True
+                return
+            if presplit is None:
+                # Circuit breaker tripped — pathological single-line content.
+                self._build_failed = True
+                return
 
-        sections = _extract_sections_from_markdown(markdown)
-        self.slice_ancestry: list[str] = _compute_slice_ancestry(sections, offsets)
+        self._slices = [text for _, text in presplit]
+        offsets = [offset for offset, _ in presplit]
+
+        sections = _extract_sections_from_markdown(self.markdown)
+        self._slice_ancestry = _compute_slice_ancestry(sections, offsets)
 
         # Build tantivy in-memory search index over slices
         schema = self._get_schema()
         self._tantivy_index = tantivy.Index(schema)
         writer = self._tantivy_index.writer()
-        for i, text in enumerate(self.slices):
+        for i, text in enumerate(self._slices):
             writer.add_document(tantivy.Document(body=text, idx=i))
         writer.commit()
         self._tantivy_index.reload()
+        self._built = True
+
+    @property
+    def slices(self) -> list[str]:
+        self._ensure_built()
+        return self._slices
+
+    @property
+    def slice_ancestry(self) -> list[str]:
+        self._ensure_built()
+        return self._slice_ancestry
+
+    @property
+    def is_built(self) -> bool:
+        """True once ``_ensure_built`` has produced slices/index.
+
+        Does NOT trigger build — safe to call from introspection paths
+        (``_PageCache.stats``) that must not pay splitter cost during
+        a walk.
+        """
+        return self._built
+
+    @property
+    def build_failed(self) -> bool:
+        """True when the circuit breaker has refused to build this entry.
+
+        Access triggers the build attempt if it hasn't run yet; once
+        the attempt has been made (successfully or not), the answer is
+        stable for the life of the entry.
+        """
+        self._ensure_built()
+        return self._build_failed
 
     @property
     def estimated_bytes(self) -> int:
@@ -187,17 +304,25 @@ class _CacheEntry:
         multiplier on the indexed text approximates the compressed store +
         inverted index overhead (empirically 0.65-0.72x across 10-200
         slices via disk-write measurement of equivalent RAM indexes).
+
+        Returns a cheap ``markdown_bytes * 3`` estimate when the entry
+        hasn't been built yet — slices+ancestry+tantivy empirically come
+        out to ~2× markdown size once built, so 3× is a safe upper bound
+        for eviction heuristics without forcing a build during walks.
         """
         md_bytes = len(self.markdown.encode("utf-8")) if self.markdown else 0
-        slices_bytes = sum(len(s.encode("utf-8")) for s in self.slices)
-        ancestry_bytes = sum(len(a.encode("utf-8")) for a in self.slice_ancestry)
+        if not self._built:
+            return md_bytes * 3 if md_bytes else 0
+        slices_bytes = sum(len(s.encode("utf-8")) for s in self._slices)
+        ancestry_bytes = sum(len(a.encode("utf-8")) for a in self._slice_ancestry)
         # Tantivy index heuristic: stored fields + inverted index ≈ 0.7× text
         tantivy_est = int(slices_bytes * 0.7)
         return md_bytes + slices_bytes + ancestry_bytes + tantivy_est
 
     def search(self, query_str: str, limit: int = 50) -> list[int]:
         """BM25 search over cached slices. Returns matching slice indices ranked by relevance."""
-        if not self._tantivy_index or not self.slices:
+        self._ensure_built()
+        if not self._tantivy_index or not self._slices:
             return []
         query = self._tantivy_index.parse_query(query_str, ["body"])
         searcher = self._tantivy_index.searcher()
@@ -238,12 +363,19 @@ class _PageCache:
         This is a developer tool — not exposed to the LLM via tool output.
         """
         def _entry_info(entry: _CacheEntry, queue: str) -> dict:
+            # Read _slices / _build_failed directly rather than via the
+            # public properties — the properties trigger a build as a
+            # side-effect of access, and forcing builds during a stats
+            # walk would defeat the point of laziness on large cached
+            # pages.  Module-internal access into the neighbouring class
+            # is intentional here.
             return {
                 "url": entry.url,
                 "title": entry.title,
                 "renderer": entry.renderer,
                 "group": entry.group,
-                "slices": len(entry.slices),
+                "slices": len(entry._slices) if entry.is_built else "lazy",
+                "build_failed": entry._build_failed,
                 "estimated_bytes": entry.estimated_bytes,
                 "queue": queue,
             }
@@ -1404,6 +1536,48 @@ def _slice_output(
     return fm + "\n\n" + fenced
 
 
+def _build_failed_response(
+    fm_entries: dict,
+    search_term: Optional[str] = None,
+    slice_indices: Optional[list[int]] = None,
+) -> str:
+    """Frontmatter-only response for pages the BM25 cache refuses to build.
+
+    When ``_safe_markdown_presplit`` trips the circuit breaker (single
+    line over 1 MB, see issue #6), the cache entry is marked
+    ``_build_failed`` and has no slices to return.  Rather than surface
+    that as a bare empty result — which invites hallucinated
+    explanations from the LLM — emit a structured response with:
+
+    - ``note:`` — caller-facing reason the page doesn't support slicing.
+    - ``hint:`` — next-action priming toward viable alternatives
+      (``section=`` for named headings, higher ``max_tokens`` for raw).
+    - ``trust:`` — standard fenced-content advisory.
+
+    All values are tool-generated constants; no document-sourced data
+    leaks into frontmatter (per ``docs/frontmatter-standard.md``).
+    ``matched_slices`` / ``slices_not_found`` carry the sentinel
+    ``"unavailable"`` so the distinction from "search ran, found
+    nothing" (which uses ``"none"``) is visible to the caller.
+    """
+    fm_entries["trust"] = _TRUST_ADVISORY
+    if search_term is not None:
+        fm_entries["search"] = f'"{search_term}"'
+        fm_entries["matched_slices"] = "unavailable"
+    elif slice_indices is not None:
+        fm_entries["slices"] = slice_indices
+        fm_entries["slices_not_found"] = "unavailable"
+    fm_entries["note"] = (
+        "Page lacks structural boundaries needed for BM25 slicing "
+        "(single line longer than 1 MB)."
+    )
+    fm_entries["hint"] = (
+        f"Use {tool_name('web_fetch_direct')} with section= to extract a "
+        "named heading, or raise max_tokens to read more of the page directly."
+    )
+    return _build_frontmatter(fm_entries)
+
+
 def _search_slices(
     url: str,
     search: str,
@@ -1415,9 +1589,17 @@ def _search_slices(
 
     Uses tantivy for language-aware tokenization and BM25 ranking.
     Returns formatted output on cache hit, or None on cache miss.
+    When a cached entry exists but is unbuildable (circuit breaker
+    tripped), returns a fail-closed frontmatter response instead of
+    ``None`` so the caller distinguishes "can't index this page" from
+    "haven't fetched this page yet".
     """
     cached = _page_cache.get(url)
-    if not cached or not cached.slices:
+    if not cached:
+        return None
+    if cached.build_failed:
+        return _build_failed_response(fm_entries, search_term=search)
+    if not cached.slices:
         return None
 
     matched = cached.search(search)
@@ -1442,9 +1624,16 @@ def _get_slices(
     """Retrieve specific slices by index from the page cache.
 
     Returns formatted output on cache hit, or None on cache miss.
+    When a cached entry exists but is unbuildable (circuit breaker
+    tripped), returns a fail-closed frontmatter response instead of
+    ``None`` — same distinction as ``_search_slices``.
     """
     cached = _page_cache.get(url)
-    if not cached or not cached.slices:
+    if not cached:
+        return None
+    if cached.build_failed:
+        return _build_failed_response(fm_entries, slice_indices=indices)
+    if not cached.slices:
         return None
 
     total = len(cached.slices)
