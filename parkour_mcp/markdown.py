@@ -580,14 +580,34 @@ def _name_counts(sections: list[dict]) -> dict[str, int]:
     return counts
 
 
+# Default page size for TOC pagination.  Hardcoded rather than a
+# parameter on web_fetch_sections — at ~70-80 chars/line for typical
+# RFC/spec section names, 100 sections lands around 2-3K tokens which
+# fits comfortably under any reasonable max_tokens budget.  Callers
+# walk longer documents via the slice= parameter.
+_TOC_SLICE_SIZE = 100
+
+
 def _build_section_list(
-    sections: list[dict], max_sections: int = 100, include_slugs: bool = False,
+    sections: list[dict],
+    max_sections: int = 100,
+    include_slugs: bool = False,
+    *,
+    start: int = 0,
 ) -> list[str]:
     """Build indented section list for display.
 
     Disambiguates duplicate names by appending (Parent Name).
     Returns list of formatted strings like "  - Section Name".
     When include_slugs is True, appends the anchor slug: "  - Section Name (#slug)".
+
+    *start* (keyword-only) offsets the window so the same section list
+    can be paginated.  Indentation and disambiguation are computed
+    against the full *sections* list so the rendered window stays
+    coherent even when it begins mid-document.  When *start* > 0,
+    a leading "... and N earlier sections" sentinel is prepended;
+    when the window doesn't reach the end, a trailing "... and N
+    more sections" sentinel is appended.
     """
     if not sections:
         return []
@@ -595,12 +615,14 @@ def _build_section_list(
     min_level = min(s["level"] for s in sections)
     counts = _name_counts(sections)
 
+    end = min(start + max_sections, len(sections))
     lines = []
-    for i, sec in enumerate(sections):
-        if i >= max_sections:
-            remaining = len(sections) - max_sections
-            lines.append(f"# ... and {remaining} more sections")
-            break
+
+    if start > 0:
+        lines.append(f"# ... and {start} earlier sections")
+
+    for i in range(start, end):
+        sec = sections[i]
         indent = (sec["level"] - min_level) * 2
         name = sec["name"]
         if counts[name] > 1:
@@ -611,7 +633,63 @@ def _build_section_list(
         ho_suffix = " [header only]" if sec.get("header_only") else ""
         lines.append(" " * indent + f"- {name}{slug_suffix}{ho_suffix}")
 
+    if end < len(sections):
+        remaining = len(sections) - end
+        lines.append(f"# ... and {remaining} more sections")
+
     return lines
+
+
+def _resolve_toc_slice(
+    total_sections: int, slice_index: int, slice_size: int = _TOC_SLICE_SIZE,
+) -> dict:
+    """Resolve a (possibly negative or out-of-range) slice index to a window.
+
+    Returns a dict with:
+      - ``start``: section-list index where the window begins
+      - ``effective_slice``: the post-clamp, post-negative-resolution slice
+        index (always non-negative, always in [0, total_slices))
+      - ``total_slices``: how many slices the document divides into
+      - ``clamped_from``: the original *slice_index* if clamping or negative
+        resolution changed it, else ``None``
+
+    Empty section lists return a single zero-length slice at index 0.
+    """
+    if total_sections <= 0:
+        return {
+            "start": 0,
+            "effective_slice": 0,
+            "total_slices": 0,
+            "clamped_from": None,
+        }
+
+    total_slices = (total_sections + slice_size - 1) // slice_size
+    requested = slice_index
+
+    # Resolve Python-style negative index against the slice count
+    if slice_index < 0:
+        slice_index = total_slices + slice_index
+
+    # Clamp out-of-range (positive overflow OR still-negative-after-resolution)
+    if slice_index < 0:
+        slice_index = 0
+    elif slice_index >= total_slices:
+        slice_index = total_slices - 1
+
+    # Clamping reports the original input.  Clean negative-index
+    # resolution (e.g. slice=-1 on a 3-slice document → 2) is the
+    # feature working correctly and doesn't need a note — the caller
+    # can verify by reading the returned ``effective_slice``.
+    clamped_from = requested if slice_index != requested and not (
+        requested < 0 and 0 <= total_slices + requested < total_slices
+    ) else None
+
+    return {
+        "start": slice_index * slice_size,
+        "effective_slice": slice_index,
+        "total_slices": total_slices,
+        "clamped_from": clamped_from,
+    }
 
 
 def _compute_slice_ancestry(

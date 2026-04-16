@@ -19,7 +19,7 @@ from .markdown import (
     html_to_markdown, _detect_js_dependent,
     _extract_sections_from_markdown, _build_section_list,
     _filter_markdown_by_sections, _build_frontmatter, _apply_hard_truncation,
-    _fence_content, _TRUST_ADVISORY,
+    _fence_content, _TRUST_ADVISORY, _resolve_toc_slice, _TOC_SLICE_SIZE,
 )
 from ._pipeline import (
     _extract_fragment, _normalize_sections, _resolve_fragment_source,
@@ -610,14 +610,25 @@ async def _github_sections(
     return fm
 
 
-async def web_fetch_sections(url: str) -> str:
+async def web_fetch_sections(url: str, slice: int = 0) -> str:
     """List the section headings of a web page.
 
     Returns a section tree with heading names and anchor slugs.
     If the URL contains a fragment, resolves it against the tree.
 
+    For long documents the section list is paginated in windows of
+    100 sections.  Pass ``slice`` to walk further into the TOC:
+    ``slice=1`` is the second window, ``slice=-1`` is the last,
+    ``slice=-2`` the second-to-last, and so on (Python-style
+    negative indexing).  Out-of-range values are clamped to the
+    nearest valid window with a frontmatter ``note`` describing the
+    bound.  When more sections exist outside the returned window,
+    frontmatter ``hint`` advertises the next valid slice.
+
     Args:
         url: The URL to inspect (fragments are resolved, not stripped)
+        slice: TOC window index — 0 = first 100 sections (default),
+            positive = subsequent windows, negative = counted from the end
     """
     original_url = url
     url, fragment = _extract_fragment(url)
@@ -825,7 +836,7 @@ async def web_fetch_sections(url: str) -> str:
 
     return _sections_response(
         title, original_url, markdown_content, section_names,
-        cache_url=original_url, renderer="direct",
+        cache_url=original_url, renderer="direct", slice_index=slice,
     )
 
 
@@ -836,6 +847,7 @@ def _sections_response(
     section_names: Optional[list[str]],
     cache_url: Optional[str] = None,
     renderer: Optional[str] = None,
+    slice_index: int = 0,
 ) -> str:
     """Build a sections-only response from markdown content.
 
@@ -845,6 +857,10 @@ def _sections_response(
     tag is stored alongside the entry so renderer-scoped cache hits work
     correctly (e.g. ``web_fetch_direct`` won't reuse content cached from a
     different pipeline).
+
+    *slice_index* paginates the section list in windows of
+    ``_TOC_SLICE_SIZE`` entries.  See ``_resolve_toc_slice`` for the
+    clamping/negative-index semantics.
     """
     if cache_url and markdown_content:
         _page_cache.store(
@@ -860,12 +876,47 @@ def _sections_response(
         })
         return fm + "\n\n" + _fence_content("No sections found.", title=title)
 
-    entries = {
+    slice_meta = _resolve_toc_slice(len(all_sections), slice_index)
+    base_hint = (
+        f"Use {tool_name('web_fetch_direct')} with section parameter "
+        "to extract specific sections by name"
+    )
+
+    entries: dict[str, object] = {
         "source": url,
         "trust": _TRUST_ADVISORY,
-        "hint": f"Use {tool_name('web_fetch_direct')} with section parameter to extract specific sections by name",
+        "total_sections": len(all_sections),
     }
-    sections_available = _build_section_list(all_sections, include_slugs=True)
+
+    # Pagination metadata only when the document spans more than one slice
+    if slice_meta["total_slices"] > 1:
+        entries["slice"] = slice_meta["effective_slice"]
+        entries["total_slices"] = slice_meta["total_slices"]
+        last_slice = slice_meta["total_slices"] - 1
+
+        if slice_meta["effective_slice"] < last_slice:
+            entries["hint"] = (
+                f"{base_hint}; "
+                f"more TOC entries available — call web_fetch_sections again with "
+                f"slice={slice_meta['effective_slice'] + 1} to advance, "
+                f"slice=-1 for the last window"
+            )
+        else:
+            entries["hint"] = base_hint
+
+        if slice_meta["clamped_from"] is not None:
+            entries["note"] = (
+                f"requested slice={slice_meta['clamped_from']} clamped to "
+                f"slice={slice_meta['effective_slice']} "
+                f"(valid range: 0..{last_slice}, or -1..-{slice_meta['total_slices']})"
+            )
+    else:
+        entries["hint"] = base_hint
+
+    sections_available = _build_section_list(
+        all_sections, max_sections=_TOC_SLICE_SIZE,
+        include_slugs=True, start=slice_meta["start"],
+    )
     sections_not_found = None
 
     if section_names:

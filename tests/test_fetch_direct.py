@@ -1150,6 +1150,155 @@ class TestWebFetchSections:
 
     @pytest.mark.asyncio
     @respx.mock
+    async def test_total_sections_always_present(self):
+        """``total_sections`` lands in frontmatter on any non-empty
+        document so callers always know the document size before
+        deciding whether to paginate."""
+        respx.get("https://example.com/page").mock(
+            return_value=httpx.Response(
+                200, text=SAMPLE_HTML_PAGE,
+                headers={"content-type": "text/html"},
+            )
+        )
+        result = await web_fetch_sections("https://example.com/page")
+        fm, _ = split_output(result)
+        assert "total_sections:" in fm
+        # Single-window document — pagination metadata stays out of fm
+        assert "\nslice:" not in fm
+        assert "total_slices:" not in fm
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_paginated_toc_emits_slice_metadata(self):
+        """Documents spanning more than one TOC window emit ``slice``,
+        ``total_slices``, and an advancement hint."""
+        # 250 flat H1 sections → 3 slices (100, 100, 50).  No wrapper
+        # so sections[i] maps 1:1 to "Section {i:03d}" — keeps the
+        # pagination math obvious.
+        sections_html = "".join(
+            f"<h1>Section {i:03d}</h1><p>body {i}</p>"
+            for i in range(250)
+        )
+        html = f"<html><body>{sections_html}</body></html>"
+        respx.get("https://example.com/long").mock(
+            return_value=httpx.Response(
+                200, text=html, headers={"content-type": "text/html"},
+            )
+        )
+
+        result = await web_fetch_sections("https://example.com/long")
+        fm, fence = split_output(result)
+        assert "total_sections: 250" in fm
+        assert "slice: 0" in fm
+        assert "total_slices: 3" in fm
+        # Advancement hint for the next window and the tail shortcut
+        assert "slice=1" in fm
+        assert "slice=-1" in fm
+        # Window contains the first 100 sections only
+        assert "Section 000" in fence
+        assert "Section 099" in fence
+        assert "Section 100" not in fence
+        # Trailing sentinel reflects what's after this window
+        assert "more sections" in fence
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_paginated_toc_slice_one_advances(self):
+        """``slice=1`` returns the second window."""
+        sections_html = "".join(
+            f"<h1>Section {i:03d}</h1><p>body</p>" for i in range(250)
+        )
+        html = f"<html><body>{sections_html}</body></html>"
+        respx.get("https://example.com/long").mock(
+            return_value=httpx.Response(
+                200, text=html, headers={"content-type": "text/html"},
+            )
+        )
+
+        result = await web_fetch_sections("https://example.com/long", slice=1)
+        fm, fence = split_output(result)
+        assert "slice: 1" in fm
+        # Window covers sections[100..199] = "Section 100".."Section 199"
+        assert "Section 100" in fence
+        assert "Section 199" in fence
+        assert "Section 099" not in fence
+        assert "Section 200" not in fence
+        # Both sentinels present (mid-document window)
+        assert "earlier sections" in fence
+        assert "more sections" in fence
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_paginated_toc_negative_one_returns_last(self):
+        """Python-style ``slice=-1`` returns the final window without
+        flagging it as a clamp."""
+        sections_html = "".join(
+            f"<h1>Section {i:03d}</h1><p>body</p>" for i in range(250)
+        )
+        html = f"<html><body>{sections_html}</body></html>"
+        respx.get("https://example.com/long").mock(
+            return_value=httpx.Response(
+                200, text=html, headers={"content-type": "text/html"},
+            )
+        )
+
+        result = await web_fetch_sections("https://example.com/long", slice=-1)
+        fm, fence = split_output(result)
+        assert "slice: 2" in fm  # last of 3 slices
+        # Tail window — only earlier sentinel, no trailing one
+        assert "earlier sections" in fence
+        assert "more sections" not in fence
+        # No clamp note: clean negative-index resolution
+        assert "clamped" not in fm
+        # Window contains the tail
+        assert "Section 249" in fence
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_paginated_toc_overflow_clamps_with_note(self):
+        """Out-of-range positive ``slice`` clamps and surfaces a
+        ``note`` describing the valid range."""
+        sections_html = "".join(
+            f"<h1>Section {i:03d}</h1><p>body</p>" for i in range(250)
+        )
+        html = f"<html><body>{sections_html}</body></html>"
+        respx.get("https://example.com/long").mock(
+            return_value=httpx.Response(
+                200, text=html, headers={"content-type": "text/html"},
+            )
+        )
+
+        result = await web_fetch_sections("https://example.com/long", slice=99)
+        fm, _ = split_output(result)
+        assert "slice: 2" in fm  # clamped to last
+        assert "note:" in fm
+        assert "clamped" in fm
+        assert "slice=99" in fm  # original input echoed
+        assert "0..2" in fm or "valid range" in fm
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_paginated_toc_negative_overflow_clamps(self):
+        """Very negative ``slice`` (beyond ``-total_slices``) clamps to
+        the first window and notes the original input."""
+        sections_html = "".join(
+            f"<h1>Section {i:03d}</h1><p>body</p>" for i in range(250)
+        )
+        html = f"<html><body>{sections_html}</body></html>"
+        respx.get("https://example.com/long").mock(
+            return_value=httpx.Response(
+                200, text=html, headers={"content-type": "text/html"},
+            )
+        )
+
+        result = await web_fetch_sections("https://example.com/long", slice=-99)
+        fm, _ = split_output(result)
+        assert "slice: 0" in fm
+        assert "clamped" in fm
+        assert "slice=-99" in fm
+
+    @pytest.mark.asyncio
+    @respx.mock
     async def test_permits_whatwg_sized_html(self):
         """End-to-end: the 15 MiB WHATWG HTML-LS fixture flows through the
         section pipeline without tripping the size cap.

@@ -197,12 +197,14 @@ Conditional:
 | `truncated`        | Content exceeds `max_tokens` |
 | `warning`          | Fragment could not be resolved, parameter conflicts, or other advisory |
 | `footnotes_only`   | Footnote-only responses |
-| `total_slices`     | BM25 search or slice retrieval |
+| `total_sections`   | `web_fetch_sections`: total section count for the document |
+| `slice`            | `web_fetch_sections`: TOC pagination window index (when `total_slices` > 1) |
+| `total_slices`     | BM25 search, slice retrieval, or `web_fetch_sections` TOC pagination |
 | `search`           | BM25 search query |
 | `matched_slices`   | BM25 search results |
 | `slices`           | Slice retrieval indices |
-| `hint`             | BM25 search, slice retrieval, and `web_fetch_sections` |
-| `note`             | Section extraction depth warning (when subsections exist) |
+| `hint`             | BM25 search, slice retrieval, and `web_fetch_sections` (incl. TOC pagination guidance) |
+| `note`             | Section extraction depth warning, or `web_fetch_sections` slice-clamp explanation |
 | `shelf`            | Research shelf tracking status (auto-tracked papers) |
 | `api`              | API origin identifier (e.g. `GitHub`, `GitHub (raw)`, `Reddit (.json)`, `arXiv`) |
 | `language`         | GitHub blob: file extension (e.g. `py`, `ts`) |

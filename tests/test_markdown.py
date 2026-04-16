@@ -12,6 +12,8 @@ from parkour_mcp.markdown import (
     _apply_semantic_truncation,
     _fence_content,
     _format_retraction_banner,
+    _resolve_toc_slice,
+    _TOC_SLICE_SIZE,
     _FENCE_OPEN,
     _FENCE_CLOSE,
 )
@@ -394,6 +396,144 @@ class TestBuildSectionList:
         sections = _extract_sections_from_markdown(md_text)
         lines = _build_section_list(sections, include_slugs=True)
         assert lines[0] == "- Parent (#parent) [header only]"
+
+
+class TestBuildSectionListPagination:
+    """Pagination via the keyword-only ``start`` parameter.
+
+    Indentation and disambiguation are computed against the full
+    sections list so a window beginning mid-document is still
+    coherent.  Sentinel lines flag truncation in either direction.
+    """
+
+    def _build(self, n: int) -> list[dict]:
+        # Synthesise n flat H1 sections — no wrapper, so sections[i]
+        # corresponds 1:1 to "Section {i:03d}".  Keeps the pagination
+        # math obvious in test assertions.
+        md_text = "\n\n".join(
+            f"# Section {i:03d}\n\nbody {i}" for i in range(n)
+        )
+        return _extract_sections_from_markdown(md_text)
+
+    def test_start_zero_matches_legacy_behavior(self):
+        sections = self._build(5)
+        legacy = _build_section_list(sections)
+        windowed = _build_section_list(sections, start=0)
+        assert legacy == windowed
+
+    def test_window_in_middle_emits_both_sentinels(self):
+        sections = self._build(10)
+        lines = _build_section_list(sections, max_sections=3, start=4)
+        # First line: earlier-sections sentinel
+        assert lines[0] == "# ... and 4 earlier sections"
+        # Middle lines: the three sections in the window (sections[4..6])
+        assert "Section 004" in lines[1]
+        assert "Section 005" in lines[2]
+        assert "Section 006" in lines[3]
+        # Last line: more-sections sentinel
+        assert lines[-1] == "# ... and 3 more sections"
+
+    def test_window_at_end_omits_more_sentinel(self):
+        sections = self._build(10)
+        lines = _build_section_list(sections, max_sections=3, start=7)
+        assert lines[0] == "# ... and 7 earlier sections"
+        # sections[7..9] rendered, no trailing sentinel since end == len
+        assert "Section 009" in lines[-1]
+        assert all("more sections" not in ln for ln in lines)
+
+    def test_window_at_start_omits_earlier_sentinel(self):
+        sections = self._build(10)
+        lines = _build_section_list(sections, max_sections=3, start=0)
+        # No leading sentinel
+        assert all("earlier sections" not in ln for ln in lines)
+        assert lines[-1] == "# ... and 7 more sections"
+
+    def test_indentation_consistent_across_windows(self):
+        # Build a doc with an H1, an H2, and an H3 inside the window.
+        md_text = (
+            "# Top\n\n"
+            "## Mid\n\nbody\n\n"
+            "### Deep\n\nbody\n\n"
+            + "\n\n".join(f"## Sibling {i}\n\nbody" for i in range(8))
+        )
+        sections = _extract_sections_from_markdown(md_text)
+        # Window starting at the deep nested section — its indent must
+        # still reflect the full document's min_level (the H1 at the
+        # start), not the window's starting level.
+        lines = _build_section_list(sections, max_sections=3, start=2)
+        # Deep is the third section overall (index 2): H1=L0, H2=L2, H3=L4
+        # min_level = 1 (the H1) → indent for H3 = (3-1)*2 = 4 spaces
+        deep_line = next(ln for ln in lines if "Deep" in ln)
+        assert deep_line.startswith("    - Deep")
+
+
+class TestResolveTocSlice:
+    """Resolve negative / out-of-range slice indices to a window.
+
+    Clean negative resolution (slice=-1 on multi-slice doc) is the
+    feature working correctly and reports clamped_from=None.
+    Genuine clamping (positive overflow, very negative) reports the
+    original input so the caller can be notified.
+    """
+
+    def test_zero_on_empty_document(self):
+        result = _resolve_toc_slice(0, 0)
+        assert result == {
+            "start": 0, "effective_slice": 0,
+            "total_slices": 0, "clamped_from": None,
+        }
+
+    def test_zero_on_single_slice(self):
+        result = _resolve_toc_slice(50, 0)
+        assert result["start"] == 0
+        assert result["effective_slice"] == 0
+        assert result["total_slices"] == 1
+        assert result["clamped_from"] is None
+
+    def test_first_window(self):
+        # 311 sections → 4 slices (100, 100, 100, 11)
+        result = _resolve_toc_slice(311, 0)
+        assert result == {
+            "start": 0, "effective_slice": 0,
+            "total_slices": 4, "clamped_from": None,
+        }
+
+    def test_negative_one_resolves_to_last_window(self):
+        result = _resolve_toc_slice(311, -1)
+        assert result["effective_slice"] == 3
+        assert result["start"] == 300
+        assert result["clamped_from"] is None  # clean resolution, not a clamp
+
+    def test_negative_two_resolves_to_second_to_last(self):
+        result = _resolve_toc_slice(311, -2)
+        assert result["effective_slice"] == 2
+        assert result["start"] == 200
+        assert result["clamped_from"] is None
+
+    def test_positive_overflow_clamps_to_last(self):
+        result = _resolve_toc_slice(311, 99)
+        assert result["effective_slice"] == 3
+        assert result["start"] == 300
+        assert result["clamped_from"] == 99
+
+    def test_negative_overflow_clamps_to_first(self):
+        # -99 on a 4-slice document → -95 → clamped to 0
+        result = _resolve_toc_slice(311, -99)
+        assert result["effective_slice"] == 0
+        assert result["start"] == 0
+        assert result["clamped_from"] == -99
+
+    def test_slice_size_constant(self):
+        # Sanity: the constant is what the rest of the code assumes
+        assert _TOC_SLICE_SIZE == 100
+
+    def test_negative_one_on_single_slice_no_clamp(self):
+        # 50 sections → 1 slice; slice=-1 resolves to 0.  This is
+        # clean negative resolution (not clamping), so clamped_from
+        # stays None — the caller can verify by reading effective_slice.
+        result = _resolve_toc_slice(50, -1)
+        assert result["effective_slice"] == 0
+        assert result["clamped_from"] is None
 
 
 # --- _filter_markdown_by_sections ---
