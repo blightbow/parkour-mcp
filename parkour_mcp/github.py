@@ -716,6 +716,88 @@ def _sectionize_code(source: str, ext: str) -> Optional[list[tuple[int, str]]]:
         return None
 
 
+# Circuit-breaker threshold: any single line longer than this is treated as
+# pathological and trips ``_plaintext_presplit``.  Real log/code lines are
+# typically <1 KB; the longest legitimate single-line content we see in the
+# wild is minified JavaScript bundles, which can approach but rarely exceed
+# 1 MB.  Anything beyond is almost certainly adversarial or a data dump —
+# dropping cache support for that file is preferable to letting
+# MarkdownSplitter's char-level fallback spend multi-second CPU bursts on
+# unstructured single-line content (see issue #6).
+_MAX_PLAINTEXT_LINE_CHARS = 1_000_000
+
+# Target size of each presplit chunk for plaintext content.  Matches the
+# midpoint of ``MarkdownSplitter((1600, 2000))`` so BM25 index behavior is
+# consistent across structured and unstructured cache entries.
+_PLAINTEXT_CHUNK_CHARS = 1800
+
+
+def _plaintext_presplit(
+    source: str,
+    chunk_chars: int = _PLAINTEXT_CHUNK_CHARS,
+    max_line_chars: int = _MAX_PLAINTEXT_LINE_CHARS,
+) -> Optional[list[tuple[int, str]]]:
+    """Line-oriented presplit for plaintext blobs with no tree-sitter grammar.
+
+    Groups consecutive lines into chunks up to ``chunk_chars`` in length,
+    always splitting on line boundaries so BM25 slices stay readable.
+    Returns (char_offset, chunk_text) tuples suitable for
+    _PageCache.store(presplit=...).
+
+    Circuit breaker: if any single line exceeds ``max_line_chars``, the
+    content is treated as pathological (typical vector: a multi-MiB data
+    dump emitted as one line) and the function returns ``None``.  Callers
+    should then skip cache population entirely — MarkdownSplitter's
+    char-level fallback on unbounded single-line content is the DoS path
+    filed as issue #6, and returning None avoids routing into it.
+    """
+    chunks: list[tuple[int, str]] = []
+    n = len(source)
+    pos = 0
+    chunk_start = 0
+    chunk_buf: list[str] = []
+    chunk_size = 0
+
+    while pos < n:
+        nl = source.find("\n", pos)
+        line_end = n if nl == -1 else nl + 1  # include the newline
+        line_len = line_end - pos
+
+        if line_len > max_line_chars:
+            return None  # circuit breaker — see docstring
+
+        if chunk_size > 0 and chunk_size + line_len > chunk_chars:
+            chunks.append((chunk_start, "".join(chunk_buf)))
+            chunk_buf = []
+            chunk_size = 0
+            chunk_start = pos
+
+        chunk_buf.append(source[pos:line_end])
+        chunk_size += line_len
+        pos = line_end
+
+    if chunk_buf:
+        chunks.append((chunk_start, "".join(chunk_buf)))
+
+    return chunks
+
+
+def _blob_presplit(source: str, ext: str) -> Optional[list[tuple[int, str]]]:
+    """Presplit a GitHub blob for ``_page_cache.store(presplit=...)``.
+
+    Tries AST-aware splitting via ``_sectionize_code`` first.  Falls back to
+    ``_plaintext_presplit`` for files without a tree-sitter grammar (.txt,
+    .log, .csv, etc.).  Returns ``None`` only when both fail, which happens
+    for adversarial unstructured content — callers treat that as
+    "skip cache, preserve formatted output" so the MarkdownSplitter
+    char-level fallback is never invoked on such inputs.
+    """
+    presplit = _sectionize_code(source, ext)
+    if presplit is not None:
+        return presplit
+    return _plaintext_presplit(source)
+
+
 def format_code_sections(defs: list[CodeDefinition]) -> str:
     """Format extracted definitions as a section listing for web_fetch_sections."""
     if not defs:

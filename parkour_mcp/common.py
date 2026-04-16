@@ -281,30 +281,36 @@ async def guarded_fetch(
     *,
     headers: Optional[dict[str, str]] = None,
     timeout: float = 30.0,
-    max_bytes: int = _MAX_RESPONSE_BYTES,
+    max_bytes: Optional[int] = _MAX_RESPONSE_BYTES,
     deadline: float = _FETCH_DEADLINE_SECONDS,
     follow_redirects: bool = True,
 ) -> httpx.Response:
-    """Fetch *url* with three layers of protection against oversized responses.
+    """Fetch *url* with layered protection against oversized responses.
 
     1. **Content-Length gate** — if the server advertises a body larger than
        *max_bytes* via the ``Content-Length`` header, the request is rejected
-       immediately without reading the body.
+       immediately without reading the body.  Skipped when *max_bytes* is
+       ``None``.
 
     2. **Streaming size cap** — the body is read in chunks; if the cumulative
        size exceeds *max_bytes* mid-transfer, the stream is closed and
-       ``ResponseTooLarge`` is raised.
+       ``ResponseTooLarge`` is raised.  Skipped when *max_bytes* is ``None``.
 
     3. **Wall-clock deadline** — an ``asyncio.timeout`` wraps the entire
        operation (connect + all reads).  If *deadline* seconds elapse, an
        ``httpx.TimeoutException`` propagates so callers can handle it the
-       same way they already handle per-phase timeouts.
+       same way they already handle per-phase timeouts.  Always applies.
+
+    Passing ``max_bytes=None`` disables layers 1 and 2 for callers whose
+    output bound is the caller-supplied ``max_tokens`` (the GitHub blob
+    fast path, for example).  Layer 3 still defends against slow-drip
+    firehoses that per-phase timeouts can't catch.
 
     Returns a fully-buffered ``httpx.Response`` (i.e. ``response.text`` works
     synchronously after this call).
 
     Raises:
-        ResponseTooLarge: body exceeded *max_bytes*
+        ResponseTooLarge: body exceeded *max_bytes* (only when not ``None``)
         httpx.TimeoutException: per-phase or wall-clock timeout
         httpx.HTTPStatusError: non-2xx status (caller must opt in via raise_for_status)
         httpx.RequestError: connection / DNS / TLS failure
@@ -320,23 +326,24 @@ async def guarded_fetch(
             ) as client:
                 async with client.stream("GET", url, headers=headers) as resp:
                     # Layer 1: Content-Length gate
-                    cl = resp.headers.get("content-length")
-                    if cl is not None:
-                        try:
-                            if int(cl) > max_bytes:
-                                raise ResponseTooLarge(
-                                    f"Content-Length {cl} exceeds "
-                                    f"{max_bytes:,} byte limit"
-                                )
-                        except ValueError:
-                            pass  # malformed header — fall through to streaming
+                    if max_bytes is not None:
+                        cl = resp.headers.get("content-length")
+                        if cl is not None:
+                            try:
+                                if int(cl) > max_bytes:
+                                    raise ResponseTooLarge(
+                                        f"Content-Length {cl} exceeds "
+                                        f"{max_bytes:,} byte limit"
+                                    )
+                            except ValueError:
+                                pass  # malformed header — fall through to streaming
 
                     # Layer 2: streaming size cap
                     chunks: list[bytes] = []
                     total = 0
                     async for chunk in resp.aiter_bytes(chunk_size=65_536):
                         total += len(chunk)
-                        if total > max_bytes:
+                        if max_bytes is not None and total > max_bytes:
                             raise ResponseTooLarge(
                                 f"Response body exceeded {max_bytes:,} "
                                 f"byte limit at {total:,} bytes"

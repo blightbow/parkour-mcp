@@ -665,6 +665,102 @@ class TestWebFetchDirectRawGitHub:
         )
         assert cached is not None
 
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_large_content_length_admitted(self):
+        """Content-Length gate is disabled on the blob fast path.
+
+        The old 5 MiB cap rejected any blob whose server advertised a
+        body > 5 MiB at the Content-Length layer, before the body was
+        even read.  Defence shifts to max_tokens at the output layer;
+        the gate must admit the fetch so the pipeline can run and
+        truncate.  Tiny body + fake large Content-Length isolates the
+        gate behavior without paying real download cost.
+        """
+        respx.get(
+            "https://raw.githubusercontent.com/owner/repo/main/app.py"
+        ).mock(
+            return_value=httpx.Response(
+                200, text=SAMPLE_PYTHON_FILE,
+                headers={
+                    "content-type": "text/plain",
+                    "content-length": str(10 * 1024 * 1024),
+                },
+            )
+        )
+
+        result = await web_fetch_direct(
+            "https://raw.githubusercontent.com/owner/repo/main/app.py"
+        )
+        assert "too large" not in result
+        assert "Error:" not in result
+        # Sanity: the small body itself flowed through and got formatted.
+        assert "1 | import os" in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_truncation_hint_guides_toward_max_tokens(self):
+        """Output bound is max_tokens; the hint must teach the caller how to
+        get more (raise max_tokens, or narrow with section=/search=/#L).
+
+        The old hint was a single line (``Content truncated to ~N
+        tokens``) that didn't explain how to break through.  Forcing
+        truncation with a very small max_tokens is the cheapest way to
+        assert the new hint contents without fetching a large body.
+        """
+        respx.get(
+            "https://raw.githubusercontent.com/owner/repo/main/app.py"
+        ).mock(return_value=httpx.Response(200, text=SAMPLE_PYTHON_FILE))
+
+        # max_tokens=5 means char_budget = 20, far smaller than the sample
+        # file → truncation fires regardless of actual file size.
+        result = await web_fetch_direct(
+            "https://raw.githubusercontent.com/owner/repo/main/app.py",
+            max_tokens=5,
+        )
+        assert "truncated:" in result
+        assert "Raise max_tokens" in result
+        assert "section=" in result
+        assert "#L" in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_pathological_plaintext_blob_skips_cache(self):
+        """Circuit breaker: unstructured single-line blobs don't populate cache.
+
+        A plaintext blob (e.g. .log, .txt) with a single line over 1 MB
+        would route into MarkdownSplitter's char-level fallback in
+        _page_cache.store if we cached it — the DoS path tracked in #6.
+        _blob_presplit fails closed on such content, so the cache step
+        is skipped entirely.  The agent still gets a formatted truncated
+        response; only search/slices are unavailable for that one file.
+        """
+        # 2 MiB of 'x' with no newlines: no tree-sitter grammar for .log,
+        # plaintext circuit breaker trips at 1 MB.
+        body = "x" * (2 * 1024 * 1024)
+        respx.get(
+            "https://raw.githubusercontent.com/owner/repo/main/giant.log"
+        ).mock(
+            return_value=httpx.Response(
+                200, text=body,
+                headers={"content-type": "text/plain"},
+            )
+        )
+
+        result = await web_fetch_direct(
+            "https://raw.githubusercontent.com/owner/repo/main/giant.log",
+            max_tokens=500,
+        )
+        # Fetch succeeded (no wire-bytes rejection) and output is bounded.
+        assert "too large" not in result
+        assert "Error:" not in result
+        assert "truncated:" in result
+        # But cache is empty — presplit tripped the breaker, skipping store.
+        cached = _page_cache.get(
+            "https://raw.githubusercontent.com/owner/repo/main/giant.log"
+        )
+        assert cached is None
+
 
 class TestWebFetchDirectGitHubWiki:
     """Tests for GitHub wiki page handling."""

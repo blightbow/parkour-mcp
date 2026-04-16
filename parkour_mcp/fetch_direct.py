@@ -409,7 +409,7 @@ async def _github_sections(
     from .github import (
         extract_code_definitions, format_code_sections,
         _build_issue_markdown, _build_pr_markdown,
-        _get_github_token, _sectionize_code, _split_github_comments,
+        _get_github_token, _blob_presplit, _split_github_comments,
     )
     from .common import _FETCH_HEADERS
     from pathlib import Path
@@ -423,7 +423,10 @@ async def _github_sections(
         if cached:
             source_text = cached.markdown
         else:
-            # Fetch raw content
+            # Fetch raw content.  max_bytes=None: section-tree output is
+            # bounded by document structure, not body size; wall-clock
+            # deadline + plaintext presplit circuit breaker cover the
+            # residual DoS surface.  See _github_fast_path blob branch.
             raw_url = (
                 f"https://raw.githubusercontent.com/"
                 f"{match.owner}/{match.repo}/{match.ref}/{match.path}"
@@ -435,8 +438,7 @@ async def _github_sections(
 
             try:
                 resp = await guarded_fetch(
-                    raw_url, headers=headers,
-                    max_bytes=_MAX_SECTIONS_RESPONSE_BYTES,
+                    raw_url, headers=headers, max_bytes=None,
                 )
                 if resp.status_code != 200:
                     return None
@@ -446,12 +448,15 @@ async def _github_sections(
 
             # Populate the page cache so a follow-up web_fetch_direct call
             # on the same URL hits the cache instead of re-fetching raw.
-            # Uses the same presplit shape as _github_fast_path's blob branch.
-            presplit = _sectionize_code(source_text, ext)
-            _page_cache.store(
-                original_url, match.path, source_text,
-                renderer="github", presplit=presplit,
-            )
+            # _blob_presplit returns None on pathological single-line
+            # plaintext; skip cache in that case to avoid routing the
+            # content into MarkdownSplitter's char-level fallback (#6).
+            presplit = _blob_presplit(source_text, ext)
+            if presplit is not None:
+                _page_cache.store(
+                    original_url, match.path, source_text,
+                    renderer="github", presplit=presplit,
+                )
 
         defs = extract_code_definitions(source_text, ext)
         if not defs:

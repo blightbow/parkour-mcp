@@ -7,12 +7,14 @@ import pytest
 import respx
 
 from parkour_mcp.github import (
+    _blob_presplit,
     _detect_github_url,
     _github_request,
     _parse_citation_cff,
     _parse_owner_repo,
     _parse_owner_repo_number,
     _parse_owner_repo_path,
+    _plaintext_presplit,
     _reset_repo_metadata_cache,
     _sectionize_code,
     extract_code_definitions,
@@ -652,6 +654,88 @@ class Foo:
 
     def test_sectionize_unknown_ext(self):
         assert _sectionize_code("code", ".xyz") is None
+
+
+class TestPlaintextPresplit:
+    """Line-oriented presplit for blobs without a tree-sitter grammar.
+
+    Keeps plaintext out of MarkdownSplitter's char-level fallback (the
+    DoS vector tracked in issue #6) by failing closed on single-line
+    content above the _MAX_PLAINTEXT_LINE_CHARS threshold.
+    """
+
+    def test_basic_multiline_chunks_at_line_boundaries(self):
+        # 200 short lines → should pack multiple lines per chunk, each
+        # chunk ending at a newline.
+        source = "".join(f"line {i}: some text here\n" for i in range(200))
+        result = _plaintext_presplit(source, chunk_chars=400)
+        assert result is not None
+        assert len(result) > 1
+        # Every chunk's text should end on a newline (line-boundary pack)
+        for _offset, text in result:
+            assert text.endswith("\n")
+        # Offsets should be strictly increasing and start at 0
+        offsets = [o for o, _ in result]
+        assert offsets[0] == 0
+        assert offsets == sorted(offsets)
+        # Concatenation of chunks should reconstruct the source
+        assert "".join(t for _, t in result) == source
+
+    def test_final_line_without_trailing_newline(self):
+        source = "alpha\nbeta\ngamma"  # no final \n
+        result = _plaintext_presplit(source, chunk_chars=100)
+        assert result is not None
+        assert "".join(t for _, t in result) == source
+
+    def test_single_huge_line_trips_circuit_breaker(self):
+        # One line of 2 MB — well above the 1 MB threshold.  No newlines,
+        # so MarkdownSplitter would fall into its char-level path on this
+        # content; the circuit breaker must trip before that.
+        source = "x" * (2 * 1024 * 1024)
+        result = _plaintext_presplit(source)
+        assert result is None
+
+    def test_mixed_normal_and_pathological_fails_closed(self):
+        # 50 normal lines followed by one 2 MB line.  Even though most
+        # of the content is well-formed, the presence of any pathological
+        # line means we cannot safely presplit — return None.
+        normal = "".join(f"line {i}\n" for i in range(50))
+        bad = "x" * (2 * 1024 * 1024) + "\n"
+        result = _plaintext_presplit(normal + bad)
+        assert result is None
+
+    def test_threshold_boundary(self):
+        # line_len counts every char through the trailing newline, so a
+        # line whose total length (content + ``\n``) equals
+        # max_line_chars passes and one more char fails.
+        just_ok = "a" * 99 + "\n"  # 100 chars total
+        assert _plaintext_presplit(just_ok, max_line_chars=100) is not None
+        too_long = "a" * 100 + "\n"  # 101 chars total
+        assert _plaintext_presplit(too_long, max_line_chars=100) is None
+
+
+class TestBlobPresplit:
+    """Two-stage blob presplit: tree-sitter first, plaintext fallback."""
+
+    def test_prefers_tree_sitter_for_known_extension(self):
+        code = "def a():\n    pass\n\ndef b():\n    pass\n"
+        result = _blob_presplit(code, ".py")
+        # Matches what _sectionize_code alone would produce.
+        assert result is not None
+        assert result == _sectionize_code(code, ".py")
+
+    def test_falls_back_to_plaintext_for_unknown_extension(self):
+        text = "".join(f"log line {i}\n" for i in range(50))
+        result = _blob_presplit(text, ".log")
+        assert result is not None
+        # Must agree with the plaintext helper directly — no tree-sitter
+        # contribution since .log has no grammar.
+        assert result == _plaintext_presplit(text)
+
+    def test_returns_none_on_pathological_plaintext(self):
+        source = "x" * (2 * 1024 * 1024)
+        # .log has no grammar; plaintext fallback trips the circuit breaker.
+        assert _blob_presplit(source, ".log") is None
 
 
 # ---------------------------------------------------------------------------

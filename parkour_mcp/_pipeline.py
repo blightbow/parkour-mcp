@@ -734,7 +734,7 @@ async def _github_fast_path(
     from .github import (
         _detect_github_url, _action_repo, _action_tree,
         _build_issue_markdown, _build_pr_markdown,
-        _sectionize_code, _split_github_comments,
+        _blob_presplit, _split_github_comments,
         _rate_limit_warning, _get_github_token,
     )
     from .common import _FETCH_HEADERS
@@ -754,10 +754,13 @@ async def _github_fast_path(
         if token:
             headers["Authorization"] = f"token {token}"
 
+        # max_bytes=None: defend context flooding via max_tokens output
+        # truncation, not a wire-bytes gate.  Callers that genuinely want
+        # more of a large file re-request with a higher max_tokens.  The
+        # 60 s wall-clock deadline in guarded_fetch still protects against
+        # slow-drip attacks.
         try:
-            resp = await guarded_fetch(raw_url, headers=headers)
-        except ResponseTooLarge as e:
-            return f"Error: Response too large for {raw_url} — {e}"
+            resp = await guarded_fetch(raw_url, headers=headers, max_bytes=None)
         except httpx.TimeoutException:
             return f"Error: Request timed out for {raw_url}"
         except httpx.RequestError as e:
@@ -780,13 +783,19 @@ async def _github_fast_path(
         if not raw_content.strip():
             return f"Empty file ({match.path})."
 
-        # Cache with code-aware presplit
+        # Cache with AST-aware presplit for known grammars, plaintext line
+        # presplit otherwise.  _blob_presplit returns None only when the
+        # content is pathological (single line > 1 MB — see issue #6); we
+        # then skip cache population so MarkdownSplitter is never invoked
+        # on such inputs.  Agent still gets formatted truncated output;
+        # search/slices just won't work for that one file.
         ext = Path(match.path).suffix.lower()
-        presplit = _sectionize_code(raw_content, ext)
-        _page_cache.store(
-            url, match.path, raw_content,
-            renderer="github", presplit=presplit,
-        )
+        presplit = _blob_presplit(raw_content, ext)
+        if presplit is not None:
+            _page_cache.store(
+                url, match.path, raw_content,
+                renderer="github", presplit=presplit,
+            )
 
         # Format response (same as _action_file but without a second fetch)
         from .common import _LANGUAGE_MAP
@@ -840,7 +849,14 @@ async def _github_fast_path(
             if len(raw_content) > char_budget:
                 truncated_content = raw_content[:char_budget]
                 display_lines = truncated_content.split("\n")
-                fm_entries["truncated"] = f"Content truncated to ~{max_tokens} tokens"
+                total_tokens = len(raw_content) // 4
+                total_kb = len(raw_content) / 1024
+                fm_entries["truncated"] = (
+                    f"Showing first ~{max_tokens:,} of ~{total_tokens:,} "
+                    f"tokens ({total_kb:.1f} KB file). Raise max_tokens, "
+                    f"or narrow with section=, search=, or #L anchor "
+                    f"(e.g. #L100-L200)."
+                )
             else:
                 display_lines = all_lines
             line_offset = 1
