@@ -985,3 +985,73 @@ class TestWebFetchSections:
 
         result = await web_fetch_sections("https://example.com/flat")
         assert "No sections found" in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_permits_content_length_beyond_content_cap(self):
+        """Layer 1 (Content-Length gate) is relaxed for section extraction.
+
+        Regression: under the original 5 MiB uniform cap, a server
+        advertising a 10 MiB body was rejected before reading — even
+        though ``web_fetch_sections`` only emits a heading tree and never
+        puts the body into the caller's context.
+        """
+        # Tiny body with a 10 MiB Content-Length header — old uniform cap
+        # would reject at the gate, new sections cap (50 MiB) admits it.
+        html = "<html><body><h1>Overview</h1><p>ok</p></body></html>"
+        respx.get("https://example.com/huge-cl").mock(
+            return_value=httpx.Response(
+                200, text=html,
+                headers={
+                    "content-type": "text/html",
+                    "content-length": str(10 * 1024 * 1024),
+                },
+            )
+        )
+
+        result = await web_fetch_sections("https://example.com/huge-cl")
+        assert "Error:" not in result
+        assert "too large" not in result
+        _, fence = split_output(result)
+        assert fenced_line("- Overview") in fence
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_permits_whatwg_sized_html(self):
+        """End-to-end: the 15 MiB WHATWG HTML-LS fixture flows through the
+        section pipeline without tripping the size cap.
+
+        This is the exact failure mode reported: ``web_fetch_sections``
+        on the WHATWG HTML Living Standard returned ``Response too large``
+        under the original 5 MiB uniform cap.  The fixture (gz-compressed
+        at ``tests/fixtures/perf/whatwg_html.html.gz``) is the same one
+        the perf suite uses as its ``pathological`` tier, so any splitter
+        / markdown regression lands in test_perf.py rather than here.
+        """
+        import gzip
+        from pathlib import Path
+        fixture = (
+            Path(__file__).parent / "fixtures" / "perf" / "whatwg_html.html.gz"
+        )
+        if not fixture.exists():
+            pytest.skip(f"Fixture {fixture} not present")
+        with gzip.open(fixture, "rt", encoding="utf-8") as f:
+            whatwg_html = f.read()
+        assert len(whatwg_html) > 5 * 1024 * 1024, (
+            "fixture must exceed the 5 MiB content-output cap to exercise "
+            "the section-extraction cap relaxation"
+        )
+
+        respx.get("https://html.spec.whatwg.org/").mock(
+            return_value=httpx.Response(
+                200, text=whatwg_html,
+                headers={"content-type": "text/html; charset=utf-8"},
+            )
+        )
+
+        result = await web_fetch_sections("https://html.spec.whatwg.org/")
+        assert "Error:" not in result
+        assert "too large" not in result
+        # Sanity-check: a recognizable top-level heading made it into the tree.
+        _, fence = split_output(result)
+        assert "HTML" in fence

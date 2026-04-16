@@ -258,6 +258,14 @@ def tool_name(key: str) -> str:
 # embed hundreds of megabytes of metadata alongside a handful of rows.
 _MAX_RESPONSE_BYTES = 5 * 1024 * 1024
 
+# Larger cap reserved for section-extraction fetches, where the output is a
+# heading tree rather than page content.  Accommodates monolithic "one-page"
+# specifications (e.g. WHATWG HTML Living Standard, ECMAScript, C++ draft)
+# that routinely exceed the 5 MiB content-output cap.  The wall-clock
+# deadline still applies, so slow-drip firehoses are still rejected — this
+# only relaxes the size gate for callers that don't emit the body to context.
+_MAX_SECTIONS_RESPONSE_BYTES = 50 * 1024 * 1024
+
 # Absolute wall-clock deadline for the entire fetch (connect + download).
 # httpx's ``timeout`` is per-phase — a slow-dripping server that sends one
 # byte every 29 s will never trip a 30 s read timeout.  This caps total time.

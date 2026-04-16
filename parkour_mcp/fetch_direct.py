@@ -7,7 +7,13 @@ from urllib.parse import urlparse
 
 import httpx
 
-from .common import ResponseTooLarge, check_url_ssrf, guarded_fetch, tool_name
+from .common import (
+    _MAX_SECTIONS_RESPONSE_BYTES,
+    ResponseTooLarge,
+    check_url_ssrf,
+    guarded_fetch,
+    tool_name,
+)
 from .markdown import (
     html_to_markdown, _detect_js_dependent,
     _extract_sections_from_markdown, _build_section_list,
@@ -416,7 +422,10 @@ async def _github_sections(
                 headers["Authorization"] = f"token {token}"
 
             try:
-                resp = await guarded_fetch(raw_url, headers=headers)
+                resp = await guarded_fetch(
+                    raw_url, headers=headers,
+                    max_bytes=_MAX_SECTIONS_RESPONSE_BYTES,
+                )
                 if resp.status_code != 200:
                     return None
                 source_text = resp.text
@@ -704,8 +713,12 @@ async def web_fetch_sections(url: str) -> str:
         pass
 
     # --- HTTP fetch ---
+    # Section extraction only emits a heading tree, not page content, so the
+    # relaxed size cap is safe here — the output size is bounded by document
+    # structure, not body length.  Monolithic one-page specs (WHATWG,
+    # ECMAScript, etc.) routinely exceed the 5 MiB content-output cap.
     try:
-        response = await guarded_fetch(url)
+        response = await guarded_fetch(url, max_bytes=_MAX_SECTIONS_RESPONSE_BYTES)
         response.raise_for_status()
     except ResponseTooLarge as e:
         return f"Error: Response too large for {url} — {e}"
