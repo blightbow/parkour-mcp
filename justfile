@@ -47,9 +47,14 @@ install-hooks:
     chmod +x scripts/git-hooks/*
     @echo "Git hooks installed. pre-push will run live tests on version tag pushes."
 
-# Usage: just tag v1.2.3 — runs live tests, then creates annotated tag (no push)
+# Usage: just tag v1.2.3 — runs mocked + live suites, then creates annotated tag (no push).
+# Mocked suite runs first because it's fast and includes pytest-ruff, which
+# catches format/lint regressions that CI's `uv run pytest` would also fail on.
+# Skipping this step let a ruff E402 regression escape to the v1.1.1 release tag.
 tag version:
-    @echo "Running live tests before creating tag {{version}}..."
+    @echo "Running mocked test suite (incl. ruff lint) before creating tag {{version}}..."
+    uv run pytest
+    @echo "Running live test suite before creating tag {{version}}..."
     uv run pytest -m live
     git tag -a "{{version}}" -m "{{version}}"
     @echo "Tag {{version}} created locally. Push with: git push origin {{version}}"

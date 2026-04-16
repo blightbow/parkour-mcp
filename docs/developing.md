@@ -101,8 +101,11 @@ each one is unreachable to vulture.
 ## Cutting a release
 
 Live tests don't run in CI — they need real API endpoints and credentials
-that aren't safe to hand to GitHub Actions. Without a gate, format drift
-could sneak into a tagged release before anyone noticed. Two gates catch it:
+that aren't safe to hand to GitHub Actions. The mocked suite does run in
+CI on tag push (via the `Release` workflow's `uv run pytest` step), but
+catching a mocked-suite regression at tag-push time means a dead tag on
+origin with no release artifact. Two gates catch both classes of failure
+before anything hits a remote:
 
 ### 1. Preemptive: `just tag`
 
@@ -111,24 +114,37 @@ just tag v1.2.3
 git push origin v1.2.3   # still manual, respects the Yubikey workflow
 ```
 
-The recipe runs `pytest -m live` *before* creating the annotated tag. If
-the live suite fails, no tag is created and nothing needs to be cleaned up.
-Push is deliberately left as a separate manual step.
+The recipe runs the mocked suite *first* (fast, ~15 s, includes
+`pytest-ruff` lint across `parkour_mcp/`, `tests/`, and `scripts/`) and
+then the live suite. If either fails, no tag is created and nothing
+needs to be cleaned up. Push is deliberately left as a separate manual
+step.
+
+The mocked run is the same command CI executes on tag push, so anything
+that trips it locally would also fail CI and leave a broken release —
+see the v1.1.1 ruff-E402 regression that the previous "live-only" gate
+missed. Keep both steps in sync with the CI workflow.
 
 ### 2. Safety net: `pre-push` hook
 
 If a `v*` tag is pushed without going through `just tag` — e.g. someone
 creates the tag manually with `git tag` and runs `git push --tags` — the
-`pre-push` hook re-runs the live suite and blocks the push on failure.
-Branch pushes are unaffected; the hook exits immediately without running
-any tests when no version tag is in the push refspec.
+`pre-push` hook re-runs both suites (mocked first, then live) and blocks
+the push on failure. Branch pushes are unaffected; the hook exits
+immediately without running any tests when no version tag is in the push
+refspec.
 
 Requires `just install-hooks` to have been run in this clone.
 
 ### Upstream outages
 
-If live tests fail because an external endpoint is genuinely down (not a
-format regression in our code), `git push --no-verify` bypasses the
-`pre-push` hook. Verify the failure is actually upstream before using that
-escape hatch — the whole point of the gate is to force a deliberate
-override for a broken release.
+If the **live** suite fails because an external endpoint is genuinely
+down (not a format regression in our code), `git push --no-verify`
+bypasses the `pre-push` hook. Verify the failure is actually upstream
+before using that escape hatch — the whole point of the gate is to force
+a deliberate override for a broken release.
+
+Do **not** use `--no-verify` to skip a **mocked** suite failure. Those
+are the same tests CI runs; bypassing the hook just produces a dead tag
+on origin with no PyPI artifact and no GitHub Release. Fix the
+underlying issue locally instead.

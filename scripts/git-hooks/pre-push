@@ -1,11 +1,17 @@
 #!/usr/bin/env bash
-# Pre-push hook: block version tag pushes unless the live test suite passes.
+# Pre-push hook: block version tag pushes unless both the mocked and live
+# test suites pass.
+#
+# The mocked suite (default `pytest` run) covers pytest-ruff lint across
+# parkour_mcp/, tests/, and scripts/, plus the offline unit suite.  It's
+# the exact step CI runs on tag push — skipping it locally let a ruff E402
+# regression in scripts/regenerate_readme_examples.py escape to v1.1.1.
 #
 # Live tests hit real endpoints, so they can't run unattended in CI without
-# credentials. Running them at tag-push time is our stand-in: format drift
+# credentials.  Running them at tag-push time is our stand-in: format drift
 # that would otherwise escape to a release gets caught at the last moment.
 #
-# Only engages when a refs/tags/v* ref is being pushed. Regular branch pushes
+# Only engages when a refs/tags/v* ref is being pushed.  Regular branch pushes
 # are unaffected and pay no latency cost.
 #
 # Git passes refs on stdin in the format:
@@ -31,10 +37,27 @@ if [[ "$pushing_version_tag" -eq 0 ]]; then
 fi
 
 echo "pre-push: version tag(s) detected: ${tag_names[*]}"
-echo "pre-push: running live test suite before allowing tag push..."
 echo
 
 repo_root="$(git rev-parse --show-toplevel)"
+
+# Mocked suite runs first — fast (~15 s), catches ruff/format regressions
+# that CI's default `uv run pytest` would also fail on.
+echo "pre-push: running mocked test suite (incl. ruff lint)..."
+if ! uv run --directory "$repo_root" pytest --tb=short; then
+    echo
+    echo "pre-push: MOCKED TESTS FAILED — refusing to push version tag"
+    echo "pre-push:"
+    echo "pre-push: These are the same tests CI runs on tag push.  Fix them"
+    echo "pre-push: locally instead of bypassing the hook — a tag that fails"
+    echo "pre-push: this step produces a broken release with no PyPI artifact"
+    echo "pre-push: and no GitHub Release."
+    exit 1
+fi
+
+echo
+echo "pre-push: mocked suite passed — running live test suite..."
+echo
 if uv run --directory "$repo_root" pytest -m live --tb=short; then
     echo
     echo "pre-push: live tests passed — tag push allowed"
