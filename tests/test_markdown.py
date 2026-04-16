@@ -244,6 +244,42 @@ class TestCleanHeadings:
         sections = _extract_sections_from_markdown(markdown)
         assert sections[0]["name"] == "1 Introduction"
 
+    def test_strips_permalink_with_escaped_parens_in_href(self):
+        """WHATWG headings whose ``id=`` attribute contains literal
+        parentheses (``id="attribute-value-(double-quoted)-state"``)
+        come through htmd as a self-link whose markdown URL has
+        backslash-escaped parens — ``[](#…\\(double-quoted\\)-state)``.
+        The naive ``[^)]*`` regex stopped at the first ``\\)`` inside
+        the URL and left ``-state)`` trailing in the heading text,
+        which then doubled through the slug as
+        ``#…-state-state``.
+
+        Fix: the URL-portion regex respects backslash-escaped parens.
+        Caught in Claude Desktop UAT against WHATWG's tokenizer
+        algorithm headings (``13.2.5.36`` onward).
+        """
+        html = (
+            '<html><body>'
+            '<h5 id="attribute-value-(double-quoted)-state">'
+            '<span class="secno">13.2.5.36</span> '
+            '<dfn>Attribute value (double-quoted) state</dfn>'
+            '<a href="#attribute-value-(double-quoted)-state" '
+            'class="self-link"></a>'
+            '</h5>'
+            '<p>Content.</p>'
+            '</body></html>'
+        )
+        _, markdown = html_to_markdown(html)
+        sections = _extract_sections_from_markdown(markdown)
+        assert len(sections) == 1
+        name = sections[0]["name"]
+        # No dangling "-state)" or repeated token
+        assert name == "13.2.5.36 Attribute value (double-quoted) state"
+        # Derived slug should have a single "-state", not "-state-state"
+        assert _slugify(name) == (
+            "13-2-5-36-attribute-value-double-quoted-state"
+        )
+
 
 class TestHtmlTitleExtraction:
     """Title resolution ladder inside html_to_markdown."""
@@ -543,6 +579,93 @@ class TestFilterMarkdownBySections:
         )
         assert unmatched == ["gamma-delta"]
         assert meta == []
+
+    # --- Section-number prefix stripping (WHATWG / ECMAScript / C++ spec) ---
+    #
+    # Spec documents render a ``<span class="secno">13.2.6</span>``
+    # before the heading title; the full stored name becomes something
+    # like ``"13.2.6 Tree construction"``.  Callers typically refer to
+    # sections by the descriptive part alone — either as the full
+    # visible text (``"Tree construction"``) or as the slug
+    # (``"tree-construction"``, e.g. copied from a URL fragment).  The
+    # matcher registers both the full name and the number-stripped
+    # variants so all three styles resolve.
+
+    def test_section_matches_without_number_prefix(self):
+        """``section="Tree construction"`` must match
+        ``"13.2.6 Tree construction"``."""
+        md_text = (
+            "# Doc\n\n"
+            "## 13.2 Parsing HTML documents\n\nParent body.\n\n"
+            "### 13.2.6 Tree construction\n\nTree body.\n"
+        )
+        sections = _extract_sections_from_markdown(md_text)
+        filtered, meta, unmatched = _filter_markdown_by_sections(
+            md_text, ["Tree construction"], sections
+        )
+        assert unmatched == []
+        assert "Tree body" in filtered
+        assert meta[0]["name"] == "13.2.6 Tree construction"
+
+    def test_section_matches_by_stripped_slug(self):
+        """``section="tree-construction"`` (bare slug) must match the
+        number-stripped form of ``"13.2.6 Tree construction"``."""
+        md_text = (
+            "# Doc\n\n"
+            "## 13.2 Parsing HTML documents\n\nParent body.\n\n"
+            "### 13.2.6 Tree construction\n\nTree body.\n"
+        )
+        sections = _extract_sections_from_markdown(md_text)
+        filtered, meta, unmatched = _filter_markdown_by_sections(
+            md_text, ["tree-construction"], sections
+        )
+        assert unmatched == []
+        assert "Tree body" in filtered
+        assert meta[0]["name"] == "13.2.6 Tree construction"
+        # Fragment metadata shows what the caller typed
+        assert meta[0]["matched_fragment"] == "tree-construction"
+
+    def test_full_numbered_name_still_matches(self):
+        """Regression: the existing path (full name including section
+        number) must keep working alongside the new alternates."""
+        md_text = (
+            "# Doc\n\n"
+            "## 13.2 Parsing HTML documents\n\nParent body.\n\n"
+            "### 13.2.6 Tree construction\n\nTree body.\n"
+        )
+        sections = _extract_sections_from_markdown(md_text)
+        filtered, meta, unmatched = _filter_markdown_by_sections(
+            md_text, ["13.2.6 Tree construction"], sections
+        )
+        assert unmatched == []
+        assert "Tree body" in filtered
+        # Exact-name match does not set matched_fragment
+        assert "matched_fragment" not in meta[0]
+
+    def test_stripped_collision_first_wins(self):
+        """When two sections number-strip to the same title,
+        ``setdefault`` means the first registered section resolves the
+        ambiguous request.  Callers that need the later section can
+        still match via the full numbered name."""
+        md_text = (
+            "# Doc\n\n"
+            "## 1 Overview\n\nFirst overview.\n\n"
+            "## 2 Overview\n\nSecond overview.\n"
+        )
+        sections = _extract_sections_from_markdown(md_text)
+        filtered, meta, unmatched = _filter_markdown_by_sections(
+            md_text, ["Overview"], sections
+        )
+        assert unmatched == []
+        # First section wins on the ambiguous stripped name
+        assert meta[0]["name"] == "1 Overview"
+        assert "First overview" in filtered
+
+        # The caller can still reach the second section via the full name
+        _filt2, meta2, _ = _filter_markdown_by_sections(
+            md_text, ["2 Overview"], sections
+        )
+        assert meta2[0]["name"] == "2 Overview"
 
 
 # --- _build_section_list with slugs ---

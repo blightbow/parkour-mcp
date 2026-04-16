@@ -103,8 +103,18 @@ _HEADING_MD_CODE = re.compile(r"`([^`]+)`")
 # section name includes the anchor syntax and section-by-name matching
 # in ``_filter_markdown_by_sections`` fails because callers type the
 # human-visible heading text, not the permalink.
-_HEADING_MD_LINK = re.compile(r"\[([^\]]*)\]\([^)]*\)")
-_HEADING_MD_IMAGE = re.compile(r"!\[([^\]]*)\]\([^)]*\)")
+#
+# URL portion uses ``(?:\\[()]|[^()])*`` instead of ``[^)]*`` so escaped
+# parens (``\(`` and ``\)``) are honored as literals rather than closing
+# the URL.  htmd correctly escapes parens per CommonMark when the
+# source ``<a href>`` contains them — WHATWG's self-links like
+# ``href="#attribute-value-(double-quoted)-state"`` come out as
+# ``[](#attribute-value-\(double-quoted\)-state)``.  The naive
+# ``[^)]*`` regex stopped at the first ``\)``, leaving ``-state)`` in
+# the heading text and producing doubled segments in derived slugs
+# (e.g. ``#attribute-value-double-quoted-state-state``).
+_HEADING_MD_LINK = re.compile(r"\[([^\]]*)\]\((?:\\[()]|[^()])*\)")
+_HEADING_MD_IMAGE = re.compile(r"!\[([^\]]*)\]\((?:\\[()]|[^()])*\)")
 
 
 def _strip_heading_markdown(text: str) -> str:
@@ -481,6 +491,24 @@ def _slugify(text: str) -> str:
     return _SLUG_NON_ALNUM_RE.sub('-', text.lower()).strip('-')
 
 
+# Matches a leading section-number token: one or more dot-separated
+# runs of digits followed by whitespace.  Examples: "13 ", "13.2 ",
+# "13.2.6 ".  Spec documents (WHATWG, ECMAScript, C++ draft, etc.)
+# render section numbers as prose inside the heading text via
+# ``<span class="secno">…</span>`` — humans refer to these sections by
+# name alone, so we register both ``"13.2.6 Tree construction"`` and
+# ``"Tree construction"`` (plus their slugs) in the section lookup.
+_SECTION_NUMBER_PREFIX_RE = re.compile(r"^\d+(?:\.\d+)*\s+")
+
+
+def _strip_section_number(name: str) -> str:
+    """Return *name* with a leading section-number token removed.
+
+    If no leading number pattern is present, returns *name* unchanged.
+    """
+    return _SECTION_NUMBER_PREFIX_RE.sub("", name, count=1)
+
+
 def _extract_sections_from_markdown(markdown: str) -> list[dict]:
     """Extract section headings from markdown text.
 
@@ -676,19 +704,40 @@ def _filter_markdown_by_sections(
             current = parent
         return " > ".join(path)
 
-    # Map display names and raw names to section indices
+    # Map display names and raw names to section indices.  Also register
+    # the name with a leading section-number token stripped (e.g.
+    # "Tree construction" alongside "13.2.6 Tree construction") so
+    # callers can refer to spec sections by their human-readable title
+    # alone.  ``setdefault`` means the first section whose stripped
+    # form produces a given key wins — subsequent collisions are
+    # resolvable via the disambiguated display name or the explicit
+    # full name.
     display_to_idx: dict[str, int] = {}
     for i in range(len(sections)):
+        name = sections[i]["name"]
         display_to_idx[_get_display_name(i)] = i
         # Also map raw name for non-ambiguous sections
-        display_to_idx[sections[i]["name"]] = i
+        display_to_idx.setdefault(name, i)
+        stripped = _strip_section_number(name)
+        if stripped and stripped != name:
+            display_to_idx.setdefault(stripped, i)
 
-    # Slug lookup: maps slugified heading text to section index
+    # Slug lookup: maps slugified heading text to section index.  Same
+    # number-stripping treatment so ``section=tree-construction`` (the
+    # bare slug a caller might copy out of a URL fragment or build from
+    # the human-readable name) resolves against
+    # ``13.2.6 Tree construction``.
     slug_to_idx: dict[str, int] = {}
     for i in range(len(sections)):
-        slug = _slugify(sections[i]["name"])
+        name = sections[i]["name"]
+        slug = _slugify(name)
         if slug:
             slug_to_idx.setdefault(slug, i)
+        stripped = _strip_section_number(name)
+        if stripped and stripped != name:
+            stripped_slug = _slugify(stripped)
+            if stripped_slug:
+                slug_to_idx.setdefault(stripped_slug, i)
 
     def _has_subsections(idx: int) -> bool:
         """Check if the section at idx has child sections (deeper level)."""
