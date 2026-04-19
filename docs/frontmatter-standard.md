@@ -490,7 +490,7 @@ relationship chains and subseries metadata.
 | `source`         | GitHub project URL |
 | `api`            | `deps.dev` |
 | `action`         | `project` |
-| `openssf_scorecard`| OpenSSF Scorecard overall score (e.g. `8.2/10`). Higher is better; see scorecard.dev for check definitions. (conditional) |
+| `openssf_scorecard`| OpenSSF Scorecard overall score with assessment date, e.g. `7.2/10 (@ 2026-03-23)`. Higher is better. `@` denotes "assessed at"; the date is ISO-8601 (YYYY-MM-DD) and lets the caller weigh recency alongside the score. Date clause is omitted if upstream omits it. See scorecard.dev for check definitions. (conditional) |
 | `hint`           | Guidance to use GitHub tool for README/issues |
 
 **`advisory` action:**
@@ -515,7 +515,7 @@ package contributors and are potential injection vectors.
 | `source` | GitHub repo URL |
 | `api`    | `GitHub` |
 | `hint`   | README truncation drill-in guidance, and/or issue-template steering (when `.github/ISSUE_TEMPLATE/` exists, pointing at the `issue_templates` action). Rendered as a YAML list when both apply. |
-| `openssf_scorecard` | OpenSSF Scorecard overall score (e.g. `7.4/10`). Higher is better. Sourced from api.securityscorecards.dev; absent when the repo has not been scanned. (conditional) |
+| `openssf_scorecard` | OpenSSF Scorecard overall score with assessment date, e.g. `7.4/10 (@ 2026-04-13)`. Higher is better. `@` denotes "assessed at"; the date is ISO-8601 (YYYY-MM-DD) so the caller can weigh recency alongside the score. Sourced from deps.dev (ingests OpenSSF's weekly public cron scan, not the stale opt-in webapp at api.securityscorecards.dev); absent when deps.dev has no scorecard entry. Date clause is omitted if upstream omits it. (conditional) |
 | `see_also` | Points at the Packages `project` action for the per-check OpenSSF Scorecard breakdown (conditional; paired with `openssf_scorecard`) |
 | `shelf`  | Research shelf tracking status (from CITATION.cff or repo metadata) |
 
@@ -552,7 +552,7 @@ directory, merged into the existing `hint` list as needed.
 | `api`      | `GitHub (raw)` |
 | `language` | Detected language from file extension |
 | `truncated`| When file exceeds `max_tokens` |
-| `openssf_scorecard` | OpenSSF Scorecard overall score for the source repo (e.g. `7.4/10`). Higher is better. Surfaces here so an agent about to consume third-party code can weigh trust before use. Absent when the repo has not been scanned. (conditional) |
+| `openssf_scorecard` | OpenSSF Scorecard overall score for the source repo with assessment date, e.g. `7.4/10 (@ 2026-04-13)`. Higher is better. `@` denotes "assessed at"; the date is ISO-8601 (YYYY-MM-DD). Surfaces here so an agent about to consume third-party code can weigh trust and recency before use. Sourced from deps.dev (ingests OpenSSF's weekly public cron scan); absent when deps.dev has no scorecard entry. Date clause is omitted if upstream omits it. (conditional) |
 
 **`search_issues`, `search_repos`, and `search_code` actions:**
 

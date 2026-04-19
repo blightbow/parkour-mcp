@@ -4,9 +4,9 @@ import httpx
 import pytest
 import respx
 
+from parkour_mcp.common import _DEPSDEV_BASE, _depsdev_get
 from parkour_mcp.packages import (
     _cvss_severity,
-    _depsdev_get,
     _encode_name,
     _format_advisory,
     _format_dependencies,
@@ -15,7 +15,6 @@ from parkour_mcp.packages import (
     _format_version,
     _parse_query,
     _resolve_system,
-    _DEPSDEV_BASE,
     packages,
 )
 
@@ -497,8 +496,10 @@ class TestFormatProject:
         result = _format_project(PROJECT_RESPONSE)
         assert "psf/requests" in result
         assert "53,861" in result
-        assert "7.2/10" in result
-        # Weak checks (score 0) should appear
+        # Overall score and assessment date now live in frontmatter, not
+        # the body.  The body still lists weak checks scoring <= 5/10.
+        assert "**Overall score:**" not in result
+        assert "**Assessed:**" not in result
         assert "CII-Best-Practices" in result
         assert "Signed-Releases" in result
 
@@ -619,8 +620,9 @@ class TestPackagesProject:
         )
         result = await packages(action="project", query="github.com/psf/requests")
         assert "---" in result
-        assert "7.2/10" in result
-        assert "openssf_scorecard" in result
+        # Frontmatter carries score and assessment date via the shared
+        # scorecard.format_score helper; body no longer repeats them.
+        assert "openssf_scorecard: 7.2/10 (@ 2026-03-23)" in result
 
     @respx.mock
     @pytest.mark.asyncio

@@ -1,35 +1,37 @@
-"""OpenSSF Scorecard lookups against api.securityscorecards.dev.
+"""OpenSSF Scorecard lookups via Google Open Source Insights (deps.dev).
 
-Thin client used to enrich GitHub repository views with the overall
-Scorecard rating.  The upstream endpoint is unauthenticated, CDN-fronted,
-and returns the same shape deps.dev passes through; see
-``_format_project`` in ``packages.py`` for the richer breakdown variant.
+Thin wrapper that extracts the overall score and assessment date from
+``GET /v3/projects/github.com/{owner}/{repo}`` so ``github.py`` can
+enrich repo and file frontmatter with a compact trust signal.
 
-Kept deliberately small: callers want a single float for frontmatter,
-not the full per-check tree.
+We deliberately do **not** hit ``api.securityscorecards.dev`` directly.
+That endpoint is a CI-upload registry: repos that run the
+``ossf/scorecard-action`` GitHub Action with ``publish_results: true``
+push their own result, but repos that do not are either missing or
+frozen to the last time they ran it.  The direct API returned a
+2022-11-09 snapshot for curl/curl while deps.dev returned 2026-04-06.
+deps.dev ingests OpenSSF's weekly server-side cron scan of the top
+~1M critical projects (published to the ``openssf:scorecardcron``
+BigQuery dataset), so it has far broader, fresher coverage.
+
+Uses the shared ``_depsdev_get`` helper and 1 req/s limiter from
+``common.py`` so Packages and Scorecard tools share one HTTP client
+and politeness gate.
 """
 
 import logging
 
-import httpx
-
-from .common import _API_HEADERS, RateLimiter
+from .common import _DEPSDEV_NOT_FOUND, _depsdev_get
 
 logger = logging.getLogger(__name__)
 
-_SCORECARD_BASE = "https://api.securityscorecards.dev"
 
-# Politeness limiter.  The service advertises no rate limit and is
-# edge-cached, but we keep parity with other sibling clients that all run
-# a 1 req/s gate.
-_scorecard_limiter = RateLimiter(1.0)
-
-# Session-lived lookup cache.  Scorecard results refresh at most weekly
-# upstream, so memoizing within a server process is safe and makes the
+# Session-lived lookup cache.  The BigQuery cron refreshes scorecards
+# weekly, so memoizing within a server process is safe and makes the
 # blob/file enrichment path free on repeat hits against the same repo.
-# A ``None`` entry means "upstream returned no score" and we cache that too
-# so an agent walking a 404 repo doesn't replay the miss on every file.
-_cache: dict[tuple[str, str], float | None] = {}
+# Cache value is ``(score, iso_date) | None``; ``None`` means upstream
+# returned either 404 or a project with no scorecard subfield.
+_cache: dict[tuple[str, str], tuple[float, str] | None] = {}
 
 
 def _reset_cache() -> None:
@@ -37,38 +39,64 @@ def _reset_cache() -> None:
     _cache.clear()
 
 
-async def fetch_overall(owner: str, repo: str) -> float | None:
+async def fetch_overall(owner: str, repo: str) -> tuple[float, str] | None:
     """Return the OpenSSF overall Scorecard score for ``owner/repo``.
 
-    Returns the 0-10 score when the project has been scanned, or ``None``
-    for 404, network error, or malformed response.  Callers use the
-    ``None`` signal to omit the frontmatter key entirely rather than
-    emitting a null / "unknown" placeholder.
+    Returns ``(score, iso_date)`` when deps.dev has a scorecard entry,
+    or ``None`` when it does not (404, missing ``scorecard`` field, or
+    malformed response).  Transient errors (timeout, connection) also
+    return ``None`` but do not populate the cache, so a later retry
+    can succeed.
+
+    The ISO date is the ``YYYY-MM-DD`` prefix of deps.dev's ``date``
+    field; empty string when upstream omits it.  Callers pair the
+    score and date through ``format_score`` for the frontmatter value.
     """
     key = (owner.lower(), repo.lower())
     if key in _cache:
         return _cache[key]
 
-    await _scorecard_limiter.wait()
-    url = f"{_SCORECARD_BASE}/projects/github.com/{owner}/{repo}"
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(url, headers=_API_HEADERS)
-    except (httpx.TimeoutException, httpx.RequestError) as exc:
-        logger.debug("Scorecard fetch failed for %s/%s: %s", owner, repo, exc)
-        return None  # transient: skip cache so a later call can retry
+    # deps.dev requires URL-encoded project IDs; ``/`` in the path
+    # must be percent-encoded or the service returns 404.
+    path = f"/projects/github.com%2F{owner}%2F{repo}"
+    result = await _depsdev_get(path)
 
-    if resp.status_code != 200:
+    if isinstance(result, str):
+        if result == _DEPSDEV_NOT_FOUND:
+            _cache[key] = None
+            return None
+        # Transient error: don't cache so a retry can succeed.
+        logger.debug("Scorecard fetch for %s/%s: %s", owner, repo, result)
+        return None
+
+    scorecard = result.get("scorecard") if isinstance(result, dict) else None
+    if not isinstance(scorecard, dict):
         _cache[key] = None
         return None
 
-    try:
-        data = resp.json()
-    except ValueError:
+    score = scorecard.get("overallScore")
+    if not isinstance(score, (int, float)):
         _cache[key] = None
         return None
 
-    score = data.get("score") if isinstance(data, dict) else None
-    result = float(score) if isinstance(score, (int, float)) else None
-    _cache[key] = result
-    return result
+    raw_date = scorecard.get("date", "")
+    iso_date = raw_date[:10] if isinstance(raw_date, str) else ""
+    cached = (float(score), iso_date)
+    _cache[key] = cached
+    return cached
+
+
+def format_score(score: float, iso_date: str) -> str:
+    """Format a score and ISO date as ``"N/10 (@ YYYY-MM-DD)"``.
+
+    Shared formatter so the GitHub and Packages tools produce an
+    identical ``openssf_scorecard`` value.  The date clause is dropped
+    when *iso_date* is empty (only happens if upstream omits it).
+    ``@`` is shorthand for "assessed at"; the key name plus ISO date
+    makes the relationship unambiguous without the verbose verb and
+    keeps the value compact for the file-read hot path.
+    """
+    base = f"{score:g}/10"
+    if iso_date:
+        return f"{base} (@ {iso_date})"
+    return base

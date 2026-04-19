@@ -110,6 +110,48 @@ class RateLimiter:
 
 
 # ---------------------------------------------------------------------------
+# deps.dev shared client
+# ---------------------------------------------------------------------------
+# The Packages and Scorecard tools both read from Google's Open Source
+# Insights (deps.dev).  One limiter, one fetch helper.  1 req/s is a
+# politeness floor: deps.dev publishes no formal limit, and its ToS
+# defers to "reasonable" use.
+
+_DEPSDEV_BASE = "https://api.deps.dev/v3"
+_DEPSDEV_NOT_FOUND = "Error: Not found on deps.dev."
+_depsdev_limiter = RateLimiter(1.0)
+
+
+async def _depsdev_get(path: str) -> dict | str:
+    """GET a deps.dev API path.  Returns parsed JSON or an error string.
+
+    Callers distinguishing 404 from other errors should compare against
+    ``_DEPSDEV_NOT_FOUND`` rather than matching a free-form substring.
+    """
+    await _depsdev_limiter.wait()
+    url = f"{_DEPSDEV_BASE}{path}"
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(url, headers=_API_HEADERS)
+    except httpx.TimeoutException:
+        return "Error: deps.dev API request timed out."
+    except httpx.RequestError as exc:
+        return f"Error: deps.dev API request failed: {type(exc).__name__}"
+
+    if resp.status_code == 200:
+        try:
+            data = resp.json()
+        except ValueError:
+            return "Error: Unexpected response format from deps.dev."
+        if not isinstance(data, dict):
+            return "Error: Unexpected response format from deps.dev."
+        return data
+    if resp.status_code == 404:
+        return _DEPSDEV_NOT_FOUND
+    return f"Error: deps.dev API returned HTTP {resp.status_code}."
+
+
+# ---------------------------------------------------------------------------
 # SSRF protection
 # ---------------------------------------------------------------------------
 

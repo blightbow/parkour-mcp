@@ -32,6 +32,7 @@ from .markdown import (
     _TRUST_ADVISORY,
 )
 from .scorecard import fetch_overall as _fetch_scorecard_overall
+from .scorecard import format_score as _format_scorecard
 
 logger = logging.getLogger(__name__)
 
@@ -1714,7 +1715,7 @@ async def _action_repo(query: str) -> str:
     # check; the rich payload lives in the dedicated ``issue_templates``
     # action. The Scorecard call degrades silently; many repos are not
     # scanned and the enrichment is strictly additive.
-    readme_result, citation_cff, template_hint, scorecard_score = await asyncio.gather(
+    readme_result, citation_cff, template_hint, scorecard_data = await asyncio.gather(
         _github_request("GET", f"/repos/{owner}/{repo}/readme"),
         _fetch_citation_cff(owner, repo, default_branch),
         _maybe_issue_template_hint(owner, repo),
@@ -1749,8 +1750,8 @@ async def _action_repo(query: str) -> str:
             )
     fm_entries.append("hint", template_hint)
 
-    if scorecard_score is not None:
-        fm_entries["openssf_scorecard"] = f"{scorecard_score:g}/10"
+    if scorecard_data is not None:
+        fm_entries["openssf_scorecard"] = _format_scorecard(*scorecard_data)
         fm_entries.append(
             "see_also",
             f"{tool_name('packages')}(action=project, "
@@ -2180,7 +2181,7 @@ async def _action_file(
         except httpx.RequestError as e:
             return f"Error: Request failed - {type(e).__name__}"
 
-    response, scorecard_score = await asyncio.gather(
+    response, scorecard_data = await asyncio.gather(
         _fetch_raw(),
         _fetch_scorecard_overall(owner, repo),
     )
@@ -2218,8 +2219,8 @@ async def _action_file(
         fm_entries["language"] = lang
     if truncated:
         fm_entries["truncated"] = f"Content truncated to ~{max_tokens} tokens"
-    if scorecard_score is not None:
-        fm_entries["openssf_scorecard"] = f"{scorecard_score:g}/10"
+    if scorecard_data is not None:
+        fm_entries["openssf_scorecard"] = _format_scorecard(*scorecard_data)
     fm = _build_frontmatter(fm_entries)
 
     # Add line numbers

@@ -13,19 +13,21 @@ import logging
 from typing import Annotated, Optional
 from urllib.parse import quote
 
-import httpx
 from pydantic import Field
 
-from .common import _API_HEADERS, RateLimiter, tool_name
+from .common import _depsdev_get, tool_name
 from .markdown import _build_frontmatter, _fence_content
+from .scorecard import format_score as _format_scorecard
 
 logger = logging.getLogger(__name__)
+
+# The deps.dev HTTP client, rate limiter, base URL, and 404 sentinel
+# live in ``common.py`` so ``scorecard.py`` and this module share one
+# client and limiter.
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-
-_DEPSDEV_BASE = "https://api.deps.dev/v3"
 
 # Friendly ecosystem names → deps.dev system enum values.
 _SYSTEM_ALIASES: dict[str, str] = {
@@ -55,39 +57,6 @@ _SYSTEM_LABELS: dict[str, str] = {
 }
 
 _MAX_VERSIONS = 20
-
-# ---------------------------------------------------------------------------
-# Rate limiter — 1 req/sec politeness (no documented limit, Google API ToS)
-# ---------------------------------------------------------------------------
-
-_depsdev_limiter = RateLimiter(1.0)
-
-# ---------------------------------------------------------------------------
-# HTTP client
-# ---------------------------------------------------------------------------
-
-
-async def _depsdev_get(path: str) -> dict | str:
-    """GET a deps.dev API path.  Returns parsed JSON or an error string."""
-    await _depsdev_limiter.wait()
-    url = f"{_DEPSDEV_BASE}{path}"
-    try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.get(url, headers=_API_HEADERS)
-    except httpx.TimeoutException:
-        return "Error: deps.dev API request timed out."
-    except httpx.RequestError as exc:
-        return f"Error: deps.dev API request failed — {type(exc).__name__}"
-
-    if resp.status_code == 200:
-        data = resp.json()
-        # API always returns objects for our endpoints; guard against arrays
-        if not isinstance(data, dict):
-            return "Error: Unexpected response format from deps.dev."
-        return data
-    if resp.status_code == 404:
-        return "Error: Not found on deps.dev."
-    return f"Error: deps.dev API returned HTTP {resp.status_code}."
 
 
 # ---------------------------------------------------------------------------
@@ -415,19 +384,14 @@ def _format_project(proj_data: dict) -> str:
         lines.append(f"**License:** {license_}")
     lines.append("")
 
-    # OpenSSF Scorecard
+    # OpenSSF Scorecard: overall score and assessment date live in
+    # frontmatter via ``openssf_scorecard`` (see _action_project).  The
+    # body carries the per-check breakdown only.
     scorecard = proj_data.get("scorecard")
     if scorecard:
-        overall = scorecard.get("overallScore")
         checks = scorecard.get("checks") or []
-        sc_date = scorecard.get("date", "")[:10]
 
         lines.append("## OpenSSF Scorecard\n")
-        if overall is not None:
-            lines.append(f"**Overall score:** {overall}/10")
-        if sc_date:
-            lines.append(f"**Assessed:** {sc_date}")
-        lines.append("")
 
         # Show checks scoring <=5 (weak spots)
         weak = [c for c in checks if isinstance(c.get("score"), (int, float)) and c["score"] <= 5 and c["score"] >= 0]
@@ -676,9 +640,19 @@ async def _action_project(query: str) -> str:
 
     body = _format_project(proj)
 
-    # Extract scorecard score for frontmatter
-    scorecard = proj.get("scorecard")
-    sc_score = scorecard.get("overallScore") if scorecard else None
+    # Extract scorecard score and assessment date for frontmatter.  The
+    # formatted value is ``"N/10 (@ YYYY-MM-DD)"`` via the shared
+    # scorecard.format_score helper, so the Packages and GitHub tools
+    # render the same freshness signal against the same backing data.
+    scorecard = proj.get("scorecard") or {}
+    sc_score = scorecard.get("overallScore")
+    sc_date = scorecard.get("date", "")
+    sc_date = sc_date[:10] if isinstance(sc_date, str) else ""
+
+    if isinstance(sc_score, (int, float)):
+        openssf_value = _format_scorecard(float(sc_score), sc_date)
+    else:
+        openssf_value = None
 
     # Build source URL
     source_url = None
@@ -689,7 +663,7 @@ async def _action_project(query: str) -> str:
         "source": source_url,
         "api": "deps.dev",
         "action": "project",
-        "openssf_scorecard": f"{sc_score}/10" if sc_score is not None else None,
+        "openssf_scorecard": openssf_value,
         "hint": f"Use {tool_name('github')} tool for repo README, issues, and code search",
     })
 

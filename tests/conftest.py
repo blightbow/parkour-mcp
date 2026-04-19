@@ -32,6 +32,9 @@ _ietf_mod = sys.modules["parkour_mcp.ietf"]
 import parkour_mcp.packages  # noqa: E402, F401
 _packages_mod = sys.modules["parkour_mcp.packages"]
 
+import parkour_mcp.common  # noqa: E402, F401
+_common_mod = sys.modules["parkour_mcp.common"]
+
 import parkour_mcp.discourse  # noqa: E402, F401
 _discourse_mod = sys.modules["parkour_mcp.discourse"]
 
@@ -157,7 +160,6 @@ def _stub_scorecard_for_github(monkeypatch):
         return None
 
     monkeypatch.setattr(_github_mod, "_fetch_scorecard_overall", _no_score)
-    monkeypatch.setattr(_scorecard_mod._scorecard_limiter, "min_interval", 0.0)
     _scorecard_mod._reset_cache()
 
 
@@ -169,8 +171,12 @@ def _disable_ietf_rate_limit(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _disable_depsdev_rate_limit(monkeypatch):
-    """Disable the 1s deps.dev rate limiter in unit tests."""
-    monkeypatch.setattr(_packages_mod._depsdev_limiter, "min_interval", 0.0)
+    """Disable the 1s deps.dev rate limiter in unit tests.
+
+    The limiter lives in ``common.py`` (shared between Packages and
+    Scorecard); monkeypatch against the canonical location.
+    """
+    monkeypatch.setattr(_common_mod._depsdev_limiter, "min_interval", 0.0)
 
 
 @pytest.fixture(autouse=True)
