@@ -1,0 +1,45 @@
+# Flag plain-dict construction of frontmatter-entries variables.
+#
+# FMEntries (markdown.py) is a runtime guard that blocks direct writes
+# to multi-contributor keys (hint, warning, note, see_also, alert).
+# A plain dict bypasses the guard entirely — any site that does
+# `fm_entries = {...}` instead of `fm_entries = FMEntries({...})` is a
+# regression vector for the clobber bug that motivated the guard.
+#
+# This rule catches construction sites.  Post-construction mutation is
+# already blocked at runtime by FMEntries itself; the rule covers the
+# one hole: constructing with the wrong type.
+#
+# Allow:
+#   fm_entries = FMEntries({...})
+#   _fm_base(...)            # factory that returns FMEntries
+#   fm_entries = FMEntries()
+#
+# Flag:
+#   fm_entries = {...}
+#   fm_entries: dict = {...}
+#   fm_base = {...}
+
+rules:
+  - id: fm-entries-must-use-FMEntries
+    languages: [python]
+    severity: ERROR
+    message: >-
+      Plain-dict construction of a frontmatter-entries variable bypasses
+      the runtime guard on multi-contributor keys.  Wrap in FMEntries(...)
+      so writes to 'hint'/'warning'/'note'/'see_also'/'alert' go through
+      the .append() path.  See markdown.py::FMEntries for context.
+    paths:
+      include:
+        - "/parkour_mcp/*.py"
+    patterns:
+      - pattern-either:
+          - pattern: |
+              $VAR = { ... }
+          - pattern: |
+              $VAR: dict = { ... }
+          - pattern: |
+              $VAR: dict[str, $T] = { ... }
+      - metavariable-regex:
+          metavariable: $VAR
+          regex: ^(fm_entries|fm_base|fm|frontmatter_entries|extra_fm|extra_entries)$

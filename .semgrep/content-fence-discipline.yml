@@ -1,0 +1,34 @@
+# Flag hand-rolled content fences.
+#
+# _fence_content() (markdown.py) is the sole sanctioned producer of
+# the ┌─/└─/│ content-fence markers.  It inserts separator lines
+# inside both fence boundaries — a datamarking defense that prevents
+# attacker-supplied fence markers in untrusted content from visually
+# connecting to the real delimiters (see frontmatter-standard.md
+# 'Content Fencing').  A hand-rolled fence would omit that protection
+# and downgrade the trust boundary.
+#
+# Flag any string literal containing ┌─ or └─ outside a _fence_content
+# definition (markdown.py itself is excluded since that's where the
+# function lives).
+
+rules:
+  - id: content-fence-via-helper-only
+    languages: [python]
+    severity: ERROR
+    message: >-
+      Hand-rolled content fence marker detected.  Use _fence_content()
+      from markdown.py instead — it inserts boundary separator lines
+      that prevent attacker-supplied fence markers in the untrusted
+      payload from visually escaping the fence (datamarking defense,
+      see frontmatter-standard.md 'Content Fencing' §Separator lines).
+    paths:
+      include:
+        - "/parkour_mcp/*.py"
+      exclude:
+        - "/parkour_mcp/markdown.py"
+    pattern-either:
+      - pattern: |
+          "...┌─..."
+      - pattern: |
+          "...└─..."

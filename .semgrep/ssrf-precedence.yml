@@ -1,0 +1,39 @@
+# Flag outbound HTTP fetches that aren't preceded by the SSRF guard.
+#
+# docs/frontmatter-standard.md "SSRF Protection": every outbound HTTP
+# fetch in the generic pipeline must be guarded by check_url_ssrf()
+# before the request goes out.  Commit 28a22fd closed a real bypass
+# where a fast-path's URL pattern triggered an HTTP probe to a private
+# AWS metadata endpoint before SSRF validation ran.
+#
+# This rule flags guarded_fetch() and direct httpx calls on a URL that
+# doesn't have a same-function check_url_ssrf call before it.  Tests
+# and scripts are out of scope (they fetch against mocked or explicit
+# local endpoints).
+
+rules:
+  - id: ssrf-check-precedes-outbound-fetch
+    languages: [python]
+    severity: ERROR
+    message: >-
+      Outbound HTTP fetch without a preceding check_url_ssrf() in the
+      same function.  Any URL that reaches guarded_fetch/httpx must
+      first pass SSRF validation (see docs/frontmatter-standard.md
+      'SSRF Protection' and commit 28a22fd for the real bypass this
+      catches).  If the URL was already validated upstream, move the
+      fetch into a private helper that asserts that contract.
+    paths:
+      include:
+        - "/parkour_mcp/fetch_direct.py"
+        - "/parkour_mcp/fetch_js.py"
+    patterns:
+      - pattern-either:
+          - pattern: guarded_fetch($URL, ...)
+          - pattern: httpx.get($URL, ...)
+          - pattern: httpx.AsyncClient(...).get($URL, ...)
+      - pattern-not-inside: |
+          $SSRF_ERROR = check_url_ssrf($URL)
+          ...
+      - pattern-not-inside: |
+          check_url_ssrf($URL)
+          ...

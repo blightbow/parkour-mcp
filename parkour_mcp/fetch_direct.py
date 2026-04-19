@@ -469,7 +469,9 @@ async def _github_sections(
                 headers["Authorization"] = f"token {token}"
 
             try:
-                resp = await guarded_fetch(
+                # raw_url is f-string constructed against hardcoded
+                # raw.githubusercontent.com — host not user-controlled.
+                resp = await guarded_fetch(  # nosemgrep: ssrf-check-precedes-outbound-fetch
                     raw_url, headers=headers, max_bytes=None,
                 )
                 if resp.status_code != 200:
