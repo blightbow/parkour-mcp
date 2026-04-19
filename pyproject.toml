@@ -102,12 +102,98 @@ exclude = [".vulture_whitelist.py"]
 
 [dependency-groups]
 dev = [
+    "commitizen>=4.10",
     "fonttools>=4.62",
     "pytest>=9.0.2",
     "pytest-asyncio>=1.3.0",
     "pytest-ruff>=0.5",
     "respx>=0.22.0",
     "semgrep>=1.159.0",
+    "towncrier>=24.8",
     "tree-sitter-python>=0.23",
     "vulture>=2.16",
 ]
+
+# ---------------------------------------------------------------------------
+# Release tooling.
+#
+# towncrier owns CHANGELOG.md. Each user-facing change lands with a news
+# fragment in changes/ (orphan naming, e.g. `+abc.feature.md`) so rebases
+# don't conflict on issue-number filenames. At release time, `towncrier
+# build` consumes the fragments and prepends a new `## [X.Y.Z]` section
+# to CHANGELOG.md at the <!-- towncrier release notes start --> marker.
+#
+# commitizen owns version determination from Conventional Commits.
+# `cz bump` reads `project.version` (pep621 provider), computes the next
+# PEP 440 version (pep440 scheme, critical for PyPI compatibility on
+# both finals and RCs), and writes it back. The release slash command
+# chains: cz bump --version-files-only (stage pyproject bump)
+# -> towncrier build (assemble CHANGELOG, consume fragments)
+# -> sync_versions.py (mirror pyproject version into manifest.json
+#    translated to strict SemVer, and server.json verbatim)
+# -> git commit + just tag (test gate + annotated tag at HEAD).
+# PyPI upload and GitHub Release creation stay in CI on tag push.
+# ---------------------------------------------------------------------------
+
+[tool.towncrier]
+package = "parkour_mcp"
+filename = "CHANGELOG.md"
+directory = "changes"
+start_string = "<!-- towncrier release notes start -->\n"
+title_format = "## [{version}] {project_date}"
+issue_format = "[#{issue}](https://github.com/blightbow/parkour-mcp/issues/{issue})"
+underlines = ["", "", ""]
+wrap = true
+orphan_prefix = "+"
+
+[[tool.towncrier.type]]
+directory = "feature"
+name = "Added"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "changed"
+name = "Changed"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "bugfix"
+name = "Fixed"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "removal"
+name = "Removed"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "security"
+name = "Security"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "doc"
+name = "Documentation"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "misc"
+name = "Miscellaneous"
+showcontent = true
+
+[tool.commitizen]
+name = "cz_conventional_commits"
+# pep621 provider reads `project.version` from pyproject.toml (single
+# source of truth). sync_versions.py fans the value out to manifest.json
+# (PEP 440 -> strict SemVer for Claude Desktop) and server.json (verbatim).
+version_provider = "pep621"
+# pep440 scheme is the reason we chose commitizen over python-semantic-
+# release: it emits PEP 440 versions (including correct RC form like
+# `1.2.0rc1`) instead of SemVer-with-dashes that would break `uv build`.
+version_scheme = "pep440"
+tag_format = "v$version"
+bump_message = "release: v$new_version"
+# towncrier owns CHANGELOG.md. commitizen's own changelog generator
+# would produce a conflicting format, so keep it off.
+update_changelog_on_bump = false
+major_version_zero = false

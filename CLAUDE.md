@@ -24,6 +24,9 @@ uv run python3 scripts/regenerate_readme_examples.py
 
 # Pack Claude Desktop Extension bundle
 just pack
+
+# Preview next release (version + CHANGELOG entry), no writes
+just release-preview
 ```
 
 ## Architecture
@@ -87,6 +90,50 @@ API integration modules (each ~300-650 LOC, self-contained):
 - `test_live.py` contains integration tests deselected by default; run with `-m live`.
 - Each test module maps to its source module (e.g., `test_arxiv.py` → `arxiv.py`).
 - `scripts/regenerate_readme_examples.py` regenerates README example outputs. Most examples hit live endpoints; Reddit examples use `respx`-mocked fixtures for deterministic, offline output. Run after changing tool output format to keep examples current.
+
+## Release process
+
+Releases use **towncrier** for CHANGELOG assembly and **commitizen** for version bumping from Conventional Commits. Local flow is driven by the `/release` slash command in `.claude/commands/release.md`; CI (`.github/workflows/release.yml`) handles build + publish on tag push.
+
+### Why: commit trailers
+
+Every `feat:`, `fix:`, `refactor:`, and `perf:` commit should include a `Why:` trailer stating user-visible impact in one sentence. The trailer is the source of truth for the corresponding news fragment, and the fragment is what lands in `CHANGELOG.md`. Example:
+
+```
+fix(pipeline): surface tantivy parse warnings in search frontmatter
+
+Tantivy emits structured warnings for malformed query syntax but the
+pipeline was discarding them, leaving callers with zero-result searches
+and no hint why.
+
+Why: queries with unsupported operators now report the parse error in
+  the response frontmatter instead of returning empty.
+```
+
+`chore:`, `docs:`, `test:`, `style:`, `build:`, `ci:`, `revert:` do not need `Why:` and typically do not need a news fragment.
+
+### News fragments
+
+Add a fragment in `changes/` for every `feat:`/`fix:`/`refactor:`/`perf:` change. Use the orphan naming form so rebases never conflict:
+
+```
++<slug>.<type>.md
+```
+
+Types: `feature`, `changed`, `bugfix`, `removal`, `security`, `doc`, `misc`. Write the fragment for the *caller* of the tool, not the commit author. See `changes/README.md` for guidance and examples.
+
+### Version file discipline
+
+`pyproject.toml:project.version` is the single source of truth (PEP 440). `scripts/sync_versions.py` mirrors it to:
+
+- `manifest.json:version` translated to strict SemVer 2.0 (Claude Desktop rejects PEP 440 pre-release forms). `1.2.0rc1` becomes `1.2.0-rc.1`.
+- `server.json:version` verbatim (MCP Registry accepts PEP 440).
+
+**Do not hand-edit manifest.json or server.json version fields.** The sync script is the single writer. `just tag` runs `sync_versions.py --check` as a pre-push gate and the CI workflow re-runs it before doing anything else.
+
+### Pre-releases
+
+Public RCs are supported end-to-end. commitizen's `version_scheme = "pep440"` emits forms like `1.2.0rc1` that `uv build` and PyPI accept, and `sync_versions.py` translates those to strict SemVer (`1.2.0-rc.1`) in `manifest.json` for Claude Desktop. To cut an RC, the `/release` slash command accepts an explicit opt-in and passes `--prerelease rc` to `cz bump`.
 
 ## Conventions
 

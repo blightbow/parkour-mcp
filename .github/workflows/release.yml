@@ -36,13 +36,18 @@ jobs:
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
 
-      - name: Verify tag matches package version
+      - name: Verify tag matches pyproject and version files are in sync
+        # The tag's numeric suffix must match pyproject.toml. sync_versions.py
+        # then verifies that manifest.json (strict SemVer, translated from
+        # PEP 440) and server.json (PEP 440 verbatim) agree with pyproject.
+        # Drift here means a hand-edit slipped past the local `just tag` gate.
         run: |
           pkg=$(uv run python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
           if [ "${{ steps.version.outputs.version }}" != "$pkg" ]; then
             echo "::error::Tag ${{ steps.version.outputs.tag }} does not match pyproject.toml version $pkg"
             exit 1
           fi
+          uv run python3 scripts/sync_versions.py --check
 
       - name: Run tests
         run: uv run pytest
@@ -52,7 +57,7 @@ jobs:
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
-        # Uses OIDC trusted publisher — no token needed.
+        # Uses OIDC trusted publisher, no token needed.
         # Configure at: https://pypi.org/manage/account/publishing/
 
       - name: Pack mcpb bundle
@@ -63,13 +68,21 @@ jobs:
         # Revisit when Anthropic publishes a fix that includes both #195 and #204.
         run: npx --yes @anthropic-ai/mcpb pack . dist/parkour-mcp.mcpb
 
+      - name: Extract release notes from CHANGELOG.md
+        # Body source is the hand-reviewed CHANGELOG.md slice for this
+        # version, not commit-subject paraphrase. Keeps the Release body
+        # aligned with the on-disk changelog that towncrier assembled and
+        # the maintainer (and Claude, at /release time) reviewed.
+        run: |
+          uv run python3 scripts/extract_changelog.py "${{ steps.version.outputs.version }}" > release-notes.md
+
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release create "${{ steps.version.outputs.tag }}" \
             --title "${{ steps.version.outputs.tag }}" \
-            --generate-notes \
+            --notes-file release-notes.md \
             dist/parkour-mcp.mcpb
 
       - name: Install mcp-publisher
@@ -80,21 +93,15 @@ jobs:
             | tar -xz mcp-publisher
           chmod +x mcp-publisher
 
-      - name: Render server.json
+      - name: Render server.json with mcpb asset coordinates
+        # server.json already has the correct version (sync_versions.py
+        # wrote it during the release commit). Only the mcpb-specific
+        # fields (download URL + sha256) need to be updated here because
+        # they can't be known until after the bundle is packed.
         run: |
-          version="${{ steps.version.outputs.version }}"
-          tag="${{ steps.version.outputs.tag }}"
           sha256=$(sha256sum dist/parkour-mcp.mcpb | cut -d' ' -f1)
-          url="https://github.com/blightbow/parkour-mcp/releases/download/${tag}/parkour-mcp.mcpb"
-          python3 - <<PY
-          import json, pathlib
-          p = pathlib.Path("server.json")
-          data = json.loads(p.read_text())
-          data["version"] = "${version}"
-          data["packages"][0]["identifier"] = "${url}"
-          data["packages"][0]["fileSha256"] = "${sha256}"
-          p.write_text(json.dumps(data, indent=2) + "\n")
-          PY
+          url="https://github.com/blightbow/parkour-mcp/releases/download/${{ steps.version.outputs.tag }}/parkour-mcp.mcpb"
+          uv run python3 scripts/render_server_json.py --identifier "$url" --sha256 "$sha256"
           cat server.json
 
       - name: Authenticate to MCP Registry
