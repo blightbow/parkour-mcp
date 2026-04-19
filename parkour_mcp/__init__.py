@@ -84,16 +84,38 @@ mcp = FastMCP(
     icons=_load_server_icons(),
 )
 
+# Shared operator reference for tools that expose a ``search=`` parameter
+# routed through the tantivy BM25 index in ``_pipeline.py``. Duplicated
+# verbatim into each such tool description — tool descriptions must be
+# self-contained (deferred loading can surface one tool without the others).
+SEARCH_GRAMMAR_DOC = """search= operators (tantivy query language):
+- foo bar             — match any term (whitespace is OR)
+- +foo +bar           — require both terms
+- foo -bar            — exclude 'bar'
+- "exact phrase"      — adjacent words in order
+- "some words"~3      — phrase with up to 3-word gaps
+- (foo OR bar) baz    — grouping + AND/OR/NOT
+- foo~                — fuzzy match (edit distance)
+Matching is case-insensitive; no stemming (search for both 'prompt' and
+'prompts' if you want either). Stray punctuation in natural-language
+queries is silently dropped."""
+
 # Per-profile template variables — tool names and description overrides.
 # code profile: PascalCase (WebSearch, WebFetch)
 # desktop profile: snake_case (web_search, web_fetch)
 PROFILE_VARS = {
     "code": {
-        "search": "WebSearch",
-        "fetch": "WebFetch",
+        "web_search": "WebSearch",
+        "web_fetch": "WebFetch",
         "fetch_direct": "WebFetchIncisive",
+        "fetch_sections": "WebFetchSections",
         "summarize": "KagiSummarize",
         "mediawiki_tool": "MediaWiki",
+        "github_tool": "GitHub",
+        "arxiv_tool": "ArXiv",
+        "ietf_tool": "IETF",
+        "semantic_scholar_tool": "SemanticScholar",
+        "shelf_tool": "ResearchShelf",
         "fetch_direct_when_to_use": (
             "Unlike WebFetch, fetches through the user's device instead of proxying through\n"
             "Anthropic's servers. Uses precise content extraction techniques and clean\n"
@@ -104,11 +126,17 @@ PROFILE_VARS = {
         ),
     },
     "desktop": {
-        "search": "web_search",
-        "fetch": "web_fetch",
+        "web_search": "web_search",
+        "web_fetch": "web_fetch",
         "fetch_direct": "web_fetch_incisive",
+        "fetch_sections": "web_fetch_sections",
         "summarize": "kagi_summarize",
         "mediawiki_tool": "mediawiki",
+        "github_tool": "github",
+        "arxiv_tool": "arxiv",
+        "ietf_tool": "ietf",
+        "semantic_scholar_tool": "semantic_scholar",
+        "shelf_tool": "research_shelf",
         "fetch_direct_when_to_use": (
             "Unlike web_fetch, fetches through the user's device instead of proxying through\n"
             "Anthropic's servers. Uses precise content extraction techniques and clean\n"
@@ -123,10 +151,10 @@ PROFILE_VARS = {
 TOOL_DESCRIPTIONS = {
     "search": """Search the web using Kagi's curated search index.
 
-Use this as an alternative to {search} when it returns few or poor quality
+Use this as an alternative to {web_search} when it returns few or poor quality
 results. Kagi's index is independently curated, resistant to SEO spam, and
 may surface different sources. Returns compact results with snippets and
-timestamps — much lighter on context than {search}'s summarized snippets,
+timestamps — much lighter on context than {web_search}'s summarized snippets,
 making it better suited for multi-query research workflows.
 
 Supports search operators in the query string:
@@ -141,16 +169,20 @@ Supports search operators in the query string:
 
     "web_fetch_sections": """List a document's section headings to understand page composition or plan targeted extraction.
 
-Returns a heading tree with anchor slugs. Use this to identify sections of
-interest, then extract them with {fetch_direct}'s section parameter. URL
-fragments (e.g. #section-name) are resolved against the heading tree.
+Returns a heading tree with anchor slugs — a cheap structural preview
+that avoids pulling the page body. Typical use: call this first to
+decide which sections of a long page are worth fetching, then follow up
+with {fetch_direct} using the returned heading names as section= or
+slugs as slices=. URL fragments (e.g. #section-name) are resolved
+against the heading tree.
 
 For a quick sense of document scope, prefer this over {summarize} — the
-section tree reveals structure at minimal cost.
+section tree reveals structure at minimal cost and leaves the source
+material unsummarized for precise follow-up.
 
-For Reddit threads, returns a comment tree with author, score, and content
-length metadata. Comment IDs serve as section headings for targeted
-extraction with {fetch_direct}.""",
+For Reddit threads, returns the comment tree with author, score, and
+content length metadata. Comment IDs serve as section identifiers for
+follow-up extraction of specific subthreads.""",
 
     "web_fetch_direct": """Fetch and extract unsummarized content from URLs as markdown.
 
@@ -158,26 +190,47 @@ extraction with {fetch_direct}.""",
 
 Targeted extraction (preferred over fetching full pages):
 - section="Syntax" — extract a specific section by heading name
-- search="terms" — BM25 keyword search over ~500-token slices
+- search="terms" — keyword search over ~500-token slices, ranked by BM25
 - slices=[3, 4, 5] — retrieve specific slices by index
 - URL fragments (#section-name) are resolved automatically as sections
 
-For MediaWiki pages (Wikipedia, etc.), footnote and inline-citation
-lookup lives on {mediawiki_tool}'s references action — the fast path
-here surfaces a see_also hint pointing at it when a page has either
-reference type.
+RECOMMENDED WORKFLOW: For pages of substantial or unknown length, call
+{fetch_sections} first to map the heading tree, then come back here with
+precise section= or slices= targets. A full-page fetch is rarely the
+right first move — it fills context with material you don't need and
+discards the structural information that makes follow-up queries cheap.
+For Reddit threads, {fetch_sections} returns the comment tree instead.
+
+{search_grammar}
+
+For Wikipedia and other MediaWiki pages, a dedicated companion tool
+offers footnote and inline-citation resolution that this fast path can't
+provide. When the target page has those reference types, the response
+frontmatter surfaces a see_also hint pointing at it.
 
 Always use this tool for Reddit URLs — built-in fetch tools cannot access
-Reddit content when proxied.
+Reddit content when proxied. The Reddit fast path targets whole-post
+URLs (/r/sub/comments/POSTID/...); individual comment permalinks with a
+trailing comment ID return only a context-scoped subtree, not the full
+thread. To target a specific comment, fetch the post URL and use
+section=COMMENTID.
 
 Supports HTML, plain text, JSON, and XML content types.""",
 
     "web_fetch_js": """Fetch and interact with JavaScript-rendered web content.
 
 Use this when {fetch_direct} returns incomplete content from JS-heavy sites
-(SPAs, React/Vue/Angular apps, dynamically loaded content). Supports the
-same targeted extraction as {fetch_direct}: section, search, and slices
-parameters. For MediaWiki bibliography lookup, see {mediawiki_tool}.
+(SPAs, React/Vue/Angular apps, dynamically loaded content). For pages that
+are fully rendered in the initial HTML response, {fetch_direct} is cheaper
+and should be tried first.
+
+Targeted extraction (preferred over fetching full pages):
+- section="Syntax" — extract a specific section by heading name
+- search="terms" — keyword search over ~500-token slices, ranked by BM25
+- slices=[3, 4, 5] — retrieve specific slices by index
+- URL fragments (#section-name) are resolved automatically as sections
+
+{search_grammar}
 
 Supports ReAct-style interaction chains:
 1. First call: Fetch page, observe available interactive elements
@@ -192,10 +245,27 @@ Actions format (JSON array of objects):
 
 Returns markdown with interactive elements annotated for follow-up actions.""",
 
-    "summarize": """Summarize content from a URL or text using Kagi's Universal Summarizer.
+    "summarize": """Summarize content from a URL using Kagi's Universal Summarizer.
 
-Supports web pages, PDFs, YouTube videos, audio files, and documents.
-Use this when {fetch} fails due to agent blacklisting or access restrictions.""",
+Position relative to the two fetch tools:
+- {web_fetch} summarizes through Anthropic's layer (fast, default;
+  subject to agent blacklisting and IP bans)
+- {fetch_direct} returns raw unsummarized content (local fetch through
+  the user's device; bypasses agent/IP bans that block {web_fetch})
+- this tool summarizes through Kagi's layer — returns a condensed
+  digest only, never raw content
+
+Reach for this when even {fetch_direct} can't retrieve the source
+(captcha-gated pages, anti-bot walls), or for formats neither built-in
+fetcher processes: PDFs, YouTube videos, audio files, podcasts. Each
+call is billed against the user's Kagi API credits — treat it as
+higher-effort than {web_fetch}.
+
+Two summary modes via summary_type= parameter:
+- "summary" (default) — flowing prose paragraphs
+- "takeaway" — bullet-point key takeaways
+
+Summary length is determined by the source.""",
 
     "arxiv": """Search and retrieve academic papers from arXiv.
 
@@ -204,29 +274,46 @@ Use this for arXiv paper lookups: search by query, get paper details
 browse recent papers by category. arXiv abstract and PDF URLs are also
 handled automatically by {fetch_direct}.
 
-IMPORTANT: Search uses arXiv query syntax, NOT natural language:
+Actions: search, paper, category.
+
+Query formats:
+- search: arXiv query syntax, NOT natural language (see operators below)
+- paper: arXiv ID (e.g. "2301.00001", "cs.CL/0501001") or arXiv URL
+- category: arXiv category code (e.g. "cs.CL", "math.CO", "astro-ph.GA")
+
+search operators:
 - Field prefixes: ti: (title), au: (author), abs: (abstract),
   cat: (category), all: (all fields), co: (comment), jr: (journal ref)
 - Boolean operators: AND, OR, ANDNOT
 - Examples: "ti:attention AND cat:cs.CL", "au:vaswani AND ti:transformer"
 
-Actions: search, paper, category.""",
+Papers retrieved via the paper action are automatically tracked on the
+research shelf.""",
 
     "semantic_scholar": """Search and retrieve academic paper data from Semantic Scholar.
 
 Use this for academic paper lookups: search by keywords, get paper details
 (abstract, authors, citation counts, references), and find authors. Paper
-details include total and influential citation counts. Accepts paper IDs,
-DOI:10.xxx, ARXIV:2301.xxx, or S2 URLs. Semantic Scholar URLs are also
-handled automatically by {fetch_direct}.
+details include total and influential citation counts. Semantic Scholar
+URLs are also handled automatically by {fetch_direct}.
 
 Actions: search, paper, references, author_search, author, snippets.
 
-The snippets action does BM25 keyword search within paper body text
-(~500-word excerpts tagged by section, terms matched independently).
-Use paper_id to scope to a single paper, or omit for corpus-wide search.
-Example: action="snippets", query="multi-head attention",
-paper_id="204e3073870fae3d05bcbc2f6a8e263d9b72e776".""",
+Query formats:
+- search: keyword search terms (full-text across titles, abstracts, authors)
+- paper: S2 paper hash, DOI:10.xxx, ARXIV:2301.xxx, or Semantic Scholar URL
+- references: same identifier formats as paper — returns papers cited by that work
+- author_search: author name string (e.g. "Yoshua Bengio")
+- author: S2 author ID (numeric, as returned by author_search)
+- snippets: BM25 keyword search within paper body text (~500-word excerpts
+  tagged by section, terms matched independently). Use paper_id= to scope
+  to a single paper; omit for corpus-wide search.
+
+Example snippet call: action="snippets", query="multi-head attention",
+paper_id="204e3073870fae3d05bcbc2f6a8e263d9b72e776".
+
+Papers retrieved via the paper action are automatically tracked on the
+research shelf.""",
 
     "github": """Search and retrieve code, issues, pull requests, and repositories from GitHub.
 
@@ -287,7 +374,7 @@ Query formats:
 
 Ecosystem aliases: pypi, npm, cargo/crates, go/golang, maven, nuget, rubygems/gems.
 
-For repository details (README, issues, code), use {fetch_direct} or the GitHub tool.""",
+For repository details (README, issues, code), use {fetch_direct} or {github_tool}.""",
 
     "discourse": """Search and browse Discourse forum topics.
 
@@ -311,9 +398,23 @@ No authentication required for public forums.""",
 
     "research_shelf": """Manage the research shelf — an in-memory tracker for papers inspected during research.
 
-Papers are automatically added when you use ArXiv, DOI, or IETF
-tools to inspect individual papers or RFCs. Use this tool to review, score, confirm,
-or remove tracked papers, and to export citations in BibTeX or RIS format.
+Papers are automatically added when the following tools resolve a paper,
+RFC, or citable repository: {arxiv_tool}, {semantic_scholar_tool}, {ietf_tool},
+{github_tool} (for repos with CITATION.cff), and {fetch_direct} (via its DOI
+fast path). Use this tool to review, score, confirm, or remove tracked
+entries, and to export citations in BibTeX, RIS, or JSON format.
+
+Actions: list, confirm, remove, score, note, export, import, clear.
+
+Query formats:
+- list: section name (active, retracted, all) — default active
+- confirm/note: DOI of the paper (note takes DOI + space + note text)
+- remove: comma-separated DOIs
+- score: DOI + space + integer (e.g. "10.1234/foo 8")
+- export: format name (bibtex, ris, json), optionally "with_retracted"
+  (e.g. "bibtex with_retracted")
+- import: JSON export string (merges with current shelf)
+- clear: ignored
 
 The shelf survives context compaction within the same session. For cross-session
 persistence, use export json to save the shelf to a memory file, then import
@@ -321,7 +422,7 @@ it in a future session.""",
 
     "mediawiki": """Search and retrieve content from Wikipedia and other MediaWiki sites.
 
-Use this for direct Wikipedia access without resorting to {search} with site: filters.
+Use this for direct Wikipedia access without resorting to {web_search} with site: filters.
 Fetches articles by title (no URL guessing), runs native full-text wiki search, and
 resolves footnotes/inline citations on a specific article. Wikipedia URLs are also
 handled automatically by {fetch_direct}.
@@ -341,6 +442,8 @@ Query formats:
   citations=["#CITEREFFoo2005"] to resolve numbered footnotes and/or inline
   author-date citations. Both can be passed in one call.
 
+{search_grammar}
+
 Wiki instance via wiki= parameter:
 - Language code: "en" (default), "de", "simple", "zh-yue", "pt-br"
 - Sister project: "commons", "wikidata", "meta", "species"
@@ -351,7 +454,10 @@ Wiki instance via wiki= parameter:
 
 def _build_description(tool_name: str, profile: str) -> str:
     """Build a tool description by resolving placeholders for the given profile."""
-    return TOOL_DESCRIPTIONS[tool_name].format(**PROFILE_VARS[profile])
+    return TOOL_DESCRIPTIONS[tool_name].format(
+        **PROFILE_VARS[profile],
+        search_grammar=SEARCH_GRAMMAR_DOC,
+    )
 
 
 def main():
