@@ -15,6 +15,7 @@ import tantivy
 from semantic_text_splitter import MarkdownSplitter
 
 from .markdown import (
+    _append_frontmatter_entry,
     _extract_sections_from_markdown,
     _build_section_list,
     _filter_markdown_by_sections,
@@ -329,8 +330,17 @@ class _CacheEntry:
         tantivy_est = int(slices_bytes * 0.7)
         return md_bytes + slices_bytes + ancestry_bytes + tantivy_est
 
-    def search(self, query_str: str, limit: int = 50) -> list[int]:
-        """BM25 search over cached slices. Returns matching slice indices ranked by relevance.
+    def search(self, query_str: str, limit: int = 50) -> tuple[list[int], list[str]]:
+        """BM25 search over cached slices.
+
+        Returns ``(matched_indices, parse_warnings)``.  ``matched_indices``
+        is a list of slice indices ranked by relevance.  ``parse_warnings``
+        is a list of human-readable messages from the tantivy query parser
+        — empty on clean parses, non-empty when the parser silently
+        dropped a subquery (e.g. a colon in the input got interpreted as
+        a field qualifier against a non-existent field).  Callers should
+        surface these to the user so they can tell why their query
+        behaved unexpectedly.
 
         Queries run against both ``body`` (slice text) and ``heading``
         (section-ancestry breadcrumb); heading matches are boosted 2×
@@ -339,17 +349,17 @@ class _CacheEntry:
         """
         self._ensure_built()
         if not self._tantivy_index or not self._slices:
-            return []
+            return [], []
         query, errors = self._tantivy_index.parse_query_lenient(
             query_str,
             default_field_names=["body", "heading"],
             field_boosts={"heading": 2.0},
         )
-        if errors:
-            logger.warning("tantivy query parse errors for %r: %s", query_str, errors)
+        warnings = [str(e) for e in errors] if errors else []
         searcher = self._tantivy_index.searcher()
         results = searcher.search(query, limit=limit)
-        return [searcher.doc(addr)["idx"][0] for _score, addr in results.hits]
+        matched = [searcher.doc(addr)["idx"][0] for _score, addr in results.hits]
+        return matched, warnings
 
 
 class _PageCache:
@@ -1624,7 +1634,20 @@ def _search_slices(
     if not cached.slices:
         return None
 
-    matched = cached.search(search)
+    matched, warnings = cached.search(search)
+
+    if warnings:
+        # Lenient parser silently dropped at least one subquery (typically
+        # a colon or bracket treated as an operator).  Surface the raw
+        # tantivy error plus a concrete fix on the shared ``warning`` key
+        # — composes cleanly with any fragment-resolution advisory
+        # already present.
+        _append_frontmatter_entry(
+            fm_entries, "warning",
+            "; ".join(warnings) + '. Wrap multi-word terms in "double '
+            'quotes" to preserve punctuation (e.g. "System Prompt: Git '
+            'status"), or use the documented search operators.',
+        )
 
     if not matched:
         fm_entries["total_slices"] = len(cached.slices)

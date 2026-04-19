@@ -924,6 +924,43 @@ class TestBuildFrontmatter:
         assert "section:" not in fm
 
 
+class TestAppendFrontmatterEntry:
+    def test_first_value_lands_as_scalar(self):
+        from parkour_mcp.markdown import _append_frontmatter_entry
+        fm = {}
+        _append_frontmatter_entry(fm, "warning", "first")
+        assert fm == {"warning": "first"}
+
+    def test_second_value_promotes_to_list(self):
+        from parkour_mcp.markdown import _append_frontmatter_entry
+        fm = {"warning": "first"}
+        _append_frontmatter_entry(fm, "warning", "second")
+        assert fm == {"warning": ["first", "second"]}
+
+    def test_appending_to_existing_list(self):
+        from parkour_mcp.markdown import _append_frontmatter_entry
+        fm = {"warning": ["a", "b"]}
+        _append_frontmatter_entry(fm, "warning", "c")
+        assert fm == {"warning": ["a", "b", "c"]}
+
+    def test_empty_value_ignored(self):
+        from parkour_mcp.markdown import _append_frontmatter_entry
+        fm = {"warning": "existing"}
+        _append_frontmatter_entry(fm, "warning", None)
+        _append_frontmatter_entry(fm, "warning", "")
+        assert fm == {"warning": "existing"}
+
+    def test_round_trip_through_build_frontmatter(self):
+        """Accumulated list renders as a YAML sequence when rendered."""
+        from parkour_mcp.markdown import _append_frontmatter_entry
+        fm = {}
+        _append_frontmatter_entry(fm, "warning", "fragment dropped")
+        _append_frontmatter_entry(fm, "warning", "search parser error")
+        rendered = _build_frontmatter(fm)
+        assert "  - fragment dropped" in rendered
+        assert "  - search parser error" in rendered
+
+
 class TestApplyHardTruncation:
     def test_short_content_unchanged(self):
         content = "Short text."

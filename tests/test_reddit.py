@@ -622,7 +622,7 @@ class TestRedditFastPath:
         await _reddit_fast_path(url)
         cached = _page_cache.get(url)
         assert cached is not None
-        indices = cached.search("post body")
+        indices, _ = cached.search("post body")
         assert len(indices) > 0
 
     @pytest.mark.asyncio

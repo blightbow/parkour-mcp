@@ -24,8 +24,11 @@ from pydantic import Field
 
 from .common import _API_USER_AGENT, _FETCH_HEADERS, RateLimiter, tool_name
 from .markdown import (
-    _build_frontmatter, _fence_content, _TRUST_ADVISORY,
+    _append_frontmatter_entry,
     _apply_semantic_truncation,
+    _build_frontmatter,
+    _fence_content,
+    _TRUST_ADVISORY,
 )
 
 logger = logging.getLogger(__name__)
@@ -1441,25 +1444,6 @@ async def _maybe_issue_template_hint(
     return _build_issue_template_hint(owner, repo)
 
 
-def _merge_hint(fm_entries: dict, extra: Optional[str]) -> None:
-    """Fold ``extra`` into ``fm_entries['hint']`` as scalar or list.
-
-    Empty/None extras are ignored. First hint lands as a scalar;
-    subsequent hints promote the field to a YAML sequence — rendered
-    by ``_build_frontmatter`` as a multi-item list
-    (frontmatter-standard.md:146-158).
-    """
-    if not extra:
-        return
-    existing = fm_entries.get("hint")
-    if existing is None:
-        fm_entries["hint"] = extra
-    elif isinstance(existing, list):
-        fm_entries["hint"] = [*existing, extra]
-    else:
-        fm_entries["hint"] = [existing, extra]
-
-
 def _build_issue_template_note(
     probe: Optional[dict], owner: str, repo: str,
 ) -> Optional[str]:
@@ -1756,7 +1740,7 @@ async def _action_repo(query: str) -> str:
                 f"'{owner}/{repo}/{readme_path}' for full content, "
                 f"or {tool_name('web_fetch_direct')}('{readme_url}', section=...) for specific sections."
             )
-    _merge_hint(fm_entries, template_hint)
+    _append_frontmatter_entry(fm_entries, "hint", template_hint)
 
     fm_entries["shelf"] = await _track_repo_on_shelf(
         owner, repo, name, desc, result, citation_cff,
@@ -1967,7 +1951,7 @@ async def _action_issue(
     if trunc_hint:
         fm_entries["truncated"] = trunc_hint
         fm_entries["hint"] = f"Use page= to load more comments (page {page + 1})"
-    _merge_hint(fm_entries, template_hint)
+    _append_frontmatter_entry(fm_entries, "hint", template_hint)
     fm = _build_frontmatter(fm_entries)
     return fm + "\n\n" + _fence_content(content, title=title)
 
@@ -2133,7 +2117,7 @@ async def _action_pull_request(
     if trunc_hint:
         fm_entries["truncated"] = trunc_hint
         fm_entries["hint"] = f"Use page= to load more comments (page {page + 1})"
-    _merge_hint(fm_entries, template_hint)
+    _append_frontmatter_entry(fm_entries, "hint", template_hint)
     fm = _build_frontmatter(fm_entries)
     return fm + "\n\n" + _fence_content(content, title=title)
 

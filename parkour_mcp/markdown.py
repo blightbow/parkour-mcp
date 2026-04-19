@@ -874,6 +874,33 @@ def _filter_markdown_by_sections(
     return result, matched_meta, unmatched
 
 
+def _append_frontmatter_entry(fm_entries: dict, key: str, value) -> None:
+    """Append a value to an ``fm_entries`` field, promoting scalar→list as needed.
+
+    Empty (``None`` / falsy) values are ignored.  The first value lands as
+    a scalar; each subsequent call promotes the field to a YAML sequence.
+    ``_build_frontmatter`` renders single-item lists as scalars and
+    multi-item lists as YAML sequences (see frontmatter-standard.md
+    "List Values"), so callers can append without worrying about the
+    resulting shape.
+
+    Use this instead of inline ``fm_entries[key] = ...`` whenever more
+    than one subsystem can contribute to the same key — for example the
+    ``warning`` field, which may receive entries from URL-fragment
+    resolution, parameter conflicts, and the search parser.  Consumers
+    that overwrite would silently drop earlier advisories.
+    """
+    if not value:
+        return
+    existing = fm_entries.get(key)
+    if existing is None:
+        fm_entries[key] = value
+    elif isinstance(existing, list):
+        fm_entries[key] = [*existing, value]
+    else:
+        fm_entries[key] = [existing, value]
+
+
 def _build_frontmatter(
     entries: dict,
     sections_not_found: Optional[list[str]] = None,

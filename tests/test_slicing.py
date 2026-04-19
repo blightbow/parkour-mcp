@@ -414,7 +414,8 @@ class TestPageCache:
         _page_cache.store("https://example.com", "Doc", md)
         cached = _page_cache.get("https://example.com")
         assert cached is not None
-        results = cached.search("frobnicate")
+        results, warnings = cached.search("frobnicate")
+        assert warnings == []
         assert len(results) >= 1
         # Results should be slice indices within range
         assert cached.slices is not None
@@ -436,7 +437,7 @@ class TestPageCache:
         _page_cache.store("https://example.com", "Doc", md)
         cached = _page_cache.get("https://example.com")
         assert cached is not None
-        results = cached.search("training results")
+        results, _ = cached.search("training results")
         # Both "training" and "results" sections should match
         assert len(results) >= 2
 
@@ -447,7 +448,7 @@ class TestPageCache:
         _page_cache.store("https://example.com", "Doc", md)
         cached = _page_cache.get("https://example.com")
         assert cached is not None
-        results = cached.search("code")
+        results, _ = cached.search("code")
         assert len(results) >= 1
 
 
@@ -529,7 +530,7 @@ class TestLazyCacheEntry:
         assert cached is not None
         assert not cached.is_built
 
-        results = cached.search("frobnicate")
+        results, _ = cached.search("frobnicate")
         assert cached.is_built
         assert len(results) >= 1
 
@@ -552,7 +553,7 @@ class TestLazyCacheEntry:
         assert cached.slices == []
         assert cached.is_built is False
         assert cached.build_failed is True
-        assert cached.search("x") == []
+        assert cached.search("x") == ([], [])
         # Splitter was never invoked — breaker tripped before the call.
         assert spy.call_count == 0
 
@@ -852,6 +853,53 @@ class TestHeadingFieldBoost:
         )
         assert "matched_slices:" in result
         assert "none" not in result.split("matched_slices:")[1].split("\n")[0]
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_parse_warning_surfaces_in_frontmatter(self):
+        """A search string with unescaped tantivy operators (e.g. a colon
+        interpreted as a field qualifier) should surface a frontmatter
+        ``warning`` explaining what was dropped and how to fix it."""
+        respx.get("https://example.com/boost").mock(
+            return_value=httpx.Response(
+                200, text=_HEADING_BOOST_HTML,
+                headers={"content-type": "text/html"},
+            ),
+        )
+        result = await web_fetch_direct(
+            "https://example.com/boost",
+            search="Widget: Configuration",  # colon triggers field-qualifier lookup
+        )
+        # warning: line is present and names the parser error
+        assert "warning:" in result
+        assert "Field does not exist" in result
+        # Actionable fix is included
+        assert 'double quotes' in result
+        # The matched_slices line still appears — the query didn't fail,
+        # it degraded: "Widget" in the body still matches.
+        assert "matched_slices:" in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_clean_query_no_parse_warning(self):
+        """A well-formed query produces no parse-error text in the frontmatter.
+
+        Uses a content-specific assertion rather than checking for the
+        absence of ``warning:`` — the shared ``warning`` field may carry
+        unrelated advisories (fragment resolution, parameter conflicts)
+        even when the search itself parsed cleanly.
+        """
+        respx.get("https://example.com/boost").mock(
+            return_value=httpx.Response(
+                200, text=_HEADING_BOOST_HTML,
+                headers={"content-type": "text/html"},
+            ),
+        )
+        result = await web_fetch_direct(
+            "https://example.com/boost", search="widget",
+        )
+        assert "Field does not exist" not in result
+        assert "double quotes" not in result
 
     def test_schema_includes_heading_field(self):
         """The tantivy schema exposes a ``heading`` field alongside

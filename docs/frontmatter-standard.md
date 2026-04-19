@@ -195,7 +195,7 @@ Conditional:
 | `generator`        | MediaWiki pages |
 | `content_type`     | Non-HTML content (json, xml, plain) |
 | `truncated`        | Content exceeds `max_tokens` |
-| `warning`          | Fragment could not be resolved, parameter conflicts, or other advisory |
+| `warning`          | Fragment could not be resolved, parameter conflicts, search query terms silently dropped by the parser, or other advisory |
 | `footnotes_only`   | Footnote-only responses |
 | `total_sections`   | `web_fetch_sections`: total section count for the document |
 | `slice`            | `web_fetch_sections`: TOC pagination window index (when `total_slices` > 1) |
