@@ -23,6 +23,9 @@ _reddit_mod = sys.modules["parkour_mcp.reddit"]
 import parkour_mcp.github  # noqa: E402, F401
 _github_mod = sys.modules["parkour_mcp.github"]
 
+import parkour_mcp.scorecard  # noqa: E402, F401
+_scorecard_mod = sys.modules["parkour_mcp.scorecard"]
+
 import parkour_mcp.ietf  # noqa: E402, F401
 _ietf_mod = sys.modules["parkour_mcp.ietf"]
 
@@ -139,6 +142,23 @@ def fake_async_session(monkeypatch):
 def _disable_github_rate_limit(monkeypatch):
     """Disable the 1s GitHub rate limiter in unit tests."""
     monkeypatch.setattr(_github_mod._github_limiter, "min_interval", 0.0)
+
+
+@pytest.fixture(autouse=True)
+def _stub_scorecard_for_github(monkeypatch):
+    """Default every GitHub repo/file test to a no-op scorecard lookup.
+
+    Scorecard enrichment is strictly additive, and existing assertions don't
+    expect the new frontmatter key. Stubbing the reference github.py
+    imports means those tests don't need to mock the OpenSSF endpoint.
+    Tests specifically exercising enrichment re-patch or use respx.
+    """
+    async def _no_score(_owner, _repo):
+        return None
+
+    monkeypatch.setattr(_github_mod, "_fetch_scorecard_overall", _no_score)
+    monkeypatch.setattr(_scorecard_mod._scorecard_limiter, "min_interval", 0.0)
+    _scorecard_mod._reset_cache()
 
 
 @pytest.fixture(autouse=True)

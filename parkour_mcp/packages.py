@@ -689,7 +689,7 @@ async def _action_project(query: str) -> str:
         "source": source_url,
         "api": "deps.dev",
         "action": "project",
-        "scorecard_score": f"{sc_score}/10" if sc_score is not None else None,
+        "openssf_scorecard": f"{sc_score}/10" if sc_score is not None else None,
         "hint": f"Use {tool_name('github')} tool for repo README, issues, and code search",
     })
 

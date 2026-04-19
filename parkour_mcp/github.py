@@ -31,6 +31,7 @@ from .markdown import (
     _fence_content,
     _TRUST_ADVISORY,
 )
+from .scorecard import fetch_overall as _fetch_scorecard_overall
 
 logger = logging.getLogger(__name__)
 
@@ -1707,14 +1708,17 @@ async def _action_repo(query: str) -> str:
     if topics:
         parts.append(f"Topics: {', '.join(topics)}")
 
-    # Fetch README (as JSON for path metadata), CITATION.cff, and the
-    # issue-template steering hint concurrently. The hint is a cheap
-    # cached directory-existence check — the rich payload lives in the
-    # dedicated ``issue_templates`` action.
-    readme_result, citation_cff, template_hint = await asyncio.gather(
+    # Fetch README (as JSON for path metadata), CITATION.cff, the
+    # issue-template steering hint, and the OpenSSF Scorecard rating
+    # concurrently. The template hint is a cheap cached directory-existence
+    # check; the rich payload lives in the dedicated ``issue_templates``
+    # action. The Scorecard call degrades silently; many repos are not
+    # scanned and the enrichment is strictly additive.
+    readme_result, citation_cff, template_hint, scorecard_score = await asyncio.gather(
         _github_request("GET", f"/repos/{owner}/{repo}/readme"),
         _fetch_citation_cff(owner, repo, default_branch),
         _maybe_issue_template_hint(owner, repo),
+        _fetch_scorecard_overall(owner, repo),
     )
 
     readme_text = None
@@ -1744,6 +1748,15 @@ async def _action_repo(query: str) -> str:
                 f"or {tool_name('web_fetch_direct')}('{readme_url}', section=...) for specific sections.",
             )
     fm_entries.append("hint", template_hint)
+
+    if scorecard_score is not None:
+        fm_entries["openssf_scorecard"] = f"{scorecard_score:g}/10"
+        fm_entries.append(
+            "see_also",
+            f"{tool_name('packages')}(action=project, "
+            f"query=github.com/{owner}/{repo}) for OpenSSF Scorecard "
+            "per-check breakdown",
+        )
 
     fm_entries["shelf"] = await _track_repo_on_shelf(
         owner, repo, name, desc, result, citation_cff,
@@ -2151,13 +2164,28 @@ async def _action_file(
     if token:
         headers["Authorization"] = f"token {token}"
 
-    try:
-        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
-            response = await client.get(raw_url, headers=headers)
-    except httpx.TimeoutException:
-        return f"Error: Request timed out for {raw_url}"
-    except httpx.RequestError as e:
-        return f"Error: Request failed - {type(e).__name__}"
+    # Fetch the file and the OpenSSF Scorecard in parallel.  The scorecard
+    # is cached per-process, so subsequent files in the same repo pay no
+    # extra latency.  When the code the agent is consuming comes from a
+    # low-scored repo, surfacing that in frontmatter gives the caller a
+    # chance to weigh trust before using the content.
+    async def _fetch_raw() -> httpx.Response | str:
+        try:
+            async with httpx.AsyncClient(
+                timeout=30.0, follow_redirects=True,
+            ) as client:
+                return await client.get(raw_url, headers=headers)
+        except httpx.TimeoutException:
+            return f"Error: Request timed out for {raw_url}"
+        except httpx.RequestError as e:
+            return f"Error: Request failed - {type(e).__name__}"
+
+    response, scorecard_score = await asyncio.gather(
+        _fetch_raw(),
+        _fetch_scorecard_overall(owner, repo),
+    )
+    if isinstance(response, str):
+        return response
 
     if response.status_code == 404:
         if not token:
@@ -2190,6 +2218,8 @@ async def _action_file(
         fm_entries["language"] = lang
     if truncated:
         fm_entries["truncated"] = f"Content truncated to ~{max_tokens} tokens"
+    if scorecard_score is not None:
+        fm_entries["openssf_scorecard"] = f"{scorecard_score:g}/10"
     fm = _build_frontmatter(fm_entries)
 
     # Add line numbers

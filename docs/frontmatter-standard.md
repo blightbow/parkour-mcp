@@ -447,7 +447,7 @@ relationship chains and subseries metadata.
 | `source`         | GitHub project URL |
 | `api`            | `deps.dev` |
 | `action`         | `project` |
-| `scorecard_score`| OpenSSF Scorecard overall score (e.g. `8.2/10`) (conditional) |
+| `openssf_scorecard`| OpenSSF Scorecard overall score (e.g. `8.2/10`). Higher is better; see scorecard.dev for check definitions. (conditional) |
 | `hint`           | Guidance to use GitHub tool for README/issues |
 
 **`advisory` action:**
@@ -472,6 +472,8 @@ package contributors and are potential injection vectors.
 | `source` | GitHub repo URL |
 | `api`    | `GitHub` |
 | `hint`   | README truncation drill-in guidance, and/or issue-template steering (when `.github/ISSUE_TEMPLATE/` exists, pointing at the `issue_templates` action). Rendered as a YAML list when both apply. |
+| `openssf_scorecard` | OpenSSF Scorecard overall score (e.g. `7.4/10`). Higher is better. Sourced from api.securityscorecards.dev; absent when the repo has not been scanned. (conditional) |
+| `see_also` | Points at the Packages `project` action for the per-check OpenSSF Scorecard breakdown (conditional; paired with `openssf_scorecard`) |
 | `shelf`  | Research shelf tracking status (from CITATION.cff or repo metadata) |
 
 **`issue_templates` action:**
@@ -507,6 +509,7 @@ directory, merged into the existing `hint` list as needed.
 | `api`      | `GitHub (raw)` |
 | `language` | Detected language from file extension |
 | `truncated`| When file exceeds `max_tokens` |
+| `openssf_scorecard` | OpenSSF Scorecard overall score for the source repo (e.g. `7.4/10`). Higher is better. Surfaces here so an agent about to consume third-party code can weigh trust before use. Absent when the repo has not been scanned. (conditional) |
 
 **`search_issues`, `search_repos`, and `search_code` actions:**
 

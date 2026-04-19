@@ -620,7 +620,7 @@ class TestPackagesProject:
         result = await packages(action="project", query="github.com/psf/requests")
         assert "---" in result
         assert "7.2/10" in result
-        assert "scorecard_score" in result
+        assert "openssf_scorecard" in result
 
     @respx.mock
     @pytest.mark.asyncio
