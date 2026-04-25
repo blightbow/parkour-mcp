@@ -320,20 +320,26 @@ The `desktop` profile (snake_case) is the default as it aligns with MCP ecosyste
 
 All tool names vary by profile (see [Profile Options](#profile-options)).
 
-Tool Name          | Claude Code Tool Name | Description
--------------------|-----------------------|------------
-kagi_search        | KagiSearch            | Search the web using Kagi.com's curated, SEO-resistant index
-web_fetch_sections | WebFetchSections      | List section headings and anchor slugs for a web page (for targeted extraction). Long documents paginate via `slice=` in 100-section windows
-web_fetch_incisive | WebFetchIncisive      | Fetch a Markdown rendered version of a HTML webpage (also returns raw content for common content types: JSON, XML, plain text)
-web_fetch_js       | WebFetchJS            | Use Playwright to render a headless version of the website in Markdown (extracting documents from a JavaScript cage)
-semantic_scholar   | SemanticScholar       | Search and retrieve academic paper data from Semantic Scholar (search, paper details, references, authors, body text snippets)
-arxiv              | ArXiv                 | Search and retrieve academic papers from arXiv (search with field-prefix syntax, paper details, category browsing)
-github             | GitHub                | Search and retrieve code, issues, pull requests, commits, and comparisons from GitHub (9 actions: search_issues, search_repos, search_code, repo, tree, issue, pull_request, file, issue_templates)
-ietf               | IETF                  | Search and retrieve IETF RFCs and Internet-Drafts (4 actions: rfc, search, draft, subseries)
-packages           | Packages              | Inspect software packages across 7 language ecosystems via deps.dev (5 actions: package, version, dependencies, project, advisory)
-discourse          | Discourse             | Search and browse Discourse forum topics (3 actions: topic, search, latest) — auto-detected via response headers
-mediawiki          | MediaWiki             | Search and retrieve Wikipedia / MediaWiki articles, with native footnote and inline-citation resolution (3 actions: page, search, references). First tool to use the split `title=` / `query=` parameter convention
-kagi_summarize     | KagiSummarize         | Summarize URLs or text (supports PDFs, YouTube, audio)
+<!-- [[[cog
+import sys; sys.path.insert(0, "scripts")
+from cog_helpers import render_tool_table
+cog.outl(render_tool_table())
+]]] -->
+| Tool Name          | Claude Code Tool Name   | Description                                                                                                                                                                                                         |
+|--------------------|-------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| kagi_search        | KagiSearch              | Search the web using Kagi.com's curated, SEO-resistant index                                                                                                                                                        |
+| web_fetch_sections | WebFetchSections        | List section headings and anchor slugs for a web page (for targeted extraction). Long documents paginate via `slice=` in 100-section windows                                                                        |
+| web_fetch_incisive | WebFetchIncisive        | Fetch a Markdown rendered version of a HTML webpage (also returns raw content for common content types: JSON, XML, plain text)                                                                                      |
+| web_fetch_js       | WebFetchJS              | Use Playwright to render a headless version of the website in Markdown (extracting documents from a JavaScript cage)                                                                                                |
+| semantic_scholar   | SemanticScholar         | Search and retrieve academic paper data from Semantic Scholar (search, paper details, references, authors, body text snippets)                                                                                      |
+| arxiv              | ArXiv                   | Search and retrieve academic papers from arXiv (search with field-prefix syntax, paper details, category browsing)                                                                                                  |
+| github             | GitHub                  | Search and retrieve code, issues, pull requests, commits, and comparisons from GitHub (9 actions: search_issues, search_code, search_repos, repo, tree, issue, pull_request, file, issue_templates)                 |
+| ietf               | IETF                    | Search and retrieve IETF RFCs and Internet-Drafts (4 actions: rfc, search, draft, subseries)                                                                                                                        |
+| packages           | Packages                | Inspect software packages across 7 language ecosystems via deps.dev (5 actions: package, version, dependencies, project, advisory)                                                                                  |
+| discourse          | Discourse               | Search and browse Discourse forum topics (3 actions: topic, search, latest) — auto-detected via response headers                                                                                                    |
+| mediawiki          | MediaWiki               | Search and retrieve Wikipedia / MediaWiki articles, with native footnote and inline-citation resolution (3 actions: page, search, references). First tool to use the split `title=` / `query=` parameter convention |
+| kagi_summarize     | KagiSummarize           | Summarize URLs or text (supports PDFs, YouTube, audio)                                                                                                                                                              |
+<!-- [[[end]]] -->
 
 For detailed capabilities, worked examples, and integration-specific behavior, see the [Guide](docs/guide.md).
 

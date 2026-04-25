@@ -33,12 +33,18 @@ just release-preview
 
 ### Module Layout (`parkour_mcp/`)
 
-- **`__init__.py`** — MCP server entry point. Registers 12 tools with profile-specific names (PascalCase for `code`, snake_case for `desktop`). Description templates have placeholders replaced at registration time.
+<!-- [[[cog
+import sys; sys.path.insert(0, "scripts")
+from cog_helpers import tool_count
+cog.outl(f"- **`__init__.py`** — MCP server entry point. Registers {tool_count(with_optional=True)}, with profile-specific names (PascalCase for `code`, snake_case for `desktop`). Description templates have placeholders replaced at registration time.")
+]]] -->
+- **`__init__.py`** — MCP server entry point. Registers 12 always-on tools, plus 1 optional (SemanticScholar, gated by S2_ACCEPT_TOS), with profile-specific names (PascalCase for `code`, snake_case for `desktop`). Description templates have placeholders replaced at registration time.
+<!-- [[[end]]] -->
 - **`_pipeline.py`** — Shared processing layer. Owns the fast-path detection chain, multi-entry caching (`_WikiCache` LRU, `_PageCache` 2Q), slicing, BM25 search, and section filtering.
 - **`markdown.py`** — HTML→markdown conversion via custom `TextOnlyConverter`. Section extraction with fuzzy slug matching. Content fencing. Semantic truncation for markdown, hard truncation for structured formats.
 - **`shelf.py`** — Research shelf implementation. All public methods guarded by `asyncio.Lock`.
 
-API integration modules (each ~300-650 LOC, self-contained):
+API integration modules, each self-contained:
 - **`kagi.py`** — Search and summarize via kagiapi. Balance tracking with low-credit lockout.
 - **`fetch_direct.py`** — Static HTTP fetching with content-type detection. Routes URLs through fast-path chain before falling back to HTTP.
 - **`fetch_js.py`** — Playwright browser automation with live app detection (Gradio, Streamlit). ReAct-style interaction chains. Falls back to HTTP if Playwright unavailable.
@@ -47,11 +53,23 @@ API integration modules (each ~300-650 LOC, self-contained):
 - **`doi.py`** — DOI resolution via content negotiation. Registration agency detection. DataCite enrichment (ORCID, affiliations, licenses).
 - **`mediawiki.py`** — Wikipedia/MediaWiki API. Probes for api.php endpoint. Full-page fetch with downstream section filtering.
 - **`reddit.py`** — Reddit fast path via `old.reddit.com` `.json` endpoint. URL rewriting, comment tree parsing, section-based comment navigation. 2s rate limit.
-- **`github.py`** — GitHub REST API integration. 7 tool actions (search_issues, search_code, repo, tree, issue, pull_request, file). Three-tier auth (env → config file → unauthenticated). Per-resource rate limit tracking. URL detection for fast-path chain covering blob (with line anchors), tree, issue, PR, wiki, commit, compare, releases, org/user profiles, gist, and `raw.githubusercontent.com`. Source code sectionization via tree-sitter CodeSplitter. CITATION.cff parsing for research shelf integration. OpenSSF Scorecard enrichment on `repo` and `file` actions via `scorecard.py`. ~1600 LOC.
+<!-- [[[cog
+import sys; sys.path.insert(0, "scripts")
+from cog_helpers import action_list
+cog.outl(f"- **`github.py`** — GitHub REST API integration. {action_list('parkour_mcp.github._VALID_ACTIONS')}. Three-tier auth (env → config file → unauthenticated). Per-resource rate limit tracking. URL detection for fast-path chain covering blob (with line anchors), tree, issue, PR, wiki, commit, compare, releases, org/user profiles, gist, and `raw.githubusercontent.com`. Source code sectionization via tree-sitter CodeSplitter. CITATION.cff parsing for research shelf integration. OpenSSF Scorecard enrichment on `repo` and `file` actions via `scorecard.py`.")
+]]] -->
+- **`github.py`** — GitHub REST API integration. 9 actions: search_issues, search_code, search_repos, repo, tree, issue, pull_request, file, issue_templates. Three-tier auth (env → config file → unauthenticated). Per-resource rate limit tracking. URL detection for fast-path chain covering blob (with line anchors), tree, issue, PR, wiki, commit, compare, releases, org/user profiles, gist, and `raw.githubusercontent.com`. Source code sectionization via tree-sitter CodeSplitter. CITATION.cff parsing for research shelf integration. OpenSSF Scorecard enrichment on `repo` and `file` actions via `scorecard.py`.
+<!-- [[[end]]] -->
 - **`ietf.py`** — IETF RFC and Internet-Draft integration. 4 tool actions (rfc, search, draft, subseries). RFC Editor per-document JSON for metadata and relationship chains (obsoletes/updates). IETF Datatracker REST API for search with status/WG filtering. BibXML service for subseries (STD/BCP/FYI) resolution. Native DOI tracking (`10.17487/RFC{N}`). 1s Datatracker rate limit.
-- **`packages.py`** — deps.dev (Google Open Source Insights) integration. 5 tool actions (package, version, dependencies, project, advisory). Covers 7 ecosystems (npm, PyPI, Go, Maven, Cargo, NuGet, RubyGems). Version history, license detection, security advisories (GHSA/CVE with CVSS), resolved dependency graphs with native constraints, OpenSSF Scorecard, OSS-Fuzz coverage, and SLSA provenance. Shares the deps.dev HTTP client (`_depsdev_get`) and 1s limiter with `scorecard.py` via `common.py`. No auth required. Body content fenced (contributor-supplied fields are injection vectors). ~480 LOC.
-- **`discourse.py`** — Discourse forum integration. 3 tool actions (topic, search, latest). Detects Discourse instances via `x-discourse-route` response header (post-fetch, not URL-based). Two-request topic assembly: first page inline + batch remaining via `post_ids[]`. Raw author markdown via `include_raw=true`. Per-host rate limiting via lazy-initialized dict. Quote BBCode → blockquote conversion, `upload://` ref cleanup. Post-aware BM25 splitting and reply-threaded section trees. No auth required. ~490 LOC.
-- **`scorecard.py`** — OpenSSF Scorecard client. Reads the `scorecard.overallScore` and `scorecard.date` fields from deps.dev's `/v3/projects/github.com/{owner}/{repo}` endpoint via the shared `_depsdev_get` helper in `common.py`. Returns `(score, iso_date)` for frontmatter enrichment on `github:repo`, `github:file`, and `packages:project` via the shared `format_score()` helper that emits `"N/10 (@ YYYY-MM-DD)"`. Uses deps.dev (not `api.securityscorecards.dev`) because the webapp is a CI-upload registry with sparse, frequently-stale coverage: deps.dev ingests OpenSSF's weekly server-side cron scan of the top ~1M projects and has broader, fresher data. Session-lived per-repo cache; silent degrade on 404 / missing scorecard / network error (missing key omitted, not nulled). ~90 LOC.
+<!-- [[[cog
+import sys; sys.path.insert(0, "scripts")
+from cog_helpers import ecosystem_list
+cog.outl(f"- **`packages.py`** — deps.dev (Google Open Source Insights) integration. 5 tool actions (package, version, dependencies, project, advisory). Covers {ecosystem_list()}. Version history, license detection, security advisories (GHSA/CVE with CVSS), resolved dependency graphs with native constraints, OpenSSF Scorecard, OSS-Fuzz coverage, and SLSA provenance. Shares the deps.dev HTTP client (`_depsdev_get`) and 1s limiter with `scorecard.py` via `common.py`. No auth required. Body content fenced (contributor-supplied fields are injection vectors).")
+]]] -->
+- **`packages.py`** — deps.dev (Google Open Source Insights) integration. 5 tool actions (package, version, dependencies, project, advisory). Covers 7 ecosystems: pypi, npm, cargo, go, maven, nuget, rubygems. Version history, license detection, security advisories (GHSA/CVE with CVSS), resolved dependency graphs with native constraints, OpenSSF Scorecard, OSS-Fuzz coverage, and SLSA provenance. Shares the deps.dev HTTP client (`_depsdev_get`) and 1s limiter with `scorecard.py` via `common.py`. No auth required. Body content fenced (contributor-supplied fields are injection vectors).
+<!-- [[[end]]] -->
+- **`discourse.py`** — Discourse forum integration. 3 tool actions (topic, search, latest). Detects Discourse instances via `x-discourse-route` response header (post-fetch, not URL-based). Two-request topic assembly: first page inline + batch remaining via `post_ids[]`. Raw author markdown via `include_raw=true`. Per-host rate limiting via lazy-initialized dict. Quote BBCode → blockquote conversion, `upload://` ref cleanup. Post-aware BM25 splitting and reply-threaded section trees. No auth required.
+- **`scorecard.py`** — OpenSSF Scorecard client. Reads the `scorecard.overallScore` and `scorecard.date` fields from deps.dev's `/v3/projects/github.com/{owner}/{repo}` endpoint via the shared `_depsdev_get` helper in `common.py`. Returns `(score, iso_date)` for frontmatter enrichment on `github:repo`, `github:file`, and `packages:project` via the shared `format_score()` helper that emits `"N/10 (@ YYYY-MM-DD)"`. Uses deps.dev (not `api.securityscorecards.dev`) because the webapp is a CI-upload registry with sparse, frequently-stale coverage: deps.dev ingests OpenSSF's weekly server-side cron scan of the top ~1M projects and has broader, fresher data. Session-lived per-repo cache; silent degrade on 404 / missing scorecard / network error (missing key omitted, not nulled).
 - **`common.py`** — Shared constants and helpers: dual User-Agent strategy (browser UA for HTML, API UA for structured endpoints), `RateLimiter` class, shared deps.dev HTTP client (`_depsdev_get`, `_depsdev_limiter`) used by both `packages.py` and `scorecard.py`, `s2_enabled()` gate, `_LANGUAGE_MAP` for file extension → syntax highlight language.
 
 ### Key Concepts
@@ -153,4 +171,6 @@ Public RCs are supported end-to-end. commitizen's `version_scheme = "pep440"` em
 
 ## Technical Debt
 
-See @./claude/TECH_DEBT.md for acknowledged warnings and deferred fixes. When opting not to fix a warning, document it there with the location, issue, and rationale.
+See @./.claude/TECH_DEBT.md for acknowledged warnings and deferred fixes. When opting not to fix a warning, document it there with the location, issue, and rationale.
+
+Source-shape changes that would let Cog and Drift cover more of the doc surface are tracked separately in @./.claude/docs-drift-enhancements.md.

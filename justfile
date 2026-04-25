@@ -33,6 +33,19 @@ readme:
 icons:
     uv run python3 scripts/generate_icons.py
 
+# Check that prose-derived facts in CLAUDE.md / docs/ still match source.
+# Cog --check exits 1 if regenerated content would differ; drift check exits
+# 1 if any anchored symbol has drifted past its sig: in drift.lock.
+docs-drift:
+    uv run cog --check --check-fail-msg='Run `just docs-drift-fix` to regenerate.' CLAUDE.md README.md
+    drift check
+
+# Regenerate cog blocks; still need to manually drift link --doc-is-still-accurate
+# any drifted anchors (see .claude/skills/drift/SKILL.md for the relink workflow).
+docs-drift-fix:
+    uv run cog -r CLAUDE.md README.md
+    @echo "Cog regenerated. Run 'drift check' next; if anchors are stale, follow the relink workflow."
+
 # Run vulture dead-code scan on production code (honors .vulture_whitelist.py).
 # Hard gate — vulture exits 3 on findings, which fails the recipe and
 # any wrapping pipeline. Real findings should be fixed at the source

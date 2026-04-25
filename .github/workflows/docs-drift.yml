@@ -1,0 +1,36 @@
+name: docs-drift
+
+on:
+  pull_request:
+    paths:
+      - "CLAUDE.md"
+      - "README.md"
+      - "docs/**"
+      - "parkour_mcp/**"
+      - "scripts/cog_helpers.py"
+      - "scripts/tools.toml"
+      - "drift.lock"
+      - ".github/workflows/docs-drift.yml"
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # drift's blame attribution wants real history
+
+      - uses: astral-sh/setup-uv@v6
+      - run: uv python install 3.12
+      - run: uv sync
+
+      - name: Install drift (Fiberplane Drift)
+        run: |
+          curl -sSfL https://drift.fp.dev/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: cog --check
+        run: uv run cog --check --check-fail-msg='Run "just docs-drift-fix" to regenerate.' CLAUDE.md README.md
+
+      - name: drift check
+        run: drift check

@@ -1,0 +1,76 @@
+# Registry for the README tool table.  Read by scripts/cog_helpers.render_tool_table()
+# at cog-render time.  When a description contains derivable counts, the
+# corresponding `actions_attr` / `ecosystems_attr` field tells cog where to
+# import them from; otherwise `actions = [...]` and `ecosystems = "..."`
+# are hand-pinned strings (used for modules whose action sets are still
+# dispatched inline — see .claude/docs-drift-enhancements.md).
+#
+# When a module gains a `_VALID_ACTIONS` constant, swap `actions = [...]`
+# for `actions_attr = "module:attr"` and the count flips from hand-pinned
+# to source-derived without touching the prose.
+
+[[tool]]
+name = "kagi_search"
+pascal = "KagiSearch"
+description = "Search the web using Kagi.com's curated, SEO-resistant index"
+
+[[tool]]
+name = "web_fetch_sections"
+pascal = "WebFetchSections"
+description = "List section headings and anchor slugs for a web page (for targeted extraction). Long documents paginate via `slice=` in 100-section windows"
+
+[[tool]]
+name = "web_fetch_incisive"
+pascal = "WebFetchIncisive"
+description = "Fetch a Markdown rendered version of a HTML webpage (also returns raw content for common content types: JSON, XML, plain text)"
+
+[[tool]]
+name = "web_fetch_js"
+pascal = "WebFetchJS"
+description = "Use Playwright to render a headless version of the website in Markdown (extracting documents from a JavaScript cage)"
+
+[[tool]]
+name = "semantic_scholar"
+pascal = "SemanticScholar"
+description = "Search and retrieve academic paper data from Semantic Scholar (search, paper details, references, authors, body text snippets)"
+
+[[tool]]
+name = "arxiv"
+pascal = "ArXiv"
+description = "Search and retrieve academic papers from arXiv (search with field-prefix syntax, paper details, category browsing)"
+
+[[tool]]
+name = "github"
+pascal = "GitHub"
+description = "Search and retrieve code, issues, pull requests, commits, and comparisons from GitHub ({actions})"
+actions_attr = "parkour_mcp.github._VALID_ACTIONS"
+
+[[tool]]
+name = "ietf"
+pascal = "IETF"
+description = "Search and retrieve IETF RFCs and Internet-Drafts ({actions})"
+actions = ["rfc", "search", "draft", "subseries"]
+
+[[tool]]
+name = "packages"
+pascal = "Packages"
+description = "Inspect software packages across {ecosystems_count} language ecosystems via deps.dev ({actions})"
+ecosystems_attr = "parkour_mcp.packages._VALID_ECOSYSTEMS"
+actions = ["package", "version", "dependencies", "project", "advisory"]
+
+[[tool]]
+name = "discourse"
+pascal = "Discourse"
+description = "Search and browse Discourse forum topics ({actions}) — auto-detected via response headers"
+actions = ["topic", "search", "latest"]
+
+[[tool]]
+name = "mediawiki"
+pascal = "MediaWiki"
+description = "Search and retrieve Wikipedia / MediaWiki articles, with native footnote and inline-citation resolution ({actions}). First tool to use the split `title=` / `query=` parameter convention"
+actions = ["page", "search", "references"]
+
+[[tool]]
+name = "kagi_summarize"
+pascal = "KagiSummarize"
+description = "Summarize URLs or text (supports PDFs, YouTube, audio)"
