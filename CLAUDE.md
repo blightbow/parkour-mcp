@@ -169,6 +169,17 @@ Public RCs are supported end-to-end. commitizen's `version_scheme = "pep440"` em
 - Reddit fast path uses browser UA (`_FETCH_HEADERS`), not API UA — the `.json` endpoint is a page variant, not a formal API, and Reddit blocks bot UAs on unauthenticated requests. This is intentionally NOT the official Reddit API; it requires no OAuth, no API key, and no approval process.
 - Discourse fast path uses post-fetch header detection (`x-discourse-route`), not URL pattern matching. This is the only fast path that operates after the initial HTTP fetch rather than before it. Per-host rate limiting via `_discourse_limiters` dict (lazy-initialized, 1s default).
 
+## Code references
+
+Cite code by `path#Symbol` (Drift-style anchor), not `path:line`. Symbol anchors survive renames, line shifts, and refactors; line numbers drift the moment the file changes and end up pointing at the wrong code in the next session. Examples:
+
+- `parkour_mcp/markdown.py#FMEntries` (class)
+- `parkour_mcp/markdown.py#_build_frontmatter` (function)
+- `parkour_mcp/_pipeline.py#_PageCache` (class with method-level scope written as `#_PageCache.stats`)
+- `docs/frontmatter-standard.md#multi-contributor-keys-protected` (markdown heading slug)
+
+`path:line` is correct only when the target has no symbol name (a comment, blank line, log line) or when emitting a permalink to a pinned SHA where the line is frozen by the URL. The convention applies independently of whether Drift is gating the specific reference.
+
 ## Technical Debt
 
 See @./.claude/TECH_DEBT.md for acknowledged warnings and deferred fixes. When opting not to fix a warning, document it there with the location, issue, and rationale.
