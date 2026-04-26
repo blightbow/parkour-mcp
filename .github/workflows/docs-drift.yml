@@ -30,7 +30,7 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: cog --check
-        run: uv run cog --check --check-fail-msg='Run "just docs-drift-fix" to regenerate.' CLAUDE.md README.md
+        run: uv run cog --check --check-fail-msg='Run "just docs-drift-fix" to regenerate.' CLAUDE.md README.md docs/frontmatter-standard.md
 
       - name: drift check
         run: drift check

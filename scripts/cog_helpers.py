@@ -73,6 +73,56 @@ def render_tool_table() -> str:
     return tabulate(rows, headers=["Tool Name", "Claude Code Tool Name", "Description"], tablefmt="github")
 
 
+def protected_keys() -> tuple[str, ...]:
+    """Return ``FMEntries.PROTECTED_ORDER`` — the canonical-order tuple of
+    multi-contributor keys.  Used to drive prose, count, and table cog
+    blocks in ``docs/frontmatter-standard.md``.
+    """
+    from parkour_mcp.markdown import FMEntries
+    return FMEntries.PROTECTED_ORDER
+
+
+def protected_keys_inline() -> str:
+    """Render the protected keys as inline prose: ``\\`a\\`, \\`b\\`, and \\`c\\```."""
+    keys = [f"`{k}`" for k in protected_keys()]
+    if len(keys) <= 1:
+        return keys[0] if keys else ""
+    if len(keys) == 2:
+        return f"{keys[0]} and {keys[1]}"
+    return ", ".join(keys[:-1]) + f", and {keys[-1]}"
+
+
+_NUMBER_WORDS: dict[int, str] = {
+    1: "One", 2: "Two", 3: "Three", 4: "Four", 5: "Five",
+    6: "Six", 7: "Seven", 8: "Eight", 9: "Nine", 10: "Ten",
+}
+
+
+def protected_keys_count_word() -> str:
+    """Render the protected keys count as a capitalized English word."""
+    return _NUMBER_WORDS.get(len(protected_keys()), str(len(protected_keys())))
+
+
+_FM_KEY_CONTRIBUTORS: dict[str, str] = {
+    "hint": "pagination advisories, truncation drill-ins, search-parser guidance, fragment-resolution hints",
+    "warning": "rate-limit advisories, balance warnings, parameter-conflict notices",
+    "note": "shelving side-effects, behavior-explaining annotations, correction notices",
+    "see_also": "cross-tool pointers, related-resource references",
+    "alert": "retraction / expression-of-concern notices (retroactively invalidating prior output)",
+}
+
+
+def protected_keys_table() -> str:
+    """Render the multi-contributor keys table for docs/frontmatter-standard.md.
+
+    Key column is derived from FMEntries.PROTECTED_ORDER; the contributors
+    column is hand-curated prose in this module (small, rarely-changing).
+    """
+    from tabulate import tabulate
+    rows = [(f"`{k}`", _FM_KEY_CONTRIBUTORS[k]) for k in protected_keys()]
+    return tabulate(rows, headers=["Key", "Typical contributors"], tablefmt="github")
+
+
 def tool_count(*, with_optional: bool = False) -> str:
     """Render the registered-tool count from parkour_mcp/__init__.py.
 

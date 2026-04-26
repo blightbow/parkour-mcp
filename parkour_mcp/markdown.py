@@ -897,7 +897,13 @@ class FMEntries(UserDict):
     override guards the complete surface.
     """
 
-    PROTECTED = frozenset({"hint", "warning", "note", "see_also", "alert"})
+    # PROTECTED_ORDER is the canonical presentation sequence used in
+    # docs/frontmatter-standard.md (highest- to lowest-frequency of
+    # contributor traffic).  PROTECTED is the O(1) membership view that
+    # __setitem__ checks.  scripts/cog_helpers.protected_keys() consumes
+    # the order tuple to keep the doc's prose, count, and table in sync.
+    PROTECTED_ORDER: tuple[str, ...] = ("hint", "warning", "note", "see_also", "alert")
+    PROTECTED = frozenset(PROTECTED_ORDER)
 
     # Liskov-violating narrowing is deliberate: the parent contract allows
     # any write, we restrict protected keys to .append().  ty correctly

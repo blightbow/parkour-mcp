@@ -42,6 +42,18 @@ Frontmatter serves three roles:
   purposes.  If a value needs to reach multiple consumers, pass it
   as a separate parameter.  This prevents accidental leakage of
   untrusted data into frontmatter when a pop step is missed.
+<!-- [[[cog
+import sys; sys.path.insert(0, "scripts")
+from cog_helpers import protected_keys_inline
+cog.out(f"""- **Protected multi-contributor keys must be appended, not assigned.**
+  {protected_keys_inline()} receive
+  contributions from multiple subsystems in a single request.  Write
+  them through `fm_entries.append(key, value)` or
+  `_append_frontmatter_entry(fm_entries, key, value)`; direct
+  assignment raises `TypeError` on an `FMEntries` instance.  See
+  *Multi-Contributor Keys (Protected)* below for the full mechanism.
+""")
+]]] -->
 - **Protected multi-contributor keys must be appended, not assigned.**
   `hint`, `warning`, `note`, `see_also`, and `alert` receive
   contributions from multiple subsystems in a single request.  Write
@@ -49,6 +61,7 @@ Frontmatter serves three roles:
   `_append_frontmatter_entry(fm_entries, key, value)`; direct
   assignment raises `TypeError` on an `FMEntries` instance.  See
   *Multi-Contributor Keys (Protected)* below for the full mechanism.
+<!-- [[[end]]] -->
 
 ## Content Fencing
 
@@ -151,16 +164,29 @@ closed enum).  Free-form text from external APIs (e.g. CrossRef's
 
 ## Multi-Contributor Keys (Protected)
 
+<!-- [[[cog
+import sys; sys.path.insert(0, "scripts")
+from cog_helpers import protected_keys_count_word
+cog.outl(f"{protected_keys_count_word()} fields are treated as multi-contributor and may not be written via")
+cog.outl("direct assignment:")
+]]] -->
 Five fields are treated as multi-contributor and may not be written via
 direct assignment:
+<!-- [[[end]]] -->
 
-| Key        | Typical contributors |
-|------------|-----------------------|
+<!-- [[[cog
+import sys; sys.path.insert(0, "scripts")
+from cog_helpers import protected_keys_table
+cog.outl(protected_keys_table())
+]]] -->
+| Key        | Typical contributors                                                                           |
+|------------|------------------------------------------------------------------------------------------------|
 | `hint`     | pagination advisories, truncation drill-ins, search-parser guidance, fragment-resolution hints |
-| `warning`  | rate-limit advisories, balance warnings, parameter-conflict notices |
-| `note`     | shelving side-effects, behavior-explaining annotations, correction notices |
-| `see_also` | cross-tool pointers, related-resource references |
-| `alert`    | retraction / expression-of-concern notices (retroactively invalidating prior output) |
+| `warning`  | rate-limit advisories, balance warnings, parameter-conflict notices                            |
+| `note`     | shelving side-effects, behavior-explaining annotations, correction notices                     |
+| `see_also` | cross-tool pointers, related-resource references                                               |
+| `alert`    | retraction / expression-of-concern notices (retroactively invalidating prior output)           |
+<!-- [[[end]]] -->
 
 These fields can receive contributions from multiple subsystems in a
 single request.  Direct ``fm_entries[key] = value`` would silently drop
