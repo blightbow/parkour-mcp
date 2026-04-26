@@ -179,13 +179,13 @@ import sys; sys.path.insert(0, "scripts")
 from cog_helpers import protected_keys_table
 cog.outl(protected_keys_table())
 ]]] -->
-| Key        | Typical contributors                                                                           |
-|------------|------------------------------------------------------------------------------------------------|
+| Key        | Typical contributors |
+|------------|----------------------|
 | `hint`     | pagination advisories, truncation drill-ins, search-parser guidance, fragment-resolution hints |
-| `warning`  | rate-limit advisories, balance warnings, parameter-conflict notices                            |
-| `note`     | shelving side-effects, behavior-explaining annotations, correction notices                     |
-| `see_also` | cross-tool pointers, related-resource references                                               |
-| `alert`    | retraction / expression-of-concern notices (retroactively invalidating prior output)           |
+| `warning`  | rate-limit advisories, balance warnings, parameter-conflict notices |
+| `note`     | shelving side-effects, behavior-explaining annotations, correction notices |
+| `see_also` | cross-tool pointers, related-resource references |
+| `alert`    | retraction / expression-of-concern notices (retroactively invalidating prior output) |
 <!-- [[[end]]] -->
 
 These fields can receive contributions from multiple subsystems in a

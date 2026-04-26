@@ -33,6 +33,44 @@ def loc(rel_path: str) -> int:
     return sum(1 for _ in Path(rel_path).open())
 
 
+def _human_align(md_table: str) -> str:
+    """Trim tabulate's uniform last-column pad to the human-aligned style.
+
+    Tabulate sizes every column — including the last — to the widest cell
+    in that column, leaving a wall of trailing whitespace before the
+    closing ``|`` on every line.  The convention in this project's hand-
+    written ``docs/`` tables is: pad internal columns across rows for
+    alignment, but size the last column to its header and let data rows
+    end ragged.  This rewrites tabulate output to match.
+
+    Not a library feature anywhere: tabulate#392 (closed wontfix) and
+    prettier#12074 (open since 2022) are the canonical upstream
+    discussions; both maintainers point users at exactly this kind of
+    post-processor.
+    """
+    lines = md_table.splitlines()
+    if len(lines) < 2:
+        return md_table
+    header = lines[0]
+    last_pipe = header.rfind("|")
+    penul_pipe = header.rfind("|", 0, last_pipe)
+    if penul_pipe < 0:
+        return md_table
+    last_cell_text = header[penul_pipe + 1 : last_pipe].strip()
+    new_last_h = f" {last_cell_text} "
+    new_header = header[: penul_pipe + 1] + new_last_h + "|"
+    sep = lines[1]
+    sep_penul = sep.rfind("|", 0, sep.rfind("|"))
+    new_sep = sep[: sep_penul + 1] + ("-" * len(new_last_h)) + "|"
+    new_data = []
+    for line in lines[2:]:
+        d_last = line.rfind("|")
+        d_penul = line.rfind("|", 0, d_last)
+        last_cell = line[d_penul + 1 : d_last].rstrip()
+        new_data.append(line[: d_penul + 1] + last_cell + " |")
+    return "\n".join([new_header, new_sep, *new_data])
+
+
 def render_tool_table() -> str:
     """Render the README tool table from ``scripts/tools.toml`` + introspection.
 
@@ -70,7 +108,8 @@ def render_tool_table() -> str:
             ctx["ecosystems_count"] = str(len(ecosystems))
         desc = tool["description"].format(**ctx) if ctx else tool["description"]
         rows.append((tool["name"], tool["pascal"], desc))
-    return tabulate(rows, headers=["Tool Name", "Claude Code Tool Name", "Description"], tablefmt="github")
+    raw = tabulate(rows, headers=["Tool Name", "Claude Code Tool Name", "Description"], tablefmt="github")
+    return _human_align(raw)
 
 
 def protected_keys() -> tuple[str, ...]:
@@ -120,7 +159,7 @@ def protected_keys_table() -> str:
     """
     from tabulate import tabulate
     rows = [(f"`{k}`", _FM_KEY_CONTRIBUTORS[k]) for k in protected_keys()]
-    return tabulate(rows, headers=["Key", "Typical contributors"], tablefmt="github")
+    return _human_align(tabulate(rows, headers=["Key", "Typical contributors"], tablefmt="github"))
 
 
 def tool_count(*, with_optional: bool = False) -> str:

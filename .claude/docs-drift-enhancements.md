@@ -101,6 +101,22 @@ and data rows — as a single block.  This is the same shape adopted by
 and Ned Batchelder's own profile README.  See
 `scripts/cog_helpers.render_tool_table()` for the implementation.
 
+### Tabulate output trimmed to the docs/ aesthetic via a post-processor
+
+`tabulate(..., tablefmt="github")` pads every column — including the
+last — to the widest cell, producing a wall of trailing whitespace
+before the closing pipe on every row.  The hand-written tables in
+`docs/` use a different convention: internal columns aligned across
+rows, last column sized to its header, data rows ragged.  Source
+readability matters because this project's markdown is read by humans,
+agents, and `cat` alike, not just rendered to HTML.
+
+`scripts/cog_helpers._human_align()` rewrites tabulate output to match.
+Not a library feature anywhere — tabulate#392 (closed wontfix) and
+prettier#12074 (open since 2022) are the upstream threads where this
+exact ask was made and declined; both maintainers explicitly recommend
+post-processing.
+
 ### Tabulate + a TOML registry collapses the description-ergonomics tax
 
 Earlier draft: "cog forces description prose out of the README into a
