@@ -1731,3 +1731,108 @@ class TestChannelTabListingDetection:
         assert "## Recent uploads" in result
         # No tab-routing hint
         assert "tab list" not in result.lower()
+
+
+# ---------------------------------------------------------------------------
+# Search action
+# ---------------------------------------------------------------------------
+
+_SEARCH_INFO = {
+    "_type": "playlist",
+    "id": "ytsearch10:quantum entanglement",
+    "title": "ytsearch10:quantum entanglement",
+    "entries": [
+        {
+            "_type": "url",
+            "id": f"vid{i}",
+            "title": f"Quantum result {i}",
+            "duration": 600 + i * 60,
+            "view_count": 50_000 + i * 1000,
+            "uploader": "Some Channel",
+            "url": f"https://www.youtube.com/watch?v=vid{i}",
+        }
+        for i in range(5)
+    ],
+}
+
+
+class TestSearchActionDispatcher:
+    @pytest.mark.asyncio
+    async def test_search_returns_results(self, monkeypatch):
+        observed = {"url": None, "limit": None}
+
+        def fake_extract(url, limit):
+            observed["url"] = url
+            observed["limit"] = limit
+            return _SEARCH_INFO
+        monkeypatch.setattr(_yt_module, "_extract_flat_sync", fake_extract)
+
+        result = await youtube(
+            action="search",
+            query="quantum entanglement",
+            limit=5,
+        )
+        # Built the right yt-dlp URL
+        assert observed["url"] == "ytsearch5:quantum entanglement"
+        assert observed["limit"] == 5
+        # Frontmatter and body
+        assert "search: quantum entanglement" in result
+        assert "returned_results: 5" in result
+        # _fence_content emits the title heading itself; body just lists results
+        assert "Search: quantum entanglement" in result  # in fence header
+        assert "## Results (5)" in result
+        assert "Quantum result 0" in result
+        assert "https://www.youtube.com/watch?v=vid0" in result
+
+    @pytest.mark.asyncio
+    async def test_search_no_query(self):
+        result = await youtube(action="search")
+        assert "Error" in result and "query" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_search_empty_query(self):
+        result = await youtube(action="search", query="   ")
+        assert "Error" in result
+
+    @pytest.mark.asyncio
+    async def test_search_limit_clamped(self, monkeypatch):
+        observed = {"limit": None}
+
+        def fake_extract(url, limit):
+            del url
+            observed["limit"] = limit
+            return _SEARCH_INFO
+        monkeypatch.setattr(_yt_module, "_extract_flat_sync", fake_extract)
+
+        await youtube(action="search", query="foo", limit=999)
+        assert observed["limit"] == 200
+        await youtube(action="search", query="foo", limit=0)
+        assert observed["limit"] == 1
+
+    @pytest.mark.asyncio
+    async def test_search_empty_results(self, monkeypatch):
+        info = dict(_SEARCH_INFO)
+        info["entries"] = []
+
+        def fake_extract(url, limit):
+            del url, limit
+            return info
+        monkeypatch.setattr(_yt_module, "_extract_flat_sync", fake_extract)
+
+        result = await youtube(action="search", query="zzznotreallyanything")
+        assert "Results (0)" in result
+        assert "(no results)" in result
+
+    @pytest.mark.asyncio
+    async def test_search_bot_detection_error(self, monkeypatch):
+        from yt_dlp.utils import ExtractorError  # type: ignore[import-not-found]
+        exc = ExtractorError("Sign in to confirm you're not a bot.")
+
+        def fake_extract(url, limit):
+            del url, limit
+            raise exc
+        monkeypatch.setattr(_yt_module, "_extract_flat_sync", fake_extract)
+
+        result = await youtube(action="search", query="anything")
+        assert "Error" in result
+        assert "bot" in result.lower()

@@ -1383,6 +1383,65 @@ async def _playlist(url: str, limit: int) -> str:
     return fm + "\n\n" + _fence_content(body, title=str(title))
 
 
+def _search_fm_and_body(
+    info: dict, query: str, limit: int,
+) -> tuple[FMEntries, str]:
+    """Build frontmatter + body for a search-results listing.
+
+    yt-dlp's ``ytsearch{N}:`` URL returns a ``_type='playlist'`` whose
+    entries are video stubs — same shape as ``channel`` and
+    ``playlist``, just framed as search results. The formatter mirrors
+    those but presents the heading as "Results" and surfaces ``query``
+    in frontmatter so callers can echo what they asked for.
+    """
+    entries = list(info.get("entries") or [])[:limit]
+    fm = FMEntries({
+        "api": "yt-dlp",
+        "search": query,
+        "returned_results": len(entries),
+        "trust": _TRUST_ADVISORY,
+    })
+
+    body_parts: list[str] = []
+    body_parts.append(f"## Results ({len(entries)})")
+    body_parts.append("")
+    if entries:
+        for i, entry in enumerate(entries, 1):
+            body_parts.append(_format_video_entry(entry, index=i))
+            body_parts.append("")
+    else:
+        body_parts.append("(no results)")
+    return fm, "\n".join(body_parts).rstrip()
+
+
+async def _search(query: str, limit: int) -> str:
+    """Search YouTube for videos matching ``query``.
+
+    Builds a ``ytsearch{N}:`` URL and runs it through the flat-extract
+    path. ytsearch is unofficial — yt-dlp constructs the request against
+    YouTube's same Innertube endpoints used by the website's search
+    page, so result quality matches what the user would see browsing
+    youtube.com/results?search_query=...
+    """
+    # Strip the query of leading/trailing whitespace; yt-dlp will URL-encode
+    # the rest but rejects empty queries with a confusing message.
+    query = query.strip()
+    if not query:
+        return "Error: 'query' must be a non-empty string for action='search'."
+    search_url = f"ytsearch{limit}:{query}"
+    try:
+        info = await asyncio.to_thread(_extract_flat_sync, search_url, limit)
+    except Exception as exc:
+        return _map_yt_dlp_error(exc)
+    if info is None:
+        return f"Error: yt-dlp returned no results for query: {query}"
+    if not isinstance(info, dict):
+        return "Error: Unexpected yt-dlp response shape for search."
+    fm_entries, body = _search_fm_and_body(info, query, limit)
+    fm = _build_frontmatter(fm_entries)
+    return fm + "\n\n" + _fence_content(body, title=f"Search: {query}")
+
+
 # ---------------------------------------------------------------------------
 # MCP-facing dispatcher
 # ---------------------------------------------------------------------------
@@ -1396,16 +1455,24 @@ async def youtube(
             "with optional BM25 search, time-range filtering, and "
             "explicit window retrieval. "
             "channel: list a channel's recent uploads. "
-            "playlist: list a playlist's items."
+            "playlist: list a playlist's items. "
+            "search: search YouTube for videos matching a free-text query."
         ),
     )],
     url: Annotated[Optional[str], Field(
         description=(
-            "YouTube URL for any action. "
+            "YouTube URL for video / transcript / channel / playlist actions. "
             "video / transcript: watch, youtu.be, shorts, clip, embed, v/. "
             "channel: /@handle, /channel/UC..., /c/, /user/, optionally "
             "with a /videos, /shorts, /streams, /playlists tab suffix. "
-            "playlist: /playlist?list=..."
+            "playlist: /playlist?list=... "
+            "Not used for action='search' (use 'query=' instead)."
+        ),
+    )] = None,
+    query: Annotated[Optional[str], Field(
+        description=(
+            "For action='search': free-text query string. yt-dlp's "
+            "ytsearch{N}: routing handles URL encoding."
         ),
     )] = None,
     languages: Annotated[Optional[list[str]], Field(
@@ -1551,7 +1618,13 @@ async def youtube(
                 "Pass a /playlist?list=... URL."
             )
         return await _playlist(url, limit=max(1, min(limit, _LIST_LIMIT_MAX)))
+    if action == "search":
+        if not query:
+            return "Error: 'query' is required for action='search'."
+        return await _search(
+            query, limit=max(1, min(limit, _LIST_LIMIT_MAX)),
+        )
     return (
         f"Error: Unknown action '{action}'. "
-        "Valid actions: video, transcript, channel, playlist"
+        "Valid actions: video, transcript, channel, playlist, search"
     )

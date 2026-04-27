@@ -450,14 +450,18 @@ The shelf survives context compaction within the same session. For cross-session
 persistence, use export json to save the shelf to a memory file, then import
 it in a future session.""",
 
-    "youtube": """Fetch YouTube video content, captions, channels, and playlists via yt-dlp and youtube-transcript-api.
+    "youtube": """Fetch YouTube content via yt-dlp and youtube-transcript-api.
 
 Use this for YouTube lookups when {fetch_direct} doesn't apply:
 structured metadata + description for a video, a rendered caption
-transcript with timing and search, or a flat listing of recent uploads
-for a channel or items for a playlist.
+transcript with timing and search, a flat listing of recent uploads
+for a channel or items for a playlist, or a YouTube-wide search by
+free-text query.
 
-Actions: video, transcript, channel, playlist.
+Actions: video, transcript, channel, playlist, search.
+
+PARAMETER SPLIT: video / transcript / channel / playlist take url=;
+search takes query=.
 
 Query formats:
 - video: full YouTube URL (watch?v=, youtu.be/, shorts/, clip/, embed/, or v/)
@@ -468,6 +472,7 @@ Query formats:
   Append /videos, /shorts, /streams, /playlists, or /podcasts to list
   the actual entries within that tab.
 - playlist: /playlist?list=...
+- search: free-text query (passed to yt-dlp's ytsearch{N}: routing).
 
 Transcript actions:
 - Default (no search/windows/range): full transcript in the requested
@@ -491,12 +496,14 @@ Auto-generated captions lack punctuation and capitalization; the
 chunking strategy adapts: punctuated input gets sentence-aware window cuts;
 unpunctuated input falls back to pause-aware time windows.
 
-Channel and playlist listings use yt-dlp's flat extraction, returning
-stub entries with id, title, duration, and view count. Set limit= to
-control how many entries (default 30, max 200). When a bare channel
-URL is passed, the response surfaces the channel's tab list with a
-frontmatter hint nudging toward /videos, /shorts, etc. — pick the
-right tab and resubmit.
+Channel, playlist, and search listings use yt-dlp's flat extraction,
+returning stub entries with id, title, duration, and view count. Set
+limit= to control how many entries (default 30, max 200). When a bare
+channel URL is passed, the response surfaces the channel's tab list
+with a frontmatter hint nudging toward /videos, /shorts, etc. — pick
+the right tab and resubmit. Search results match what the user would
+see browsing youtube.com/results?search_query=... since yt-dlp routes
+through the same Innertube endpoint.
 
 Music URLs (music.youtube.com) are out of scope and will be handled by
 a sibling tool.
