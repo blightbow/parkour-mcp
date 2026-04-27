@@ -505,6 +505,19 @@ the right tab and resubmit. Search results match what the user would
 see browsing youtube.com/results?search_query=... since yt-dlp routes
 through the same Innertube endpoint.
 
+A 'video' call returns either the description (default) or the
+comment tree (fetch_comments=true) — these are independent
+investigations and the body pivots between them rather than
+concatenating. Frontmatter carries the video metadata in either case,
+plus 'body: description' or 'body: comments' to declare which view
+was emitted. When the description is shown and the channel reports a
+non-zero comment count, frontmatter includes a hint pointing at the
+fetch_comments=true call.
+
+Comment fetching is opt-in because it adds multiple Innertube
+continuation requests on top of the basic metadata fetch; the cap is
+50 top-level comments and 10 replies per top-level.
+
 Music URLs (music.youtube.com) are out of scope and will be handled by
 a sibling tool.
 

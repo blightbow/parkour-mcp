@@ -239,21 +239,144 @@ def _captions_summary(info: dict) -> tuple[list[str], bool]:
 
 
 # ---------------------------------------------------------------------------
-# Action: video
+# Action: video (with optional comment fetch)
 # ---------------------------------------------------------------------------
+# Comment fetching opts in via ``fetch_comments=True`` because it adds
+# multiple Innertube continuation requests on top of the single player
+# call the basic metadata path needs. A 50/10 cap (top-level / replies-
+# per-top-level) keeps the call bounded; yt-dlp's ``max_comments``
+# extractor arg enforces server-side.
 
-async def _video(url: str) -> str:
-    """Fetch metadata + description for a single YouTube video URL."""
-    ydl = _get_ydl_video()
+_COMMENTS_MAX_TOP_LEVEL = 50
+_COMMENTS_MAX_REPLIES = 10
+
+
+def _extract_video_with_comments_sync(
+    url: str, max_top: int, max_replies: int,
+) -> Any:
+    """Run yt-dlp video extraction with comments enabled.
+
+    Per-call YoutubeDL because the video-mode singleton's opts don't
+    include ``getcomments`` or the ``extractor_args`` overrides — and
+    mutating singleton params across calls would race. Comments are an
+    opt-in rare path, so the per-call construction cost is acceptable.
+    """
+    from yt_dlp import YoutubeDL  # type: ignore[import-not-found]
+    opts = {
+        **_YDL_OPTS_VIDEO,
+        "getcomments": True,
+        "extractor_args": {
+            "youtube": {
+                "comment_sort": ["top"],
+                "max_comments": [str(max_top), str(max_replies)],
+            },
+        },
+    }
+    ydl = YoutubeDL(opts)
+    info = ydl.extract_info(url, download=False)
+    return ydl.sanitize_info(info)
+
+
+def _format_comment(c: dict) -> str:
+    """Format the author + meta + text portion of one comment.
+
+    Internal whitespace in comment text is collapsed to single spaces
+    (same convention as caption segments) so each comment renders as
+    one line in the output. Pinned and uploader-author badges surface
+    as bracketed tags rather than emoji.
+    """
+    author = c.get("author") or "(anonymous)"
+    likes = c.get("like_count")
+    time_text = c.get("_time_text") or ""
+    is_pinned = bool(c.get("is_pinned"))
+    is_uploader = bool(c.get("author_is_uploader"))
+
+    badges = []
+    if is_pinned:
+        badges.append("[pinned]")
+    if is_uploader:
+        badges.append("[uploader]")
+
+    head_bits = [f"**{author}**"]
+    if badges:
+        head_bits.append(" ".join(badges))
+    if likes is not None:
+        head_bits.append(f"{likes:,} likes")
+    if time_text:
+        head_bits.append(time_text)
+    head = ", ".join(head_bits)
+
+    text = " ".join((c.get("text") or "").split())
+    return f"{head}: {text}"
+
+
+def _format_comment_tree(comments: list[dict]) -> str:
+    """Render yt-dlp's flat comment list as a nested numbered listing.
+
+    yt-dlp returns comments as a flat list with a ``parent`` field
+    pointing at the parent comment id (or the literal ``"root"`` for
+    top-level). Group into top-level + reply children, then render
+    top-level numbered with replies bullet-indented underneath.
+    Sort order is preserved from yt-dlp (top by default per the
+    ``comment_sort=top`` extractor arg).
+    """
+    if not comments:
+        return "## Comments\n\n(no comments)"
+
+    by_id = {c.get("id"): c for c in comments if c.get("id")}
+    children: dict[str, list[dict]] = {}
+    top_level: list[dict] = []
+    for c in comments:
+        parent = c.get("parent")
+        if parent and parent != "root" and parent in by_id:
+            children.setdefault(parent, []).append(c)
+        else:
+            top_level.append(c)
+
+    n_top = len(top_level)
+    n_replies = len(comments) - n_top
+    if n_replies:
+        header = f"## Comments ({n_top} top-level, {n_replies} replies)"
+    else:
+        header = f"## Comments ({n_top})"
+
+    parts = [header, ""]
+    for i, c in enumerate(top_level, 1):
+        parts.append(f"{i}. {_format_comment(c)}")
+        cid = c.get("id")
+        if cid:
+            for reply in children.get(cid, []):
+                parts.append(f"   - {_format_comment(reply)}")
+    return "\n".join(parts)
+
+
+async def _video(url: str, *, fetch_comments: bool = False) -> str:
+    """Fetch a single YouTube video, returning either description or comments.
+
+    The default body is the video's description. ``fetch_comments=True``
+    pivots to return the comment tree instead — comments and the
+    description are independent investigations, so the body presents
+    one or the other, not both. Frontmatter carries the same video
+    metadata in either case, plus comment counts when comments were
+    requested.
+    """
     try:
-        info = await asyncio.to_thread(ydl.extract_info, url, download=False)
+        if fetch_comments:
+            info = await asyncio.to_thread(
+                _extract_video_with_comments_sync, url,
+                _COMMENTS_MAX_TOP_LEVEL, _COMMENTS_MAX_REPLIES,
+            )
+        else:
+            ydl = _get_ydl_video()
+            raw = await asyncio.to_thread(
+                ydl.extract_info, url, download=False,
+            )
+            info = ydl.sanitize_info(raw) if raw is not None else None
     except Exception as exc:
         return _map_yt_dlp_error(exc)
 
     if info is None:
         return f"Error: yt-dlp returned no metadata for {url}"
-
-    info = ydl.sanitize_info(info)
     if not isinstance(info, dict):
         return f"Error: Unexpected yt-dlp response shape for {url}"
 
@@ -285,8 +408,38 @@ async def _video(url: str) -> str:
         "trust": _TRUST_ADVISORY,
     })
 
+    if fetch_comments:
+        comments = list(info.get("comments") or [])
+        # Top-level vs reply split for frontmatter counts. Use the same
+        # parent-field convention as _format_comment_tree.
+        by_id = {c.get("id"): c for c in comments if c.get("id")}
+        n_top_level = sum(
+            1 for c in comments
+            if not c.get("parent")
+            or c.get("parent") == "root"
+            or c.get("parent") not in by_id
+        )
+        fm_entries["top_level_comments"] = n_top_level
+        fm_entries["total_comments"] = len(comments)
+        fm_entries["body"] = "comments"
+        fm_entries.append(
+            "hint",
+            "Call without fetch_comments=True to read the description instead.",
+        )
+        body = _format_comment_tree(comments)
+    else:
+        fm_entries["body"] = "description"
+        if info.get("comment_count") is not None:
+            # Surface the channel-reported comment count so callers know
+            # there are comments to fetch (and roughly how many).
+            fm_entries["comment_count"] = info.get("comment_count")
+            fm_entries.append(
+                "hint",
+                "Call with fetch_comments=True to read the comment tree.",
+            )
+        body = description.strip() if description else "(no description)"
+
     fm = _build_frontmatter(fm_entries)
-    body = description.strip() if description else "(no description)"
     return fm + "\n\n" + _fence_content(body, title=title)
 
 
@@ -1759,6 +1912,15 @@ async def youtube(
             "channels don't pull every upload."
         ),
     )] = _LIST_LIMIT_DEFAULT,
+    fetch_comments: Annotated[bool, Field(
+        description=(
+            "For 'video': also fetch the comment tree (top-level + first "
+            "tier of replies). Off by default — comments are an expensive "
+            "extraction (multiple Innertube continuations) so the basic "
+            "metadata path stays cheap. Capped server-side at 50 "
+            "top-level comments and 10 replies per top-level."
+        ),
+    )] = False,
 ) -> str:
     """YouTube integration via yt-dlp and youtube-transcript-api."""
     if action == "video":
@@ -1778,7 +1940,7 @@ async def youtube(
                 f"Error: URL is a {kind[0]}, not a video. "
                 f"The {kind[0]} action is not yet implemented."
             )
-        return await _video(url)
+        return await _video(url, fetch_comments=fetch_comments)
     if action == "transcript":
         if not url:
             return "Error: 'url' is required for action='transcript'."
