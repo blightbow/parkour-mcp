@@ -41,6 +41,9 @@ _discourse_mod = sys.modules["parkour_mcp.discourse"]
 import parkour_mcp.mediawiki  # noqa: E402, F401
 _mediawiki_mod = sys.modules["parkour_mcp.mediawiki"]
 
+import parkour_mcp.youtube  # noqa: E402, F401
+_youtube_mod = sys.modules["parkour_mcp.youtube"]
+
 
 @pytest.fixture(autouse=True)
 def _enable_s2_for_tests(monkeypatch):

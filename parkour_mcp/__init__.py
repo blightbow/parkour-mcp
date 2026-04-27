@@ -19,6 +19,7 @@ from .ietf import ietf
 from .packages import packages
 from .discourse import discourse
 from .mediawiki import mediawiki
+from .youtube import youtube
 from .shelf import research_shelf, _get_shelf
 from .common import TOOL_NAMES, init_tool_names, s2_enabled
 
@@ -71,6 +72,7 @@ _ALWAYS_ON_TOOLS: tuple[tuple[str, Callable[..., Any]], ...] = (
     ("packages", packages),
     ("discourse", discourse),
     ("mediawiki", mediawiki),
+    ("youtube", youtube),
 )
 
 # semantic_scholar is gated by S2_ACCEPT_TOS at runtime (see common.s2_enabled).
@@ -143,6 +145,7 @@ PROFILE_VARS = {
         "ietf_tool": "IETF",
         "semantic_scholar_tool": "SemanticScholar",
         "shelf_tool": "ResearchShelf",
+        "youtube_tool": "Youtube",
         "fetch_direct_when_to_use": (
             "Unlike WebFetch, fetches through the user's device instead of proxying through\n"
             "Anthropic's servers. Uses precise content extraction techniques and clean\n"
@@ -164,6 +167,7 @@ PROFILE_VARS = {
         "ietf_tool": "ietf",
         "semantic_scholar_tool": "semantic_scholar",
         "shelf_tool": "research_shelf",
+        "youtube_tool": "youtube",
         "fetch_direct_when_to_use": (
             "Unlike web_fetch, fetches through the user's device instead of proxying through\n"
             "Anthropic's servers. Uses precise content extraction techniques and clean\n"
@@ -445,6 +449,25 @@ Query formats:
 The shelf survives context compaction within the same session. For cross-session
 persistence, use export json to save the shelf to a memory file, then import
 it in a future session.""",
+
+    "youtube": """Fetch YouTube content via yt-dlp's unofficial extraction.
+
+Use this for YouTube video lookups when {fetch_direct} doesn't apply: get
+structured metadata (title, channel, duration, view count, upload date,
+caption availability) plus the video description for a single video URL.
+
+Actions: video.
+
+Query formats:
+- video: full YouTube URL (watch?v=, youtu.be/, shorts/, clip/, embed/, or v/)
+
+Channel, playlist, transcript, and search actions are forthcoming. Music URLs
+(music.youtube.com) are out of scope and will be handled by a sibling tool.
+
+No authentication required. May fail with bot-detection errors on cloud IPs
+or under sustained request volume; residential connections fare best. The
+fallback workaround when blocked is to set HTTPS_PROXY to a residential
+proxy endpoint.""",
 
     "mediawiki": """Search and retrieve content from Wikipedia and other MediaWiki sites.
 

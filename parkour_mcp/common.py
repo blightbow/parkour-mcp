@@ -233,6 +233,7 @@ TOOL_NAMES: dict[str, dict[str, str]] = {
     "packages": {"code": "Packages", "desktop": "packages"},
     "discourse": {"code": "Discourse", "desktop": "discourse"},
     "mediawiki": {"code": "MediaWiki", "desktop": "mediawiki"},
+    "youtube": {"code": "Youtube", "desktop": "youtube"},
 }
 
 # Populated by init_tool_names() at startup; keyed by internal tool name.
