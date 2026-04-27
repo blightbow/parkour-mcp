@@ -1423,3 +1423,311 @@ class TestTranscriptCacheBehavior:
         )
         # Only one fetch — second call hit cache
         assert fetch_count["n"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Channel and playlist actions
+# ---------------------------------------------------------------------------
+
+_CHANNEL_INFO = {
+    "_type": "playlist",
+    "id": "UCBJycsmduvYEL83R_U4JriQ",
+    "title": "MKBHD",
+    "channel": "MKBHD",
+    "channel_id": "UCBJycsmduvYEL83R_U4JriQ",
+    "channel_url": "https://www.youtube.com/@MKBHD",
+    "uploader": "MKBHD",
+    "uploader_id": "@MKBHD",
+    "uploader_url": "https://www.youtube.com/@MKBHD",
+    "webpage_url": "https://www.youtube.com/@MKBHD",
+    "channel_follower_count": 18_500_000,
+    "playlist_count": 1500,
+    "description": "Quality Tech Videos.",
+    "entries": [
+        {
+            "id": f"vid{i:02d}",
+            "title": f"Video {i}",
+            "duration": 600 + i * 30,
+            "view_count": 100_000 + i * 1000,
+        }
+        for i in range(5)
+    ],
+}
+
+_PLAYLIST_INFO = {
+    "_type": "playlist",
+    "id": "PLrAXtmRdnEQy6nuLMt9H1Pj7RgqZTjB",
+    "title": "Curated Reading",
+    "uploader": "Some User",
+    "uploader_id": "@SomeUser",
+    "uploader_url": "https://www.youtube.com/@SomeUser",
+    "webpage_url": (
+        "https://www.youtube.com/playlist?list=PLrAXtmRdnEQy6nuLMt9H1Pj7RgqZTjB"
+    ),
+    "modified_date": "20260301",
+    "playlist_count": 12,
+    "description": "Things to watch.",
+    "entries": [
+        {"id": f"item{i}", "title": f"Item {i}", "duration": 300}
+        for i in range(3)
+    ],
+}
+
+
+class TestChannelAction:
+    @pytest.mark.asyncio
+    async def test_channel_returns_frontmatter_and_entries(self, monkeypatch):
+        def fake_extract(url, limit):
+            del url, limit
+            return _CHANNEL_INFO
+        monkeypatch.setattr(_yt_module, "_extract_flat_sync", fake_extract)
+
+        result = await youtube(
+            action="channel",
+            url="https://www.youtube.com/@MKBHD",
+        )
+        assert "title: MKBHD" in result
+        assert "channel: MKBHD" in result
+        assert "channel_id: UCBJycsmduvYEL83R_U4JriQ" in result
+        assert "follower_count: 18500000" in result
+        assert "total_videos: 1500" in result
+        assert "returned_videos: 5" in result
+        assert "Quality Tech Videos." in result
+        assert "Recent uploads (5)" in result
+        assert "Video 0" in result
+        assert "https://www.youtube.com/watch?v=vid00" in result
+        assert "untrusted content" in result
+
+    @pytest.mark.asyncio
+    async def test_channel_no_url(self):
+        result = await youtube(action="channel")
+        assert "Error" in result and "url" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_channel_video_url_rejected(self):
+        result = await youtube(
+            action="channel",
+            url="https://www.youtube.com/watch?v=jNQXAC9IVRw",
+        )
+        assert "Error" in result
+        assert "channel" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_channel_music_url_rejected(self):
+        result = await youtube(
+            action="channel",
+            url="https://music.youtube.com/channel/UCxxx",
+        )
+        assert "Error" in result
+        assert "music" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_channel_limit_clamped(self, monkeypatch):
+        observed = {"limit": None}
+
+        def fake_extract(url, limit):
+            del url
+            observed["limit"] = limit
+            return _CHANNEL_INFO
+        monkeypatch.setattr(_yt_module, "_extract_flat_sync", fake_extract)
+
+        await youtube(
+            action="channel",
+            url="https://www.youtube.com/@MKBHD",
+            limit=999,  # over max
+        )
+        # _LIST_LIMIT_MAX = 200; should clamp
+        assert observed["limit"] == 200
+
+        await youtube(
+            action="channel",
+            url="https://www.youtube.com/@MKBHD",
+            limit=0,  # under min
+        )
+        assert observed["limit"] == 1
+
+    @pytest.mark.asyncio
+    async def test_channel_empty_entries(self, monkeypatch):
+        info = dict(_CHANNEL_INFO)
+        info["entries"] = []
+        info["playlist_count"] = 0
+
+        def fake_extract(url, limit):
+            del url, limit
+            return info
+        monkeypatch.setattr(_yt_module, "_extract_flat_sync", fake_extract)
+
+        result = await youtube(
+            action="channel",
+            url="https://www.youtube.com/@MKBHD",
+        )
+        assert "Recent uploads (0)" in result
+        assert "(no entries)" in result
+
+    @pytest.mark.asyncio
+    async def test_channel_bot_detection_error(self, monkeypatch):
+        from yt_dlp.utils import ExtractorError  # type: ignore[import-not-found]
+        exc = ExtractorError("Sign in to confirm you're not a bot.")
+
+        def fake_extract(url, limit):
+            del url, limit
+            raise exc
+        monkeypatch.setattr(_yt_module, "_extract_flat_sync", fake_extract)
+
+        result = await youtube(
+            action="channel",
+            url="https://www.youtube.com/@MKBHD",
+        )
+        assert "Error" in result
+        assert "bot" in result.lower()
+
+
+class TestPlaylistAction:
+    @pytest.mark.asyncio
+    async def test_playlist_returns_frontmatter_and_items(self, monkeypatch):
+        def fake_extract(url, limit):
+            del url, limit
+            return _PLAYLIST_INFO
+        monkeypatch.setattr(_yt_module, "_extract_flat_sync", fake_extract)
+
+        result = await youtube(
+            action="playlist",
+            url=(
+                "https://www.youtube.com/playlist?"
+                "list=PLrAXtmRdnEQy6nuLMt9H1Pj7RgqZTjB"
+            ),
+        )
+        assert "title: Curated Reading" in result
+        assert "uploader: Some User" in result
+        assert "last_updated: 2026-03-01" in result
+        assert "total_items: 12" in result
+        assert "returned_items: 3" in result
+        assert "Items (3)" in result
+        assert "Item 0" in result
+
+    @pytest.mark.asyncio
+    async def test_playlist_no_url(self):
+        result = await youtube(action="playlist")
+        assert "Error" in result and "url" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_playlist_video_url_rejected(self):
+        result = await youtube(
+            action="playlist",
+            url="https://www.youtube.com/watch?v=jNQXAC9IVRw",
+        )
+        assert "Error" in result
+        assert "playlist" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_playlist_channel_url_rejected(self):
+        result = await youtube(
+            action="playlist",
+            url="https://www.youtube.com/@MKBHD",
+        )
+        assert "Error" in result
+
+
+class TestVideoEntryFormatting:
+    def test_format_with_all_meta(self):
+        entry = {
+            "id": "abc",
+            "title": "Test Title",
+            "duration": 125,
+            "view_count": 12345,
+            "uploader": "Channel Name",
+        }
+        out = _yt_module._format_video_entry(entry, index=1)
+        assert "1. **Test Title**" in out
+        assert "2:05" in out
+        assert "12,345 views" in out
+        assert "Channel Name" in out
+        assert "https://www.youtube.com/watch?v=abc" in out
+
+    def test_format_minimal(self):
+        entry = {"id": "xyz", "title": "Bare"}
+        out = _yt_module._format_video_entry(entry, index=2)
+        assert "2. **Bare**" in out
+        assert "https://www.youtube.com/watch?v=xyz" in out
+
+    def test_format_no_id(self):
+        entry = {"title": "No URL"}
+        out = _yt_module._format_video_entry(entry, index=1)
+        assert "1. **No URL**" in out
+        assert "watch?v=" not in out
+
+    def test_format_prefers_explicit_url(self):
+        # Tab entries have an explicit url= pointing at the tab; respect it.
+        entry = {
+            "id": "UCxxx",
+            "title": "Channel - Videos",
+            "url": "https://www.youtube.com/@handle/videos",
+        }
+        out = _yt_module._format_video_entry(entry, index=1)
+        assert "https://www.youtube.com/@handle/videos" in out
+        assert "watch?v=UCxxx" not in out
+
+
+class TestChannelTabListingDetection:
+    @pytest.mark.asyncio
+    async def test_tab_listing_emits_hint(self, monkeypatch):
+        # All entries are nested playlists (_type='playlist') → tab listing.
+        # webpage_url carries the tab URL on real yt-dlp output, so the
+        # formatter renders that link rather than a constructed watch URL.
+        info = {
+            "_type": "playlist",
+            "id": "UCxxx",
+            "title": "TestChannel",
+            "channel": "TestChannel",
+            "channel_id": "UCxxx",
+            "channel_url": "https://www.youtube.com/@TestChannel",
+            "webpage_url": "https://www.youtube.com/@TestChannel",
+            "entries": [
+                {
+                    "_type": "playlist",
+                    "id": "UCxxx",
+                    "title": "TestChannel - Videos",
+                    "webpage_url": "https://www.youtube.com/@TestChannel/videos",
+                },
+                {
+                    "_type": "playlist",
+                    "id": "UCxxx",
+                    "title": "TestChannel - Shorts",
+                    "webpage_url": "https://www.youtube.com/@TestChannel/shorts",
+                },
+            ],
+        }
+
+        def fake_extract(url, limit):
+            del url, limit
+            return info
+        monkeypatch.setattr(_yt_module, "_extract_flat_sync", fake_extract)
+
+        result = await youtube(
+            action="channel",
+            url="https://www.youtube.com/@TestChannel",
+        )
+        assert "hint:" in result.lower()
+        assert "/videos" in result
+        # Body heading reflects the tab nature
+        assert "## Tabs" in result
+        # Tab URLs render via explicit url=, not via watch?v=
+        assert "/@TestChannel/videos" in result
+        assert "watch?v=UCxxx" not in result
+
+    @pytest.mark.asyncio
+    async def test_video_listing_no_tab_hint(self, monkeypatch):
+        # Different ids → not a tab listing
+        def fake_extract(url, limit):
+            del url, limit
+            return _CHANNEL_INFO
+        monkeypatch.setattr(_yt_module, "_extract_flat_sync", fake_extract)
+
+        result = await youtube(
+            action="channel",
+            url="https://www.youtube.com/@MKBHD/videos",
+        )
+        # Heading says "Recent uploads" not "Tabs"
+        assert "## Recent uploads" in result
+        # No tab-routing hint
+        assert "tab list" not in result.lower()

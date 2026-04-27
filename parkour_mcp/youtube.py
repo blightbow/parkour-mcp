@@ -1180,6 +1180,210 @@ async def _transcript(
 
 
 # ---------------------------------------------------------------------------
+# Actions: channel and playlist (yt-dlp flat extraction)
+# ---------------------------------------------------------------------------
+# Channel and playlist URLs both resolve through yt-dlp's
+# ``extract_flat='in_playlist'`` mode, which returns a ``_type='playlist'``
+# dict with stub entries (id, title, url, sometimes duration / view_count).
+# A single shared YoutubeDL is intentionally NOT reused: list-mode opts
+# (especially ``playlistend``) vary per call, and these actions are far
+# less hot than ``video``, so per-call construction is cheap enough.
+
+_LIST_LIMIT_DEFAULT = 30
+_LIST_LIMIT_MAX = 200
+
+
+def _extract_flat_sync(url: str, limit: int) -> Any:
+    """Run yt-dlp flat extraction synchronously.
+
+    Lives at module scope so ``asyncio.to_thread`` can pickle it cleanly
+    on platforms that need it. Caps the playlistend opt server-side; the
+    formatter caps client-side too as a defense-in-depth in case yt-dlp
+    over-delivers.
+    """
+    from yt_dlp import YoutubeDL  # type: ignore[import-not-found]
+    opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "skip_download": True,
+        "extract_flat": "in_playlist",
+        "noplaylist": False,
+        "playlistend": limit,
+        "logger": logging.getLogger("yt_dlp"),
+    }
+    ydl = YoutubeDL(opts)
+    info = ydl.extract_info(url, download=False)
+    return ydl.sanitize_info(info)
+
+
+def _format_video_entry(entry: dict, *, index: int) -> str:
+    """Format a single flat-extract entry as a numbered list item.
+
+    URL preference order: ``webpage_url`` (yt-dlp's canonical, populated
+    on ``_type='playlist'`` tab entries), then ``url`` (populated on
+    ``_type='url'`` video entries), then a constructed watch URL from
+    ``id``. Tab entries set ``id`` to the parent channel's UC id rather
+    than a video id, so the constructed-URL fallback would be wrong for
+    them — explicit URLs are the safer source.
+    """
+    vid = entry.get("id") or ""
+    title = entry.get("title") or "(no title)"
+    duration = entry.get("duration")
+    view_count = entry.get("view_count")
+    uploader = entry.get("uploader") or entry.get("channel")
+    explicit_url = entry.get("webpage_url") or entry.get("url")
+
+    head = f"{index}. **{title}**"
+    meta_bits = []
+    if duration is not None:
+        meta_bits.append(_format_duration(duration) or "")
+    if view_count is not None:
+        meta_bits.append(f"{view_count:,} views")
+    if uploader:
+        meta_bits.append(uploader)
+    meta_bits = [m for m in meta_bits if m]
+    if meta_bits:
+        head += f" ({', '.join(meta_bits)})"
+
+    lines = [head]
+    if explicit_url and isinstance(explicit_url, str) and explicit_url.startswith("http"):
+        lines.append(f"   {explicit_url}")
+    elif vid:
+        lines.append(f"   https://www.youtube.com/watch?v={vid}")
+    return "\n".join(lines)
+
+
+def _is_tab_listing(entries: list[dict]) -> bool:
+    """Detect a channel-tab listing.
+
+    yt-dlp returns the channel's tabs as entries when given a bare
+    channel URL (without /videos, /shorts, /streams suffix). Tab
+    entries carry ``_type='playlist'`` (they're nested playlists),
+    while video entries carry ``_type='url'``. If every entry is a
+    nested playlist, treat the response as a tab listing.
+    """
+    if not entries:
+        return False
+    return all(e.get("_type") == "playlist" for e in entries)
+
+
+def _channel_fm_and_body(info: dict, limit: int) -> tuple[FMEntries, str]:
+    """Build frontmatter + body for a channel listing."""
+    title = info.get("title") or info.get("channel") or "Untitled"
+    description = info.get("description") or ""
+    entries = list(info.get("entries") or [])[:limit]
+    channel_id = info.get("channel_id") or info.get("uploader_id")
+    tab_listing = _is_tab_listing(entries)
+
+    fm = FMEntries({
+        "title": title,
+        "source": (
+            info.get("webpage_url")
+            or info.get("channel_url")
+            or info.get("uploader_url")
+            or ""
+        ),
+        "api": "yt-dlp",
+        "channel": info.get("channel") or info.get("uploader"),
+        "channel_id": channel_id,
+        "follower_count": info.get("channel_follower_count"),
+        "total_videos": info.get("playlist_count"),
+        "returned_videos": len(entries),
+        "trust": _TRUST_ADVISORY,
+    })
+    if tab_listing:
+        fm.append("hint", (
+            "URL returned the channel's tab list. Append /videos, "
+            "/shorts, /streams, /playlists, or /podcasts to scope to "
+            "a specific tab's entries."
+        ))
+
+    body_parts: list[str] = []
+    if description.strip():
+        body_parts.append(description.strip())
+        body_parts.append("")
+    heading = "Tabs" if tab_listing else "Recent uploads"
+    body_parts.append(f"## {heading} ({len(entries)})")
+    body_parts.append("")
+    if entries:
+        for i, entry in enumerate(entries, 1):
+            body_parts.append(_format_video_entry(entry, index=i))
+            body_parts.append("")
+    else:
+        body_parts.append("(no entries)")
+    return fm, "\n".join(body_parts).rstrip()
+
+
+def _playlist_fm_and_body(info: dict, limit: int) -> tuple[FMEntries, str]:
+    """Build frontmatter + body for a playlist listing."""
+    title = info.get("title") or "Untitled"
+    description = info.get("description") or ""
+    entries = list(info.get("entries") or [])[:limit]
+
+    fm = FMEntries({
+        "title": title,
+        "source": (
+            info.get("webpage_url")
+            or info.get("uploader_url")
+            or ""
+        ),
+        "api": "yt-dlp",
+        "uploader": info.get("uploader"),
+        "uploader_id": info.get("uploader_id"),
+        "last_updated": _format_upload_date(info.get("modified_date")),
+        "total_items": info.get("playlist_count"),
+        "returned_items": len(entries),
+        "trust": _TRUST_ADVISORY,
+    })
+
+    body_parts: list[str] = []
+    if description.strip():
+        body_parts.append(description.strip())
+        body_parts.append("")
+    body_parts.append(f"## Items ({len(entries)})")
+    body_parts.append("")
+    if entries:
+        for i, entry in enumerate(entries, 1):
+            body_parts.append(_format_video_entry(entry, index=i))
+            body_parts.append("")
+    else:
+        body_parts.append("(no entries)")
+    return fm, "\n".join(body_parts).rstrip()
+
+
+async def _channel(url: str, limit: int) -> str:
+    """Fetch a channel's recent uploads via yt-dlp flat extraction."""
+    try:
+        info = await asyncio.to_thread(_extract_flat_sync, url, limit)
+    except Exception as exc:
+        return _map_yt_dlp_error(exc)
+    if info is None:
+        return f"Error: yt-dlp returned no metadata for {url}"
+    if not isinstance(info, dict):
+        return f"Error: Unexpected yt-dlp response shape for {url}"
+    fm_entries, body = _channel_fm_and_body(info, limit)
+    fm = _build_frontmatter(fm_entries)
+    title = fm_entries.get("title") or "Untitled"
+    return fm + "\n\n" + _fence_content(body, title=str(title))
+
+
+async def _playlist(url: str, limit: int) -> str:
+    """Fetch a playlist's items via yt-dlp flat extraction."""
+    try:
+        info = await asyncio.to_thread(_extract_flat_sync, url, limit)
+    except Exception as exc:
+        return _map_yt_dlp_error(exc)
+    if info is None:
+        return f"Error: yt-dlp returned no metadata for {url}"
+    if not isinstance(info, dict):
+        return f"Error: Unexpected yt-dlp response shape for {url}"
+    fm_entries, body = _playlist_fm_and_body(info, limit)
+    fm = _build_frontmatter(fm_entries)
+    title = fm_entries.get("title") or "Untitled"
+    return fm + "\n\n" + _fence_content(body, title=str(title))
+
+
+# ---------------------------------------------------------------------------
 # MCP-facing dispatcher
 # ---------------------------------------------------------------------------
 
@@ -1190,13 +1394,18 @@ async def youtube(
             "video: fetch video metadata + description from a YouTube URL. "
             "transcript: fetch the caption transcript for a video URL, "
             "with optional BM25 search, time-range filtering, and "
-            "explicit window retrieval."
+            "explicit window retrieval. "
+            "channel: list a channel's recent uploads. "
+            "playlist: list a playlist's items."
         ),
     )],
     url: Annotated[Optional[str], Field(
         description=(
-            "YouTube URL for the 'video' or 'transcript' action. "
-            "Accepts watch, youtu.be, shorts, clip, embed, and v/ forms."
+            "YouTube URL for any action. "
+            "video / transcript: watch, youtu.be, shorts, clip, embed, v/. "
+            "channel: /@handle, /channel/UC..., /c/, /user/, optionally "
+            "with a /videos, /shorts, /streams, /playlists tab suffix. "
+            "playlist: /playlist?list=..."
         ),
     )] = None,
     languages: Annotated[Optional[list[str]], Field(
@@ -1253,6 +1462,14 @@ async def youtube(
             "meaningful when a query or range is set."
         ),
     )] = "score",
+    limit: Annotated[int, Field(
+        description=(
+            "For 'channel' / 'playlist': maximum number of entries to "
+            "return. Default 30, capped at 200. yt-dlp's flat extraction "
+            "respects this server-side via playlistend, so large "
+            "channels don't pull every upload."
+        ),
+    )] = _LIST_LIMIT_DEFAULT,
 ) -> str:
     """YouTube integration via yt-dlp and youtube-transcript-api."""
     if action == "video":
@@ -1302,4 +1519,39 @@ async def youtube(
             end_seconds=end_seconds,
             order=order,
         )
-    return f"Error: Unknown action '{action}'. Valid actions: video, transcript"
+    if action == "channel":
+        if not url:
+            return "Error: 'url' is required for action='channel'."
+        kind = _detect_youtube_url(url)
+        if kind is None:
+            return f"Error: Not a recognized YouTube URL: {url}"
+        if kind[0] == "music":
+            return (
+                "Error: music.youtube.com URLs are out of scope for this tool."
+            )
+        if kind[0] != "channel":
+            return (
+                f"Error: URL is a {kind[0]}, not a channel. "
+                "Pass an /@handle, /channel/UC..., /c/, or /user/ URL."
+            )
+        return await _channel(url, limit=max(1, min(limit, _LIST_LIMIT_MAX)))
+    if action == "playlist":
+        if not url:
+            return "Error: 'url' is required for action='playlist'."
+        kind = _detect_youtube_url(url)
+        if kind is None:
+            return f"Error: Not a recognized YouTube URL: {url}"
+        if kind[0] == "music":
+            return (
+                "Error: music.youtube.com URLs are out of scope for this tool."
+            )
+        if kind[0] != "playlist":
+            return (
+                f"Error: URL is a {kind[0]}, not a playlist. "
+                "Pass a /playlist?list=... URL."
+            )
+        return await _playlist(url, limit=max(1, min(limit, _LIST_LIMIT_MAX)))
+    return (
+        f"Error: Unknown action '{action}'. "
+        "Valid actions: video, transcript, channel, playlist"
+    )

@@ -450,36 +450,56 @@ The shelf survives context compaction within the same session. For cross-session
 persistence, use export json to save the shelf to a memory file, then import
 it in a future session.""",
 
-    "youtube": """Fetch YouTube video content and captions via yt-dlp and youtube-transcript-api.
+    "youtube": """Fetch YouTube video content, captions, channels, and playlists via yt-dlp and youtube-transcript-api.
 
-Use this for YouTube video lookups when {fetch_direct} doesn't apply:
-structured metadata + description, or a rendered caption transcript with
-timing.
+Use this for YouTube lookups when {fetch_direct} doesn't apply:
+structured metadata + description for a video, a rendered caption
+transcript with timing and search, or a flat listing of recent uploads
+for a channel or items for a playlist.
 
-Actions: video, transcript.
+Actions: video, transcript, channel, playlist.
 
 Query formats:
 - video: full YouTube URL (watch?v=, youtu.be/, shorts/, clip/, embed/, or v/)
-- transcript: same URL formats; combine with languages= and timestamps=
+- transcript: same URL formats as video; combine with languages=,
+  timestamps=, search=, windows=, start_seconds=, end_seconds=, order=
+- channel: /@handle, /channel/UC..., /c/, /user/. The bare channel URL
+  returns the channel's available tabs (Videos, Shorts, Live, etc.).
+  Append /videos, /shorts, /streams, /playlists, or /podcasts to list
+  the actual entries within that tab.
+- playlist: /playlist?list=...
+
+Transcript actions:
+- Default (no search/windows/range): full transcript in the requested
+  timestamps= shape.
+- search="query": BM25 over window text, with optional time-range filter.
+- start_seconds/end_seconds: half-open time-range filter.
+- windows=[i, ...]: explicit retrieval by window index. Mutually exclusive
+  with search and time-range filters.
+- order=score (default) or order=time: BM25 vs chronological ordering.
 
 Transcript timestamps= modes:
 - compact (default): sparse anchors at ~30s windows plus inline markers for
   unusually long pauses; each source caption cue on its own line. Hybrid
   shape that preserves citation precision while keeping token cost low.
-- absolute: per-line [MM:SS] prefix on every cue. Use when the caller needs
-  to cite specific moments without relying on window anchors.
-- none: flat text with no timing. Use for downstream summarization where
-  timing is irrelevant.
-- structured: YAML list of {t, d, text} triples. Use for programmatic
-  consumption.
+- absolute: per-line [MM:SS] prefix on every cue.
+- none: flat text with no timing.
+- structured: YAML list of {t, d, text} triples for machine consumers.
 
 Auto-generated captions lack punctuation and capitalization; the
 'transcript_kind' field in frontmatter signals which to expect. The
 chunking strategy adapts: punctuated input gets sentence-aware window cuts;
 unpunctuated input falls back to pause-aware time windows.
 
-Channel, playlist, and search actions are forthcoming. Music URLs
-(music.youtube.com) are out of scope and will be handled by a sibling tool.
+Channel and playlist listings use yt-dlp's flat extraction, returning
+stub entries with id, title, duration, and view count. Set limit= to
+control how many entries (default 30, max 200). When a bare channel
+URL is passed, the response surfaces the channel's tab list with a
+frontmatter hint nudging toward /videos, /shorts, etc. — pick the
+right tab and resubmit.
+
+Music URLs (music.youtube.com) are out of scope and will be handled by
+a sibling tool.
 
 No authentication required. May fail with bot-detection or PoTokenRequired
 errors; residential connections fare best. The fallback workaround when
