@@ -627,6 +627,7 @@ class _TranscriptEntry:
     __slots__ = (
         "url", "video_id", "language_code", "is_generated",
         "segments", "windows", "chunking_strategy", "group",
+        "fetcher",
         "_tantivy_index", "_built",
     )
 
@@ -663,6 +664,7 @@ class _TranscriptEntry:
         windows: tuple[Window, ...],
         chunking_strategy: str,
         group: Optional[str] = None,
+        fetcher: str = "youtube-transcript-api",
     ):
         self.url = url
         self.video_id = video_id
@@ -672,6 +674,7 @@ class _TranscriptEntry:
         self.windows = windows
         self.chunking_strategy = chunking_strategy
         self.group = group
+        self.fetcher = fetcher
         self._tantivy_index = None
         self._built = False
 
@@ -964,12 +967,147 @@ def _fetch_transcript_sync(video_id: str, languages: list[str]):
     return api.fetch(video_id, languages=languages)
 
 
+# ---------------------------------------------------------------------------
+# Transcript: yt-dlp fallback path
+# ---------------------------------------------------------------------------
+# When youtube-transcript-api raises RequestBlocked or PoTokenRequired,
+# yt-dlp's caption code path hits a different Innertube endpoint and may
+# succeed where the dedicated library failed. yt-dlp pulls caption-track
+# URLs into ``info["subtitles"]`` and ``info["automatic_captions"]``;
+# the JSON3 format is YouTube's native timed-text JSON and is the
+# cleanest target to parse without an external library.
+
+@dataclass(frozen=True)
+class _FallbackSnippet:
+    """Duck-typed equivalent of FetchedTranscriptSnippet for the fallback."""
+    start: float
+    duration: float
+    text: str
+
+
+@dataclass(frozen=True)
+class _FallbackTranscript:
+    """Duck-typed equivalent of FetchedTranscript for the fallback."""
+    snippets: tuple[_FallbackSnippet, ...]
+    language_code: str
+    is_generated: bool
+
+
+def _extract_video_info_sync(url: str) -> Any:
+    """Fetch full video info via the video-mode YoutubeDL singleton.
+
+    Captures subtitle / automatic_caption URLs; reuse of the singleton
+    means the PoToken cache and JS player solve carry across the
+    ``video`` and ``transcript`` fallback paths on the same video.
+    """
+    ydl = _get_ydl_video()
+    info = ydl.extract_info(url, download=False)
+    return ydl.sanitize_info(info)
+
+
+def _pick_caption_track(
+    subs: dict, auto: dict, languages: list[str],
+) -> tuple[Optional[list[dict]], Optional[str], bool]:
+    """Pick the best track for the requested language preference list.
+
+    Manual captions win over auto-generated. Returns
+    ``(track_formats, language_code, is_generated)`` or
+    ``(None, None, False)`` if no language matches either dict.
+    """
+    for lang in languages:
+        if lang in subs:
+            return subs[lang], lang, False
+    for lang in languages:
+        if lang in auto:
+            return auto[lang], lang, True
+    return None, None, False
+
+
+async def _fetch_and_parse_json3(url: str) -> tuple[_FallbackSnippet, ...]:
+    """HTTP-GET YouTube's JSON3 timed-text feed and parse to snippets.
+
+    JSON3 events are ``{"tStartMs", "dDurationMs", "segs": [{"utf8": ...}, ...]}``.
+    The ``segs`` array can split a single utterance across multiple text
+    fragments; concatenation rebuilds the cue. Empty cues (no segs or
+    blank text) are skipped so they don't pollute the segment list.
+    """
+    import httpx
+    async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as c:
+        resp = await c.get(url)
+        resp.raise_for_status()
+        data = resp.json()
+    snippets: list[_FallbackSnippet] = []
+    for ev in data.get("events", []):
+        if "segs" not in ev:
+            continue
+        text = "".join(seg.get("utf8", "") for seg in ev["segs"]).strip()
+        if not text:
+            continue
+        start = (ev.get("tStartMs") or 0) / 1000.0
+        duration = (ev.get("dDurationMs") or 0) / 1000.0
+        snippets.append(_FallbackSnippet(start=start, duration=duration, text=text))
+    return tuple(snippets)
+
+
+async def _yt_dlp_transcript_fallback(
+    video_id: str, languages: list[str],
+) -> Optional[_FallbackTranscript]:
+    """Best-effort caption fetch via yt-dlp + raw HTTP.
+
+    Returns ``None`` when any link in the chain fails: yt-dlp couldn't
+    extract, no caption track matched the language preferences, no JSON3
+    format on the chosen track, fetch error, or parse error. Callers
+    fall back to the original transcript-api error message in that case
+    rather than masking the failure.
+    """
+    url = f"https://www.youtube.com/watch?v={video_id}"
+    try:
+        info = await asyncio.to_thread(_extract_video_info_sync, url)
+    except Exception:
+        return None
+    if not info or not isinstance(info, dict):
+        return None
+
+    subs = info.get("subtitles") or {}
+    auto = info.get("automatic_captions") or {}
+    track, lang, is_generated = _pick_caption_track(subs, auto, languages)
+    if track is None:
+        return None
+
+    json3_url = next(
+        (f["url"] for f in track if f.get("ext") == "json3" and f.get("url")),
+        None,
+    )
+    if not json3_url:
+        return None
+
+    try:
+        snippets = await _fetch_and_parse_json3(json3_url)
+    except Exception:
+        return None
+    if not snippets:
+        return None
+
+    return _FallbackTranscript(
+        snippets=snippets,
+        language_code=lang or "?",
+        is_generated=is_generated,
+    )
+
+
 def _build_transcript_entry(
     canonical_url: str,
     video_id: str,
     fetched,
+    fetcher: str = "youtube-transcript-api",
 ) -> _TranscriptEntry:
-    """Construct an entry from a youtube-transcript-api FetchedTranscript.
+    """Construct an entry from a fetched-transcript object.
+
+    The ``fetched`` argument duck-types: it must expose ``snippets``
+    (iterable of objects with ``start``, ``duration``, ``text``),
+    ``language_code``, and ``is_generated``. Both ``FetchedTranscript``
+    (the youtube-transcript-api type) and ``_FallbackTranscript`` (the
+    yt-dlp fallback shim) satisfy this contract.
 
     Caption cues often contain embedded newlines for display wrapping (a
     single utterance rendered across two visual lines on the player).
@@ -1000,6 +1138,7 @@ def _build_transcript_entry(
         windows=windows,
         chunking_strategy=chunking_strategy,
         group=f"yt:{video_id}",
+        fetcher=fetcher,
     )
 
 
@@ -1007,7 +1146,7 @@ def _base_transcript_fm(entry: _TranscriptEntry) -> FMEntries:
     """Build the frontmatter fields shared across all transcript responses."""
     return FMEntries({
         "source": entry.url,
-        "api": "youtube-transcript-api",
+        "api": entry.fetcher,
         "video_id": entry.video_id,
         "transcript_language": entry.language_code,
         "transcript_kind": "auto" if entry.is_generated else "manual",
@@ -1159,15 +1298,35 @@ async def _transcript(
 
     entry = _transcript_cache.get(canonical_url)
     if entry is None:
+        fetcher_name = "youtube-transcript-api"
         try:
             fetched = await asyncio.to_thread(
                 _fetch_transcript_sync, video_id, languages,
             )
         except Exception as exc:
-            return _map_transcript_error(exc)
+            # When the dedicated library is blocked or hits the PoToken
+            # wall, yt-dlp's caption code path can sometimes succeed.
+            # Limit the fallback to those specific exceptions so genuine
+            # content-side failures (TranscriptsDisabled, NoTranscriptFound,
+            # AgeRestricted, VideoUnavailable, InvalidVideoId) surface as-is.
+            try:
+                from youtube_transcript_api import (
+                    PoTokenRequired, RequestBlocked,
+                )
+            except ImportError:
+                return _map_transcript_error(exc)
+            if isinstance(exc, (RequestBlocked, PoTokenRequired)):
+                fetched = await _yt_dlp_transcript_fallback(video_id, languages)
+                if fetched is None:
+                    return _map_transcript_error(exc)
+                fetcher_name = "yt-dlp (fallback)"
+            else:
+                return _map_transcript_error(exc)
         if not list(fetched.snippets):
             return "Error: Transcript fetched but contains no segments."
-        entry = _build_transcript_entry(canonical_url, video_id, fetched)
+        entry = _build_transcript_entry(
+            canonical_url, video_id, fetched, fetcher=fetcher_name,
+        )
         _transcript_cache.store(canonical_url, entry)
 
     if windows is not None:

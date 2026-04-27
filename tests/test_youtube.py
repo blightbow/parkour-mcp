@@ -866,6 +866,16 @@ class TestTranscriptAction:
             raise RequestBlocked(video_id)
         monkeypatch.setattr(_yt_module, "_fetch_transcript_sync", fake_fetch)
 
+        # Disable the yt-dlp fallback so this test isolates the
+        # RequestBlocked → user-facing error mapping. Fallback success
+        # is exercised separately in TestYtDlpTranscriptFallback.
+        async def _no_fallback(video_id, languages):
+            del video_id, languages
+            return None
+        monkeypatch.setattr(
+            _yt_module, "_yt_dlp_transcript_fallback", _no_fallback,
+        )
+
         result = await youtube(
             action="transcript",
             url="https://www.youtube.com/watch?v=jNQXAC9IVRw",
@@ -1836,3 +1846,295 @@ class TestSearchActionDispatcher:
         result = await youtube(action="search", query="anything")
         assert "Error" in result
         assert "bot" in result.lower()
+
+
+# ---------------------------------------------------------------------------
+# yt-dlp transcript fallback
+# ---------------------------------------------------------------------------
+
+class TestPickCaptionTrack:
+    def test_manual_wins_over_auto(self):
+        subs = {"en": [{"ext": "json3"}]}
+        auto = {"en": [{"ext": "json3"}]}
+        track, lang, is_gen = _yt_module._pick_caption_track(subs, auto, ["en"])
+        assert track == subs["en"]
+        assert lang == "en"
+        assert is_gen is False
+
+    def test_auto_used_when_no_manual(self):
+        _, lang, is_gen = _yt_module._pick_caption_track(
+            subs={}, auto={"en": [{"ext": "json3"}]}, languages=["en"],
+        )
+        assert lang == "en"
+        assert is_gen is True
+
+    def test_language_priority(self):
+        # Try "fr" first (not present), fall through to "en"
+        subs = {"en": [{"ext": "json3"}]}
+        track, lang, _ = _yt_module._pick_caption_track(
+            subs, {}, ["fr", "en"],
+        )
+        assert lang == "en"
+        assert track == subs["en"]
+
+    def test_no_match_returns_none(self):
+        track, lang, _ = _yt_module._pick_caption_track({}, {}, ["en"])
+        assert track is None
+        assert lang is None
+
+
+class TestYtDlpTranscriptFallback:
+    @pytest.mark.asyncio
+    async def test_fallback_success_with_manual_subs(self, monkeypatch):
+        info = {
+            "subtitles": {
+                "en": [
+                    {"ext": "vtt", "url": "https://example.com/foo.vtt"},
+                    {"ext": "json3", "url": "https://example.com/foo.json3"},
+                ],
+            },
+            "automatic_captions": {},
+        }
+
+        def fake_extract(url):
+            del url
+            return info
+        monkeypatch.setattr(_yt_module, "_extract_video_info_sync", fake_extract)
+
+        async def fake_fetch(url):
+            assert url == "https://example.com/foo.json3"
+            return tuple([
+                _yt_module._FallbackSnippet(start=0.0, duration=2.0, text="hello"),
+                _yt_module._FallbackSnippet(start=2.0, duration=2.0, text="world"),
+            ])
+        monkeypatch.setattr(_yt_module, "_fetch_and_parse_json3", fake_fetch)
+
+        result = await _yt_module._yt_dlp_transcript_fallback("vid", ["en"])
+        assert result is not None
+        assert result.language_code == "en"
+        assert result.is_generated is False
+        assert len(result.snippets) == 2
+
+    @pytest.mark.asyncio
+    async def test_fallback_returns_none_when_no_track(self, monkeypatch):
+        def fake_extract(url):
+            del url
+            return {"subtitles": {}, "automatic_captions": {}}
+        monkeypatch.setattr(_yt_module, "_extract_video_info_sync", fake_extract)
+
+        result = await _yt_module._yt_dlp_transcript_fallback("vid", ["en"])
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_fallback_returns_none_when_no_json3(self, monkeypatch):
+        # Track exists but only has VTT, no JSON3
+        info = {
+            "subtitles": {
+                "en": [{"ext": "vtt", "url": "https://example.com/foo.vtt"}],
+            },
+            "automatic_captions": {},
+        }
+        def fake_extract(url):
+            del url
+            return info
+        monkeypatch.setattr(_yt_module, "_extract_video_info_sync", fake_extract)
+
+        result = await _yt_module._yt_dlp_transcript_fallback("vid", ["en"])
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_fallback_returns_none_when_extract_raises(self, monkeypatch):
+        def fake_extract(url):
+            del url
+            raise RuntimeError("yt-dlp blew up")
+        monkeypatch.setattr(_yt_module, "_extract_video_info_sync", fake_extract)
+
+        result = await _yt_module._yt_dlp_transcript_fallback("vid", ["en"])
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_fallback_returns_none_when_fetch_raises(self, monkeypatch):
+        info = {
+            "subtitles": {
+                "en": [{"ext": "json3", "url": "https://example.com/foo.json3"}],
+            },
+            "automatic_captions": {},
+        }
+        def fake_extract(url):
+            del url
+            return info
+        monkeypatch.setattr(_yt_module, "_extract_video_info_sync", fake_extract)
+
+        async def fake_fetch(url):
+            del url
+            raise RuntimeError("network error")
+        monkeypatch.setattr(_yt_module, "_fetch_and_parse_json3", fake_fetch)
+
+        result = await _yt_module._yt_dlp_transcript_fallback("vid", ["en"])
+        assert result is None
+
+
+class TestFallbackInDispatcher:
+    @pytest.mark.asyncio
+    async def test_potoken_triggers_fallback(self, monkeypatch):
+        from youtube_transcript_api import PoTokenRequired
+
+        def fake_fetch_sync(video_id, languages):
+            del languages
+            raise PoTokenRequired(video_id)
+        monkeypatch.setattr(_yt_module, "_fetch_transcript_sync", fake_fetch_sync)
+
+        async def fake_fallback(video_id, languages):
+            del video_id, languages
+            return _yt_module._FallbackTranscript(
+                snippets=tuple([
+                    _yt_module._FallbackSnippet(0.0, 2.0, "Fallback content."),
+                ]),
+                language_code="en",
+                is_generated=False,
+            )
+        monkeypatch.setattr(
+            _yt_module, "_yt_dlp_transcript_fallback", fake_fallback,
+        )
+
+        result = await youtube(
+            action="transcript",
+            url="https://www.youtube.com/watch?v=jNQXAC9IVRw",
+        )
+        # Frontmatter records that the fallback was used
+        assert "api: yt-dlp (fallback)" in result
+        assert "Fallback content." in result
+
+    @pytest.mark.asyncio
+    async def test_request_blocked_triggers_fallback(self, monkeypatch):
+        from youtube_transcript_api import RequestBlocked
+
+        def fake_fetch_sync(video_id, languages):
+            del languages
+            raise RequestBlocked(video_id)
+        monkeypatch.setattr(_yt_module, "_fetch_transcript_sync", fake_fetch_sync)
+
+        async def fake_fallback(video_id, languages):
+            del video_id, languages
+            return _yt_module._FallbackTranscript(
+                snippets=tuple([
+                    _yt_module._FallbackSnippet(0.0, 2.0, "Captions via yt-dlp."),
+                ]),
+                language_code="en",
+                is_generated=True,
+            )
+        monkeypatch.setattr(
+            _yt_module, "_yt_dlp_transcript_fallback", fake_fallback,
+        )
+
+        result = await youtube(
+            action="transcript",
+            url="https://www.youtube.com/watch?v=jNQXAC9IVRw",
+        )
+        assert "api: yt-dlp (fallback)" in result
+        assert "transcript_kind: auto" in result
+
+    @pytest.mark.asyncio
+    async def test_fallback_failure_surfaces_original_error(self, monkeypatch):
+        from youtube_transcript_api import PoTokenRequired
+
+        def fake_fetch_sync(video_id, languages):
+            del languages
+            raise PoTokenRequired(video_id)
+        monkeypatch.setattr(_yt_module, "_fetch_transcript_sync", fake_fetch_sync)
+
+        async def fake_fallback(video_id, languages):
+            del video_id, languages
+            return None
+        monkeypatch.setattr(
+            _yt_module, "_yt_dlp_transcript_fallback", fake_fallback,
+        )
+
+        result = await youtube(
+            action="transcript",
+            url="https://www.youtube.com/watch?v=jNQXAC9IVRw",
+        )
+        assert "Error" in result
+        assert "PoToken" in result
+
+    @pytest.mark.asyncio
+    async def test_other_errors_skip_fallback(self, monkeypatch):
+        # TranscriptsDisabled is content-side; fallback shouldn't be tried
+        from youtube_transcript_api import TranscriptsDisabled
+        fallback_called = {"yes": False}
+
+        def fake_fetch_sync(video_id, languages):
+            del languages
+            raise TranscriptsDisabled(video_id)
+        monkeypatch.setattr(_yt_module, "_fetch_transcript_sync", fake_fetch_sync)
+
+        async def fake_fallback(video_id, languages):
+            del video_id, languages
+            fallback_called["yes"] = True
+            return None
+        monkeypatch.setattr(
+            _yt_module, "_yt_dlp_transcript_fallback", fake_fallback,
+        )
+
+        result = await youtube(
+            action="transcript",
+            url="https://www.youtube.com/watch?v=jNQXAC9IVRw",
+        )
+        assert "Error" in result
+        assert "disabled" in result.lower()
+        assert fallback_called["yes"] is False
+
+
+class TestParseJson3:
+    @pytest.mark.asyncio
+    async def test_parse_normal(self, monkeypatch):
+        # Mock httpx.AsyncClient.get to return canned JSON3
+        captured_url = {"url": None}
+
+        class _FakeResp:
+            status_code = 200
+            def raise_for_status(self):
+                pass
+            def json(self):
+                return {
+                    "events": [
+                        {
+                            "tStartMs": 1200,
+                            "dDurationMs": 2160,
+                            "segs": [{"utf8": "Hello "}, {"utf8": "world"}],
+                        },
+                        {
+                            "tStartMs": 5320,
+                            "dDurationMs": 2660,
+                            "segs": [{"utf8": "Second cue."}],
+                        },
+                        # No segs → skipped
+                        {"tStartMs": 8000, "dDurationMs": 1000},
+                        # Empty text → skipped
+                        {"tStartMs": 9000, "dDurationMs": 1000, "segs": [{"utf8": " "}]},
+                    ],
+                }
+
+        class _FakeClient:
+            def __init__(self, **_):
+                pass
+            async def __aenter__(self):
+                return self
+            async def __aexit__(self, *_):
+                return None
+            async def get(self, url):
+                captured_url["url"] = url
+                return _FakeResp()
+
+        import httpx
+        monkeypatch.setattr(httpx, "AsyncClient", _FakeClient)
+
+        snippets = await _yt_module._fetch_and_parse_json3(
+            "https://example.com/foo.json3",
+        )
+        assert captured_url["url"] == "https://example.com/foo.json3"
+        assert len(snippets) == 2
+        assert snippets[0].text == "Hello world"
+        assert snippets[0].start == 1.2
+        assert snippets[0].duration == 2.16
+        assert snippets[1].text == "Second cue."
