@@ -123,8 +123,6 @@ def render_tool_table() -> str:
     import importlib
     import tomllib
 
-    from tabulate import tabulate
-
     data = tomllib.loads(Path("scripts/tools.toml").read_text())
     rows: list[tuple[str, str, str]] = []
     for tool in data["tool"]:
@@ -198,17 +196,15 @@ def protected_keys_table() -> str:
 
 
 def tool_count(*, with_optional: bool = False) -> str:
-    """Render the registered-tool count from parkour_mcp/__init__.py.
+    """Render the registered-tool count from ``parkour_mcp._ALWAYS_ON_TOOLS``.
 
-    The base set is the always-on tool tuple in ``main()``.  When
-    *with_optional* is true, the SemanticScholar entry (gated by
-    ``S2_ACCEPT_TOS``) is included with a note.
+    When *with_optional* is true, ``_OPTIONAL_TOOLS`` is summarized
+    alongside (currently just SemanticScholar, gated by ``S2_ACCEPT_TOS``).
     """
-    src = Path("parkour_mcp/__init__.py").read_text()
-    marker = 'tools: list[tuple[str, Callable[..., Any]]] = ['
-    start = src.index(marker) + len(marker)
-    end = src.index("]", start)
-    base = sum(1 for line in src[start:end].splitlines() if line.strip().startswith("("))
+    from parkour_mcp import _ALWAYS_ON_TOOLS, _OPTIONAL_TOOLS
+    base = len(_ALWAYS_ON_TOOLS)
     if with_optional:
-        return f"{base} always-on tools, plus 1 optional (SemanticScholar, gated by S2_ACCEPT_TOS)"
+        n_opt = len(_OPTIONAL_TOOLS)
+        plural = "tool" if n_opt == 1 else "tools"
+        return f"{base} always-on tools, plus {n_opt} optional (SemanticScholar, gated by S2_ACCEPT_TOS)" if n_opt == 1 else f"{base} always-on tools, plus {n_opt} optional {plural}"
     return f"{base} tools"

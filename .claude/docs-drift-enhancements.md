@@ -39,16 +39,16 @@ Cog generates it.  If no, Drift gates whether the claim is still factual.
   `github.py`'s pattern, and consume from the dispatch and the tool-arg
   description.
 
-### `__init__.py` — `tools` list is local to `main()`
+### `__init__.py` — `tools` list is local to `main()` ✓ resolved
 
-- **Source today**: the registered-tool list is a local variable inside
-  `main()` (line ~488), not a module-level constant.
-- **Why it matters**: `cog_helpers.tool_count()` reads the file as text
-  and slices on a substring marker. Fragile — any reformat near the
-  `tools = [...]` line breaks it.
-- **Fix**: hoist the registration list to module scope as
-  `_REGISTERED_TOOLS = (...)`, with the optional SemanticScholar entry
-  computed separately so the gate stays explicit.
+The registration list is now hoisted to module scope as
+`_ALWAYS_ON_TOOLS` (tuple of `(internal_name, callable)` pairs) and
+`_OPTIONAL_TOOLS` (tuple of internal names; SemanticScholar is the
+only one, lazy-imported inside `main()` only when `S2_ACCEPT_TOS` is
+set so opt-out installs don't pay for the S2 client).
+`cog_helpers.tool_count()` now imports the constants instead of
+slicing source; `scripts/check_manifest_tools.py` diffs the resolved
+profile-mapped names against `manifest.json`.
 
 ## Drift: upstream limitations affecting our coverage
 
@@ -80,6 +80,18 @@ Cog generates it.  If no, Drift gates whether the claim is still factual.
   because exactly this kind of broken-path drift is what `lychee` would
   catch in CI; adding lychee to the docs-drift gate would prevent
   recurrence.
+
+### `manifest.json` tool list synced via check script
+
+`manifest.json`'s `tools` array is hand-curated for description prose
+(Claude Desktop's tool picker shows these to end users) but the *names*
+must match the union of `_ALWAYS_ON_TOOLS` and `_OPTIONAL_TOOLS`.
+`scripts/check_manifest_tools.py` diffs them and exits 1 on drift; the
+`just docs-drift` recipe and the GHA workflow run it alongside cog and
+drift checks.  JSON has no comment syntax so cog can't operate inline,
+but the check closes the loop on the most error-prone form of drift
+(missing or stale tool names) without forcing description prose into
+Python.
 
 ## Validated patterns
 

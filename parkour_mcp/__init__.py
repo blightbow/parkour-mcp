@@ -53,6 +53,33 @@ _ICON_FILES = {
 _SERVER_ICON_FILE = "server"        # ∮  U+222E CONTOUR INTEGRAL (NotoSansMath)
 
 
+# Tool registration registry — module-level so introspection tools can
+# import it without parsing source.  scripts/check_manifest_tools.py
+# diffs the resolved profile-mapped names of (always-on + optional) tools
+# against manifest.json; scripts/cog_helpers.tool_count() reads
+# len(_ALWAYS_ON_TOOLS) for CLAUDE.md prose.
+_ALWAYS_ON_TOOLS: tuple[tuple[str, Callable[..., Any]], ...] = (
+    ("search", search),
+    ("web_fetch_sections", web_fetch_sections),
+    ("web_fetch_direct", web_fetch_direct),
+    ("web_fetch_js", web_fetch_js),
+    ("summarize", summarize),
+    ("arxiv", arxiv),
+    ("research_shelf", research_shelf),
+    ("github", github),
+    ("ietf", ietf),
+    ("packages", packages),
+    ("discourse", discourse),
+    ("mediawiki", mediawiki),
+)
+
+# semantic_scholar is gated by S2_ACCEPT_TOS at runtime (see common.s2_enabled).
+# Listed here so manifest checks can verify Claude Desktop's tool picker still
+# shows it; main() lazy-imports the function only when the gate is set, so
+# opt-out installs don't pay for the S2 client at startup.
+_OPTIONAL_TOOLS: tuple[str, ...] = ("semantic_scholar",)
+
+
 def _load_icon(filename: str) -> Icon | None:
     """Read an SVG file from assets/icons/ and return it as a data: URI Icon."""
     path = _ICONS_DIR / f"{filename}.svg"
@@ -485,20 +512,7 @@ def main():
         )
 
     # Register all tools with profile-specific names and descriptions
-    tools: list[tuple[str, Callable[..., Any]]] = [
-        ("search", search),
-        ("web_fetch_sections", web_fetch_sections),
-        ("web_fetch_direct", web_fetch_direct),
-        ("web_fetch_js", web_fetch_js),
-        ("summarize", summarize),
-        ("arxiv", arxiv),
-        ("research_shelf", research_shelf),
-        ("github", github),
-        ("ietf", ietf),
-        ("packages", packages),
-        ("discourse", discourse),
-        ("mediawiki", mediawiki),
-    ]
+    tools: list[tuple[str, Callable[..., Any]]] = list(_ALWAYS_ON_TOOLS)
     if _s2_on:
         from .semantic_scholar import semantic_scholar
         tools.append(("semantic_scholar", semantic_scholar))

@@ -9,6 +9,8 @@ on:
       - "parkour_mcp/**"
       - "scripts/cog_helpers.py"
       - "scripts/tools.toml"
+      - "scripts/check_manifest_tools.py"
+      - "manifest.json"
       - "drift.lock"
       - ".github/workflows/docs-drift.yml"
 
@@ -34,3 +36,6 @@ jobs:
 
       - name: drift check
         run: drift check
+
+      - name: manifest.json tools match registration
+        run: uv run python3 scripts/check_manifest_tools.py

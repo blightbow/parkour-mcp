@@ -39,6 +39,7 @@ icons:
 docs-drift:
     uv run cog --check --check-fail-msg='Run `just docs-drift-fix` to regenerate.' CLAUDE.md README.md docs/frontmatter-standard.md
     drift check
+    uv run python3 scripts/check_manifest_tools.py
 
 # Regenerate cog blocks; still need to manually drift link --doc-is-still-accurate
 # any drifted anchors (see .claude/skills/drift/SKILL.md for the relink workflow).

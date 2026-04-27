@@ -136,6 +136,10 @@
       "description": "Search and browse Discourse forum topics and posts"
     },
     {
+      "name": "mediawiki",
+      "description": "Search and retrieve Wikipedia and MediaWiki articles with footnote and citation resolution"
+    },
+    {
       "name": "research_shelf",
       "description": "Manage the research shelf — an in-memory citation tracker for papers inspected during research"
     }
