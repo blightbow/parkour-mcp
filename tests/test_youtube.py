@@ -349,17 +349,24 @@ class TestVideoAction:
             url="https://www.youtube.com/watch?v=jNQXAC9IVRw",
         )
 
-        # Frontmatter fields
-        assert "title: Me at the zoo" in result
-        assert "video_id: jNQXAC9IVRw" in result
-        assert "channel: jawed" in result
-        assert "duration: 0:19" in result
-        assert "upload_date: 2005-04-23" in result
-        assert "view_count: 365129877" in result
-        assert "language: en" in result
-        # Description in body
-        assert "The first video on YouTube" in result
-        # Trust advisory (content fence) is present
+        frontmatter, _, body = result.partition("\n\n")
+
+        # Structurally-validated fields stay in frontmatter
+        assert "video_id: jNQXAC9IVRw" in frontmatter
+        assert "duration: 0:19" in frontmatter
+        assert "upload_date: 2005-04-23" in frontmatter
+        assert "view_count: 365129877" in frontmatter
+        assert "language: en" in frontmatter
+        assert "channel_id: UC4QobU6STFB0P71PMvOGN5A" in frontmatter
+        # User-generated strings must NOT appear in frontmatter — they
+        # would inherit the trust of tool-generated metadata. See
+        # docs/frontmatter-standard.md.
+        assert "title: Me at the zoo" not in frontmatter
+        assert "channel: jawed" not in frontmatter
+        # They render inside the fenced body instead
+        assert "# Me at the zoo" in body  # fence heading
+        assert "**Channel**: [jawed]" in body
+        assert "The first video on YouTube" in body
         assert "untrusted content" in result
 
     @pytest.mark.asyncio
@@ -2135,12 +2142,18 @@ class TestChaptersInTranscriptResponse:
             action="transcript",
             url="https://www.youtube.com/watch?v=jNQXAC9IVRw",
         )
-        assert "chapters:" in result
-        assert "00:00 Intro" in result
-        assert "00:10 Outro" in result
+        frontmatter, _, body = result.partition("\n\n")
+        # Frontmatter carries only the chapter count (numeric, structurally
+        # safe); the chapter list with user-generated titles renders inside
+        # the fenced body as a "## Chapters" TOC.
+        assert "chapter_count: 2" in frontmatter
+        assert "chapters:" not in frontmatter  # the list itself stays out
+        assert "## Chapters" in body
+        assert "[00:00] Intro" in body
+        assert "[00:10] Outro" in body
         # Compact-mode body emits chapter heading at the chapter's
         # declared start_time (not the window's anchor)
-        assert "## [00:00] Intro" in result
+        assert "## [00:00] Intro" in body
 
     @pytest.mark.asyncio
     async def test_chapter_filter_scopes_search(self, monkeypatch):
@@ -2286,16 +2299,21 @@ class TestChannelAction:
             action="channel",
             url="https://www.youtube.com/@MKBHD",
         )
-        assert "title: MKBHD" in result
-        assert "channel: MKBHD" in result
-        assert "channel_id: UCBJycsmduvYEL83R_U4JriQ" in result
-        assert "follower_count: 18500000" in result
-        assert "total_videos: 1500" in result
-        assert "returned_videos: 5" in result
-        assert "Quality Tech Videos." in result
-        assert "Recent uploads (5)" in result
-        assert "Video 0" in result
-        assert "https://www.youtube.com/watch?v=vid00" in result
+        frontmatter, _, body = result.partition("\n\n")
+        # Structurally-validated fields stay in frontmatter
+        assert "channel_id: UCBJycsmduvYEL83R_U4JriQ" in frontmatter
+        assert "follower_count: 18500000" in frontmatter
+        assert "total_videos: 1500" in frontmatter
+        assert "returned_videos: 5" in frontmatter
+        # User-generated channel name and title NOT in frontmatter
+        assert "title: MKBHD" not in frontmatter
+        assert "channel: MKBHD" not in frontmatter
+        # They appear in the fenced body
+        assert "# MKBHD" in body  # fence heading
+        assert "Quality Tech Videos." in body
+        assert "Recent uploads (5)" in body
+        assert "Video 0" in body
+        assert "https://www.youtube.com/watch?v=vid00" in body
         assert "untrusted content" in result
 
     @pytest.mark.asyncio
@@ -2397,13 +2415,23 @@ class TestPlaylistAction:
                 "list=PLrAXtmRdnEQy6nuLMt9H1Pj7RgqZTjB"
             ),
         )
-        assert "title: Curated Reading" in result
-        assert "uploader: Some User" in result
-        assert "last_updated: 2026-03-01" in result
-        assert "total_items: 12" in result
-        assert "returned_items: 3" in result
-        assert "Items (3)" in result
-        assert "Item 0" in result
+        frontmatter, _, body = result.partition("\n\n")
+        # Structurally-validated fields stay in frontmatter
+        assert "uploader_id: @SomeUser" in frontmatter
+        assert "last_updated: 2026-03-01" in frontmatter
+        assert "total_items: 12" in frontmatter
+        assert "returned_items: 3" in frontmatter
+        # User-generated title and uploader display name are NOT in frontmatter
+        assert "title: Curated Reading" not in frontmatter
+        # `uploader_id:` is structurally constrained (the @handle form)
+        # and stays in frontmatter; the bare `uploader:` display name
+        # must not.
+        assert "uploader: Some User" not in frontmatter
+        # They render in the fenced body
+        assert "# Curated Reading" in body  # fence heading
+        assert "**Uploader**: [Some User]" in body
+        assert "Items (3)" in body
+        assert "Item 0" in body
 
     @pytest.mark.asyncio
     async def test_playlist_no_url(self):

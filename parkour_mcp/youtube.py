@@ -410,14 +410,18 @@ async def _video(url: str) -> str:
     captions_langs, captions_auto_only = _captions_summary(info)
     comment_count = info.get("comment_count")
 
+    # Frontmatter holds only structurally-validated fields (IDs of known
+    # shape, constructed URLs, numeric counts, enum-shaped status fields,
+    # ISO dates, language codes). User-generated strings — video title,
+    # channel display name, anything sourced from the uploader — render
+    # inside the fenced body so they can't inherit the trust of tool-
+    # generated metadata. See docs/frontmatter-standard.md.
     fm_entries = FMEntries({
-        "title": title,
         "source": (
             f"https://www.youtube.com/watch?v={video_id}" if video_id else url
         ),
         "api": "yt-dlp",
         "video_id": video_id,
-        "channel": info.get("channel") or info.get("uploader"),
         "channel_id": info.get("channel_id"),
         "channel_url": info.get("channel_url"),
         "duration": _format_duration(info.get("duration")),
@@ -442,8 +446,19 @@ async def _video(url: str) -> str:
             f"{tool_name('youtube_comments')} for the comment thread.",
         )
 
+    body_parts: list[str] = []
+    channel = info.get("channel") or info.get("uploader")
+    channel_url = info.get("channel_url")
+    if channel:
+        if channel_url:
+            body_parts.append(f"**Channel**: [{channel}]({channel_url})")
+        else:
+            body_parts.append(f"**Channel**: {channel}")
+        body_parts.append("")
+    body_parts.append(description.strip() if description else "(no description)")
+    body = "\n".join(body_parts)
+
     fm = _build_frontmatter(fm_entries)
-    body = description.strip() if description else "(no description)"
     return fm + "\n\n" + _fence_content(body, title=title)
 
 
@@ -1531,13 +1546,12 @@ def _base_transcript_fm(entry: _TranscriptEntry) -> FMEntries:
         "trust": _TRUST_ADVISORY,
     })
     if entry.chapters:
-        # Render as "MM:SS Title" so the agent sees both anchor and label
-        # without having to cross-reference; the structural unit is the
-        # whole list, not the individual entries, so this stays in
-        # frontmatter rather than in the fenced body.
-        fm["chapters"] = [
-            f"{_mmss(c.start_time)} {c.title}" for c in entry.chapters
-        ]
+        # Chapter titles are user-generated, so they can't appear in
+        # frontmatter — see docs/frontmatter-standard.md. The full list
+        # renders as a TOC at the top of the fenced body in the
+        # full-transcript response; here in frontmatter we surface only
+        # the count, which is structurally safe.
+        fm["chapter_count"] = len(entry.chapters)
     if entry.fallback_from:
         note = _FALLBACK_NOTES.get(entry.fallback_from)
         if note is None:
@@ -1553,10 +1567,23 @@ def _render_full_transcript_response(
     entry: _TranscriptEntry,
     timestamps: TimestampMode,
 ) -> str:
-    """Render the entire transcript (matches step 2 behavior)."""
-    body = render_transcript(
+    """Render the entire transcript with a chapter TOC at the top.
+
+    The chapter TOC lives inside the fenced body — chapter titles are
+    user-generated and would inherit trust if rendered in frontmatter.
+    The frontmatter carries only the chapter count.
+    """
+    body_parts: list[str] = []
+    if entry.chapters:
+        body_parts.append("## Chapters")
+        body_parts.append("")
+        for ch in entry.chapters:
+            body_parts.append(f"- [{_mmss(ch.start_time)}] {ch.title}")
+        body_parts.append("")
+    body_parts.append(render_transcript(
         list(entry.windows), mode=timestamps, chapters=entry.chapters,
-    )
+    ))
+    body = "\n".join(body_parts)
     fm_entries = _base_transcript_fm(entry)
     fm_entries["total_segments"] = len(entry.segments)
     fm_entries["duration"] = _format_duration(
@@ -1868,14 +1895,16 @@ def _is_tab_listing(entries: list[dict]) -> bool:
 
 def _channel_fm_and_body(info: dict, limit: int) -> tuple[FMEntries, str]:
     """Build frontmatter + body for a channel listing."""
-    title = info.get("title") or info.get("channel") or "Untitled"
     description = info.get("description") or ""
     entries = list(info.get("entries") or [])[:limit]
     channel_id = info.get("channel_id") or info.get("uploader_id")
     tab_listing = _is_tab_listing(entries)
 
     fm = FMEntries({
-        "title": title,
+        # User-generated channel name and title render inside the fence
+        # via _fence_content(title=title); frontmatter carries only the
+        # structurally-constrained fields (channel_id, follower count,
+        # video counts, source URL).
         "source": (
             info.get("webpage_url")
             or info.get("channel_url")
@@ -1883,7 +1912,6 @@ def _channel_fm_and_body(info: dict, limit: int) -> tuple[FMEntries, str]:
             or ""
         ),
         "api": "yt-dlp",
-        "channel": info.get("channel") or info.get("uploader"),
         "channel_id": channel_id,
         "follower_count": info.get("channel_follower_count"),
         "total_videos": info.get("playlist_count"),
@@ -1915,19 +1943,20 @@ def _channel_fm_and_body(info: dict, limit: int) -> tuple[FMEntries, str]:
 
 def _playlist_fm_and_body(info: dict, limit: int) -> tuple[FMEntries, str]:
     """Build frontmatter + body for a playlist listing."""
-    title = info.get("title") or "Untitled"
     description = info.get("description") or ""
     entries = list(info.get("entries") or [])[:limit]
 
     fm = FMEntries({
-        "title": title,
+        # User-generated playlist title and uploader display name render
+        # inside the fence; uploader_id is the @handle form (structurally
+        # constrained by YouTube's handle character rules) so it stays
+        # in frontmatter as a stable identifier.
         "source": (
             info.get("webpage_url")
             or info.get("uploader_url")
             or ""
         ),
         "api": "yt-dlp",
-        "uploader": info.get("uploader"),
         "uploader_id": info.get("uploader_id"),
         "last_updated": _format_upload_date(info.get("modified_date")),
         "total_items": info.get("playlist_count"),
@@ -1936,6 +1965,14 @@ def _playlist_fm_and_body(info: dict, limit: int) -> tuple[FMEntries, str]:
     })
 
     body_parts: list[str] = []
+    uploader = info.get("uploader")
+    uploader_url = info.get("uploader_url")
+    if uploader:
+        if uploader_url:
+            body_parts.append(f"**Uploader**: [{uploader}]({uploader_url})")
+        else:
+            body_parts.append(f"**Uploader**: {uploader}")
+        body_parts.append("")
     if description.strip():
         body_parts.append(description.strip())
         body_parts.append("")
@@ -1961,8 +1998,10 @@ async def _channel(url: str, limit: int) -> str:
     if not isinstance(info, dict):
         return f"Error: Unexpected yt-dlp response shape for {url}"
     fm_entries, body = _channel_fm_and_body(info, limit)
+    # Title is no longer in frontmatter (user-generated); pass it as the
+    # fence label, where _fence_content sanitizes via _sanitize_label.
+    title = info.get("title") or info.get("channel") or "Untitled"
     fm = _build_frontmatter(fm_entries)
-    title = fm_entries.get("title") or "Untitled"
     return fm + "\n\n" + _fence_content(body, title=str(title))
 
 
@@ -1977,8 +2016,8 @@ async def _playlist(url: str, limit: int) -> str:
     if not isinstance(info, dict):
         return f"Error: Unexpected yt-dlp response shape for {url}"
     fm_entries, body = _playlist_fm_and_body(info, limit)
+    title = info.get("title") or "Untitled"
     fm = _build_frontmatter(fm_entries)
-    title = fm_entries.get("title") or "Untitled"
     return fm + "\n\n" + _fence_content(body, title=str(title))
 
 
@@ -2321,12 +2360,14 @@ async def youtube_comments(
     comments = list(info.get("comments") or [])
     title = info.get("title") or "Untitled"
 
+    # User-generated title and channel display name render inside the
+    # fence (the fence title carries title; channel info is omitted from
+    # this view since the body is dense with comment content already and
+    # the agent can call the Youtube video action for channel context).
     fm_entries = FMEntries({
         "source": canonical_url,
         "api": "yt-dlp",
         "video_id": video_id,
-        "title": title,
-        "channel": info.get("channel") or info.get("uploader"),
         "trust": _TRUST_ADVISORY,
     })
 
