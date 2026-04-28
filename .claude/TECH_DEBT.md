@@ -24,6 +24,35 @@ Acknowledged warnings and deferred fixes. Each entry includes the source, the is
 - **Why deferred**: The cache fix removes the worst-case duplication. The remaining single-call cost is paid only once per page per session and is rare in practice (megapages are outliers). A remediation would be non-trivial: replace the BeautifulSoup-based `TextOnlyConverter` with a faster HTML parser (e.g. `selectolax`, `html5-parser`, or `lxml`) or cap the converter input size before parsing. Worth doing when a real regression or user report justifies the effort.
 - **Regression guard**: `tests/test_perf.py::test_html_to_markdown` asserts wall-clock stays within 2× of the captured baseline. Raises an alarm if a refactor accidentally pessimises the HTML→markdown step.
 
+## YouTube tool — deferred enhancements
+
+### `music.youtube.com` sibling tool
+
+- **Location**: `parkour_mcp/youtube.py#_YT_MUSIC_RE`, `_detect_youtube_url`, and the dispatcher's music-URL rejection branches.
+- **Issue**: `music.youtube.com` URLs are recognized only to emit an explicit out-of-scope error. Music tracks have a different shape (album / artist / track / playlist semantics differ from regular video shape) that doesn't fit the existing `_video` / `_channel` / `_playlist` actions.
+- **Why deferred**: Building a coherent music-track tool requires its own data model (track-level metadata, album grouping, artist disambiguation) that's larger than the scope of the regular YouTube tool. A sibling tool keeps the surface clean rather than bolting music-shaped responses onto the video tool. The current "explicit error with a note about the sibling tool" is honest about the gap.
+
+### PoToken provider plugin slot
+
+- **Location**: `parkour_mcp/youtube.py#_yt_dlp_transcript_fallback` and `_map_transcript_error` (PoTokenRequired branch).
+- **Issue**: When YouTube enforces the `xpe` / `xpv` Botguard PoToken experiment on a caption URL, neither `youtube-transcript-api` (which has no token-generation path) nor the bare `yt-dlp` fallback can recover. The only working solution is a yt-dlp PoToken provider plugin (e.g. `bgutil-ytdlp-pot-provider`) that generates the token via Botguard JS.
+- **Why deferred**: PoToken plugins require external dependencies (a Node-compatible JS runtime + the plugin package) that meaningfully change the install footprint. The error message points users at the plugin path; if it sees real user demand, a future commit can add a config flag to enable plugin auto-discovery.
+- **Mitigation**: The error message names `bgutil-ytdlp-pot-provider` specifically so users can resolve the issue themselves without code changes here. yt-dlp's plugin loading happens automatically when the plugin is installed in the user's environment.
+
+### Transcript cache key ignores language preference
+
+- **Location**: `parkour_mcp/youtube.py#_TranscriptCache` (keys: canonical YouTube watch URL).
+- **Issue**: Cache key is the URL only; the `languages=` preference list is not part of the key. The first language successfully fetched for a URL wins for the cache entry's lifetime. Subsequent calls with a different `languages=` list cache-hit the entry from the first call rather than fetching a different track.
+- **Why deferred**: Cross-language workflows on the same video are rare in practice (most callers want the default language). Including languages in the key would multiply cache entries per video and complicate the group-eviction key shape. Acceptable for v1.
+- **Mitigation**: Documented in `docs/youtube-transcript-search.md`. Callers needing a different language can clear the cache or hit yt-dlp directly.
+
+### SaT (`wtpsplit`) for unpunctuated transcripts
+
+- **Location**: `parkour_mcp/youtube.py#coalesce_windows` and the punctuation-density branch logic.
+- **Issue**: Auto-generated captions lack punctuation, so the sentence-aware coalescer can't split on sentence boundaries. The pause-aware time-window fallback (WhisperX Cut & Merge with the `[25s, 35s]` tolerance band) handles unpunctuated input but produces less semantically-coherent windows than sentence-tokenized chunking would.
+- **Why deferred**: `segment-any-text/wtpsplit`'s SaT model is the field's converged answer for sentence segmentation of unpunctuated text (~95ms per 1000 sentences on CPU, ONNX-deployable). But it adds an ONNX runtime dependency (~50MB model download) that we deferred until empirical evidence shows the pause-only branch actually produces visibly worse retrieval on auto-captions.
+- **How to evaluate**: Compare retrieval quality on a corpus of auto-captioned videos: BM25 search recall using time-window coalescing vs. the same content coalesced via SaT-derived sentence boundaries. If the difference is meaningful, wire SaT in as the unpunctuated branch's coalescer.
+
 ## Structural tradeoffs
 
 ### `<header>` stripped from all pages — loses real h1s on spec docs
