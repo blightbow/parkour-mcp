@@ -46,6 +46,13 @@ Acknowledged warnings and deferred fixes. Each entry includes the source, the is
 - **Why deferred**: Cross-language workflows on the same video are rare in practice (most callers want the default language). Including languages in the key would multiply cache entries per video and complicate the group-eviction key shape. Acceptable for v1.
 - **Mitigation**: Documented in `docs/youtube-transcript-search.md`. Callers needing a different language can clear the cache or hit yt-dlp directly.
 
+### Auto-translation fallback in transcript fetch
+
+- **Location**: `parkour_mcp/youtube.py#_fetch_transcript_sync` and `_no_transcript_response`.
+- **Issue**: When a caller requests a language that's not a directly-fetchable track, the tool raises NoTranscriptFound rather than calling `transcript.translate(target).fetch()` to retrieve the auto-translation. The error body advises retry with a source-language code so the caller can translate downstream.
+- **Why deferred**: Per [yt-dlp issue #13831](https://github.com/yt-dlp/yt-dlp/issues/13831) (maintainer comment 2026-01-06 by `bashonly`), YouTube specifically rate-limits HTTP 429 against auto-translated subtitle requests while leaving manual subtitles and original-language auto-captions unaffected. Implementing translation fallback would expose every non-source-language request to that documented rate-limit lane. The maintainer's workarounds (fresh browser cookies from a session that recently loaded auto-translated subs, or `--sleep-subtitles 60`) require user-environmental setup that doesn't fit a generic MCP path. Confirmed empirically: a single `.translate('en').fetch()` call from a residential IP drew IpBlocked while direct-source fetches on the same video succeeded cleanly.
+- **Mitigation**: `captions_available` in the NoTranscriptFound response lists the browser-visible set (yt-dlp's `automatic_captions`, which is the cross-product of translatable sources and the player response's `translationLanguages` — same data the browser auto-translate menu uses). `captions_source` isolates the directly-fetchable subset that won't draw 429. The error body cites #13831 explicitly so the LLM knows why the wider list isn't actionable through this tool and converges on the source-language transcript on retry. (An earlier attempt sourced `captions_available` from youtube-transcript-api's `list()` instead, but that view under-reports `translation_languages` for some videos relative to the browser, so the swap traded an honest-but-noisy list for a quiet-but-incomplete one. Reverted; the noise is preferable when paired with a clear caveat.)
+
 ### SaT (`wtpsplit`) for unpunctuated transcripts
 
 - **Location**: `parkour_mcp/youtube.py#coalesce_windows` and the punctuation-density branch logic.

@@ -1272,37 +1272,62 @@ def _map_transcript_error(exc: Exception) -> str:
 async def _no_transcript_response(
     canonical_url: str, video_id: str, languages: list[str],
 ) -> str:
-    """Frontmatter response for NoTranscriptFound with the full caption set.
+    """Frontmatter response for NoTranscriptFound with the browser-visible set.
 
-    The default ``video`` action deliberately suppresses the auto-
-    translation matrix from frontmatter — it's noise for the common
-    case. But once a caller has asked for an explicit language and
-    missed, the full ``captions_available`` list is exactly the
-    information they need to retry. Re-extraction is free here: the
-    yt-dlp info dict is cached by ``_extract_video_info_sync`` and the
-    chapters fetch usually warmed it during the same transcript call.
+    ``captions_available`` is sourced from yt-dlp's ``automatic_captions``
+    because that view mirrors YouTube's auto-translate menu in the
+    browser: yt-dlp builds it as the cross-product of translatable
+    source tracks and the player response's ``translationLanguages``
+    field, which is the same data the browser UI populates from. So
+    the list reflects what a human would see if they opened the
+    video's CC settings and clicked Auto-translate.
+
+    Caveat documented in the error body: most of those entries are
+    auto-translations rather than direct tracks. Per [yt-dlp issue
+    13831](https://github.com/yt-dlp/yt-dlp/issues/13831) (maintainer
+    comment 2026-01-06), YouTube specifically rate-limits HTTP 429
+    against auto-translated subtitle requests while leaving manual
+    subtitles and original-language auto-captions unaffected. This
+    tool can't fetch auto-translations through that lane; callers
+    needing translated content should request the source language
+    here and translate downstream.
     """
     available: list[str] = []
+    source_langs: list[str] = []
     try:
         info = await asyncio.to_thread(_extract_video_info_sync, canonical_url)
     except Exception:
         info = None
     if isinstance(info, dict):
-        available = _captions_summary(info).available
+        captions = _captions_summary(info)
+        available = captions.available
+        source_langs = captions.source
     fm_entries = FMEntries({
         "source": canonical_url,
         "api": "youtube-transcript-api",
         "video_id": video_id,
         "requested_languages": list(languages),
         "captions_available": available or None,
+        "captions_source": source_langs or None,
     })
-    msg = (
+    msg_parts = [
         f"Error: No transcript available in the requested language(s): "
-        f"{list(languages)}. See `captions_available` in the frontmatter for "
-        "the full set including YouTube's auto-translation surface; retry "
-        "with one of those codes."
-    )
-    return _build_frontmatter(fm_entries) + "\n\n" + msg
+        f"{list(languages)}.",
+    ]
+    if source_langs:
+        msg_parts.append(
+            f"Most entries in `captions_available` are auto-translations of "
+            f"the source track(s) in `captions_source` ({source_langs}). "
+            "YouTube rate-limits auto-translated fetches with HTTP 429 "
+            "(yt-dlp #13831), so this tool can't retrieve them; retry "
+            "with a source-language code and translate downstream."
+        )
+    else:
+        msg_parts.append(
+            "See `captions_available` in the frontmatter; retry with one "
+            "of those codes."
+        )
+    return _build_frontmatter(fm_entries) + "\n\n" + " ".join(msg_parts)
 
 
 # ---------------------------------------------------------------------------

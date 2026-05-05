@@ -1415,13 +1415,16 @@ class TestTranscriptAction:
         assert "disabled" in result.lower()
 
     @pytest.mark.asyncio
-    async def test_no_transcript_found_emits_captions_available(
+    async def test_no_transcript_found_emits_browser_visible_set(
         self, monkeypatch,
     ):
-        # NoTranscriptFound is the only path that surfaces the full
-        # captions_available list (including auto-translation surface)
-        # in frontmatter — the caller asked for an explicit language
-        # and missed, so they need the full set to retry.
+        # NoTranscriptFound surfaces captions_available sourced from
+        # yt-dlp's automatic_captions, which mirrors YouTube's browser
+        # auto-translate menu (cross-product of translatable sources
+        # and translationLanguages from the player response). The
+        # error body warns that most entries are auto-translations and
+        # this tool can't retrieve them due to the HTTP 429 rate-limit
+        # documented in yt-dlp #13831.
         from youtube_transcript_api import NoTranscriptFound
 
         def fake_fetch(video_id, languages):
@@ -1449,10 +1452,15 @@ class TestTranscriptAction:
         assert "Error" in result
         assert "No transcript available" in result
         assert "captions_available:" in result
-        # Full set, including auto-translations.
+        # Browser-visible set: source ja plus auto-translations en/fr.
         assert "- en" in result
         assert "- fr" in result
         assert "- ja" in result
+        # captions_source isolates the directly-fetchable subset.
+        assert "captions_source:" in result
+        # Error body explains the rate-limit caveat with the issue ref.
+        assert "13831" in result
+        assert "auto-translation" in result.lower()
         # requested_languages echoes back so the caller can see what missed.
         assert "requested_languages:" in result
 
