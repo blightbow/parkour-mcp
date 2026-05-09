@@ -18,6 +18,26 @@ Frontmatter serves three roles:
    calls.  These are the primary mechanism for guiding multi-step
    research workflows.
 
+## Audience and phrasing
+
+The LLM is the user.  Frontmatter is a sidechannel between the tool
+and the agent driving it, an information panel for the driver rather
+than a service log.  Phrase every field around what the driver needs
+to know to engage (or avoid) an instrument at the right moment.
+
+Implementation names earn inclusion only when they prime correct
+invocation.  `BM25` shapes a search query.  `AST-aware` shapes the
+expectation of section boundaries.  Engine names, library names, and
+internal data flow do not.  "Cached", "fast path", "gate", and "flag"
+are dashboard internals; the driver-facing equivalent names a
+parameter, describes an observable behavior, or signals when an
+instrument is the right fit.
+
+This grounds every field with prose content.  `hint`, `note`,
+`see_also`, `warning`, `alert`, and `tip` all share the same lens.
+Factual fields (`source`, `title`, `api`, counts) are exempt because
+they carry no voice.
+
 ## Rules
 
 - `_build_frontmatter()` (`markdown.py`) is the **sole mechanism**
@@ -125,7 +145,7 @@ redirects from steering the browser to internal services.
 
 ## Hint Field Types
 
-Four distinct fields carry guidance.  Use the right one:
+Five distinct fields carry guidance.  Use the right one:
 
 | Field      | Scope              | Purpose                                          | Example |
 |------------|--------------------|--------------------------------------------------|---------|
@@ -133,6 +153,7 @@ Four distinct fields carry guidance.  Use the right one:
 | `see_also` | Different tool     | Cross-tool reference to a complementary resource  | `ARXIV:1706.03762v7 with SemanticScholar for citations` |
 | `note`     | Explanatory        | Why something is the way it is                    | `Section listing is not applicable for API-sourced paper data` |
 | `alert`    | Precautionary      | Retroactive invalidation of prior output          | `retracted 2020-06-05 — notice: 10.1016/S0140-6736(20)31324-6 (retraction-watch)` |
+| `tip`      | Educational        | Once-per-session lesson about when to engage an instrument | `WebFetchSections returns the page's heading layout; use it to scout before committing to a content fetch` |
 
 `_build_frontmatter()` skips `None` values, so hints that only apply
 conditionally can be passed as `None` and will be omitted cleanly.
@@ -161,6 +182,36 @@ The value in `alert:` uses only structurally-validated fields (dates
 constrained to ISO format, DOIs regex-checked, source values from a
 closed enum).  Free-form text from external APIs (e.g. CrossRef's
 `label` field) is rendered inside the content fence, never in `alert:`.
+
+### `tip` semantics
+
+`tip:` carries educational guidance that is only useful before the
+lesson lands.  Where `hint:` is contextual ("what should I do with
+*this* result?"), `tip:` is pedagogical ("here is a pattern you
+should know").  Different lifecycles motivate different mechanics.
+
+Three properties define the field:
+
+1. **Single-write per build.**  Unlike the protected multi-contributor
+   keys, `tip:` accepts one value per response and is not appended.
+2. **Session-scoped fire-once.**  The frontmatter layer deduplicates by
+   a stable tip ID across the lifetime of the process; once a given
+   tip has been emitted, subsequent attempts to write it are silently
+   dropped.  State resets on MCP server restart.
+3. **Deterministic content.**  Tip strings are content-addressable by
+   ID: no templated variables, no counts, no dates.  If a value needs
+   templating, it is the wrong field; use `hint:` instead.
+
+Trigger IDs may be tool-pair scoped (`webfetch_js_before_incisive`)
+or URL-scoped (`summarize_without_sections::<url-hash>`).  The
+session ledger keys by the full tuple so a per-URL lesson can fire
+once per URL without smothering the lesson on a different URL.
+
+The 2Q `_PageCache` is the right oracle for "has this URL been
+structurally inspected?".  URL-scoped tip triggers should consult
+cache membership rather than threading a parallel state subsystem.
+Eviction may cause a tip to re-fire on a URL the agent did inspect;
+this is acceptable for educational content.
 
 ## Multi-Contributor Keys (Protected)
 

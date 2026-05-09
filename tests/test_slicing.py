@@ -668,7 +668,7 @@ class TestUnbuildablePageResponse:
         assert "Error: Page cache unavailable." not in result
         # Structured frontmatter signalling
         assert "note:" in result
-        assert "BM25 slicing" in result
+        assert "cannot be split into slices" in result
         assert "hint:" in result
         assert "section=" in result
         assert "max_tokens" in result
@@ -694,7 +694,7 @@ class TestUnbuildablePageResponse:
         )
         assert "Error: Page cache unavailable." not in result
         assert "note:" in result
-        assert "BM25 slicing" in result
+        assert "cannot be split into slices" in result
         assert "hint:" in result
         assert "section=" in result
         assert "max_tokens" in result

@@ -480,12 +480,30 @@ async def _fetch_rfc_paper(number: int) -> str:
     sub_label = _subseries_label(see_also)
     if sub_label:
         fm_entries["subseries"] = sub_label
+        _append_frontmatter_entry(
+            fm_entries, "hint",
+            f"Use {tool_name('ietf')} action='subseries' query='{sub_label}' "
+            "to enumerate sibling RFCs in the same standards bundle.",
+        )
 
     # Relationship chains in frontmatter
     for key in ("obsoletes", "obsoleted_by", "updates", "updated_by"):
         refs = meta.get(key) or []
         if refs:
             fm_entries[key] = refs
+
+    # Obsoleted-by hint: surface the current standard so the agent doesn't
+    # cite superseded text without realizing it.
+    obsoleted_refs = meta.get("obsoleted_by") or []
+    if obsoleted_refs:
+        num_match = re.search(r"\d+", obsoleted_refs[0])
+        if num_match:
+            _append_frontmatter_entry(
+                fm_entries, "hint",
+                f"This RFC has been obsoleted; use {tool_name('ietf')} "
+                f"action='rfc' query='{num_match.group()}' for the current "
+                "standard that supersedes it.",
+            )
 
     # UNKNOWN status note — pub_status reflects original publication status
     if pub_status == "UNKNOWN":

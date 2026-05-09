@@ -6,7 +6,14 @@ from typing import Any, Literal, Optional
 
 from kagiapi import KagiClient
 
-from .markdown import FMEntries, _build_frontmatter, _fence_content, _TRUST_ADVISORY
+from .common import tool_name
+from .markdown import (
+    FMEntries,
+    _append_frontmatter_entry,
+    _build_frontmatter,
+    _fence_content,
+    _TRUST_ADVISORY,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -182,6 +189,22 @@ async def search(query: str, limit: int = 5) -> str:
     if balance_warning:
         fm_entries["balance_warning"] = balance_warning
 
+    if results:
+        _append_frontmatter_entry(
+            fm_entries, "hint",
+            f"Drill into a result URL with {tool_name('web_fetch_sections')} "
+            f"to scout layout, {tool_name('web_fetch_direct')} for body "
+            f"content, or {tool_name('summarize')} when the source is "
+            "paywalled or blocks bots.",
+        )
+    else:
+        _append_frontmatter_entry(
+            fm_entries, "hint",
+            'Widen the query: drop site: or filetype: qualifiers, quote '
+            'phrases as "exact match", or replace +required terms with '
+            "looser alternatives.",
+        )
+
     fm = _build_frontmatter(fm_entries)
     return fm + "\n\n" + _fence_content(content)
 
@@ -245,6 +268,14 @@ async def summarize(
     balance_warning = _check_balance(response, is_summarize=True)
     if balance_warning:
         fm_entries["balance_warning"] = balance_warning
+
+    if url:
+        _append_frontmatter_entry(
+            fm_entries, "hint",
+            f"To recover specifics the summary discarded, pass the same "
+            f"URL to {tool_name('web_fetch_direct')} with section= or "
+            "search= for targeted retrieval.",
+        )
 
     fm = _build_frontmatter(fm_entries)
     return fm + "\n\n" + _fence_content(content)

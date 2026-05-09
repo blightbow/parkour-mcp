@@ -497,7 +497,13 @@ class TestResearchShelfTool:
         shelf = _get_shelf()
         await shelf.track(CitationRecord(doi="10.1234/test", title="Test"))
         result = await research_shelf("export", "json")
-        data = json.loads(result)
+        # Frontmatter precedes the JSON body and carries a persistence hint
+        # for agent memory subsystems
+        assert "action: export" in result
+        assert "Persist this JSON" in result
+        # Body after frontmatter is parseable JSON
+        _, _, json_body = result.partition("\n---\n\n")
+        data = json.loads(json_body)
         # New structured format: {"active": {...}, "retracted": {...}}
         assert "active" in data
         assert "retracted" in data

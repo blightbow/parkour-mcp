@@ -1622,8 +1622,8 @@ def _build_failed_response(
         fm_entries["slices_not_found"] = "unavailable"
     _append_frontmatter_entry(
         fm_entries, "note",
-        "Page lacks structural boundaries needed for BM25 slicing "
-        "(single line longer than 1 MB).",
+        "Page is a single line over 1 MB and cannot be split into slices "
+        "for search or slice retrieval.",
     )
     _append_frontmatter_entry(
         fm_entries, "hint",
@@ -1661,15 +1661,16 @@ def _search_slices(
 
     if warnings:
         # Lenient parser silently dropped at least one subquery (typically
-        # a colon or bracket treated as an operator).  Surface the raw
-        # tantivy error plus a concrete fix on the shared ``warning`` key
-        # — composes cleanly with any fragment-resolution advisory
-        # already present.
+        # a colon or bracket treated as an operator).  Surface the
+        # diagnostic in driver-facing framing plus a concrete fix on the
+        # shared ``warning`` key — composes cleanly with any
+        # fragment-resolution advisory already present.
         _append_frontmatter_entry(
             fm_entries, "warning",
-            "; ".join(warnings) + '. Wrap multi-word terms in "double '
-            'quotes" to preserve punctuation (e.g. "System Prompt: Git '
-            'status"), or use the documented search operators.',
+            "search parser dropped part of the query (" + "; ".join(warnings)
+            + '). Wrap multi-word terms in "double quotes" to preserve '
+            'punctuation (e.g. "System Prompt: Git status"), or use the '
+            "documented search operators.",
         )
 
     if not matched:
