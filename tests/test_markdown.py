@@ -586,6 +586,31 @@ class TestFilterMarkdownBySections:
         _, meta, _ = _filter_markdown_by_sections(SAMPLE_MARKDOWN, ["section-two"], sections)
         assert meta[0].get("has_subsections") is True
 
+    def test_header_only_flag_propagates_when_section_has_no_body(self):
+        """Heading-only sections (body empty between this heading and the next
+        sibling at the same level) flag header_only=True so the pipeline can
+        emit a diagnostic instead of returning a silent empty fence."""
+        # Two H2 siblings — the first has no body, the second holds content.
+        # This is the wutheringlab.com structural shape: a divider H2 with
+        # the actual content placed under sibling H2s rather than child H3s.
+        md_text = (
+            "# Guide\n\n"
+            "## Resonance Chain\n\n"
+            "## Suggested Resonance Chain\n\nSequence 1: 15.8%\n"
+        )
+        sections = _extract_sections_from_markdown(md_text)
+        _, meta, _ = _filter_markdown_by_sections(md_text, ["Resonance Chain"], sections)
+        assert meta[0].get("header_only") is True
+        # has_subsections must remain False — the next heading is a sibling,
+        # not a child — to prove the two flags are independent signals.
+        assert "has_subsections" not in meta[0]
+
+    def test_header_only_flag_absent_for_section_with_body(self):
+        """Sections with direct content must not carry the header_only flag."""
+        sections = _extract_sections_from_markdown(SAMPLE_MARKDOWN)
+        _, meta, _ = _filter_markdown_by_sections(SAMPLE_MARKDOWN, ["Section One"], sections)
+        assert "header_only" not in meta[0]
+
     def test_unmatched_section_returned(self):
         sections = _extract_sections_from_markdown(SAMPLE_MARKDOWN)
         filtered, meta, unmatched = _filter_markdown_by_sections(SAMPLE_MARKDOWN, ["Nonexistent"], sections)

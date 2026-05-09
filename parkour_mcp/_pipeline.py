@@ -1546,6 +1546,23 @@ def _process_markdown_sections(
                 "Section extraction returns only the selected heading's direct content. "
                 "Subsections are separate entries — request them by name to include them.",
             )
+        # Warn when a matched section is heading-only (no body between this
+        # heading and the next).  Distinct from has_subsections: a header-only
+        # section may have no children at all (the next heading is a sibling
+        # at the same level), so the caller needs the section tree to find
+        # where the content actually lives.
+        header_only_names = [
+            m["name"] for m in (sections_requested_meta or [])
+            if m.get("header_only")
+        ]
+        if header_only_names:
+            quoted = ", ".join(f"'{n}'" for n in header_only_names)
+            _append_frontmatter_entry(
+                frontmatter_entries, "note",
+                f"Section {quoted} has no body content (heading-only divider). "
+                f"Call {tool_name('web_fetch_sections')} on this URL to locate "
+                "sibling or child sections that hold the content.",
+            )
 
     markdown_content, truncation_hint = _apply_semantic_truncation(markdown_content, max_tokens)
     if truncation_hint and all_sections and not section_names:
@@ -1657,8 +1674,8 @@ def _build_failed_response(
         fm_entries["slices_not_found"] = "unavailable"
     _append_frontmatter_entry(
         fm_entries, "note",
-        "Page lacks structural boundaries needed for BM25 slicing "
-        "(single line longer than 1 MB).",
+        "Page is a single line over 1 MB and cannot be split into slices "
+        "for search or slice retrieval.",
     )
     _append_frontmatter_entry(
         fm_entries, "hint",
@@ -1696,15 +1713,16 @@ def _search_slices(
 
     if warnings:
         # Lenient parser silently dropped at least one subquery (typically
-        # a colon or bracket treated as an operator).  Surface the raw
-        # tantivy error plus a concrete fix on the shared ``warning`` key
-        # — composes cleanly with any fragment-resolution advisory
-        # already present.
+        # a colon or bracket treated as an operator).  Surface the
+        # diagnostic in driver-facing framing plus a concrete fix on the
+        # shared ``warning`` key — composes cleanly with any
+        # fragment-resolution advisory already present.
         _append_frontmatter_entry(
             fm_entries, "warning",
-            "; ".join(warnings) + '. Wrap multi-word terms in "double '
-            'quotes" to preserve punctuation (e.g. "System Prompt: Git '
-            'status"), or use the documented search operators.',
+            "search parser dropped part of the query (" + "; ".join(warnings)
+            + '). Wrap multi-word terms in "double quotes" to preserve '
+            'punctuation (e.g. "System Prompt: Git status"), or use the '
+            "documented search operators.",
         )
 
     if not matched:

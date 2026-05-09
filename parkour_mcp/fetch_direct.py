@@ -497,8 +497,9 @@ async def _github_sections(
             fm = _build_frontmatter({
                 "source": original_url,
                 "api": "GitHub (raw)",
-                "note": f"No code definitions extracted for {ext} file. "
-                        "Grammar may not be installed, or file has no function/class definitions.",
+                "note": (
+                    f"No function or class definitions extracted from this {ext} file."
+                ),
                 "hint": f"Use {tool_name('web_fetch_direct')} to view the file content directly",
             })
             return fm
@@ -630,7 +631,11 @@ async def _github_sections(
     fm = _build_frontmatter({
         "source": original_url,
         "api": "GitHub",
-        "see_also": "Use the GitHub tool for structured access to this content",
+        "see_also": (
+            f"Use {tool_name('github')} with the action that fits this URL: "
+            "'repo' for metadata, 'tree' for a directory listing, "
+            "'file' for a blob, 'issue' or 'pull_request' for threads."
+        ),
     })
     return fm
 
@@ -922,10 +927,9 @@ def _sections_response(
         if slice_meta["effective_slice"] < last_slice:
             _append_frontmatter_entry(
                 entries, "hint",
-                f"{base_hint}; "
-                f"more TOC entries available — call web_fetch_sections again with "
-                f"slice={slice_meta['effective_slice'] + 1} to advance, "
-                f"slice=-1 for the last window",
+                f"{base_hint}; more sections available, pass "
+                f"slice={slice_meta['effective_slice'] + 1} to advance "
+                "or slice=-1 for the last window",
             )
         else:
             _append_frontmatter_entry(entries, "hint", base_hint)

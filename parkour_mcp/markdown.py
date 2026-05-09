@@ -839,6 +839,8 @@ def _filter_markdown_by_sections(
             meta["matched_fragment"] = fragment
         if _has_subsections(idx):
             meta["has_subsections"] = True
+        if sections[idx].get("header_only"):
+            meta["header_only"] = True
         return meta
 
     matched_parts = []

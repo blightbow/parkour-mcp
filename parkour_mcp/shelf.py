@@ -25,6 +25,7 @@ from typing import Annotated, Optional
 from pydantic import Field as PydanticField
 
 from .common import tool_name
+from .markdown import FMEntries, _build_frontmatter
 
 logger = logging.getLogger(__name__)
 
@@ -713,27 +714,38 @@ async def research_shelf(
                 "Use active, retracted, or all."
             )
         records = await shelf.list_all(section=section)
-        if section == "active":
+        if section == "all":
+            # section == "all": always render both sections so the output
+            # reflects the full shelf state regardless of which buckets are
+            # populated.  Skipping an empty section would misrepresent intent.
+            active_count, _ = await shelf.counts()
+            active_records = records[:active_count]
+            retracted_records = records[active_count:]
+            parts = [
+                "## Active\n",
+                _format_shelf_list(active_records, bucket="active"),
+                "",
+                "## Retracted\n",
+                _format_shelf_list(retracted_records, bucket="retracted"),
+            ]
+            body = "\n".join(parts)
+        elif section == "active":
             _, retracted_count = await shelf.counts()
-            return _format_shelf_list(
+            body = _format_shelf_list(
                 records, bucket="active", other_bucket_count=retracted_count,
             )
-        if section == "retracted":
-            return _format_shelf_list(records, bucket="retracted")
-        # section == "all": always render both sections so the output
-        # reflects the full shelf state regardless of which buckets are
-        # populated.  Skipping an empty section would misrepresent intent.
-        active_count, _ = await shelf.counts()
-        active_records = records[:active_count]
-        retracted_records = records[active_count:]
-        parts = [
-            "## Active\n",
-            _format_shelf_list(active_records, bucket="active"),
-            "",
-            "## Retracted\n",
-            _format_shelf_list(retracted_records, bucket="retracted"),
-        ]
-        return "\n".join(parts)
+        else:  # section == "retracted"
+            body = _format_shelf_list(records, bucket="retracted")
+
+        fm_entries = FMEntries({"action": "list"})
+        if records:
+            fm_entries.append(
+                "hint",
+                "Annotate entries via action='confirm|score|note' (DOI "
+                "required); pull citations via action='export' "
+                "format='bibtex|ris|json'.",
+            )
+        return _build_frontmatter(fm_entries) + "\n\n" + body
 
     elif action == "confirm":
         doi = query.strip()
@@ -787,7 +799,17 @@ async def research_shelf(
             result = await shelf.export_ris(include_retracted=include_retracted)
             return result if result else "Shelf is empty."
         elif fmt == "json":
-            return await shelf.export_json()
+            body = await shelf.export_json()
+            fm = _build_frontmatter(FMEntries({
+                "action": "export",
+                "format": "json",
+                "hint": (
+                    "Persist this JSON via the agent's memory subsystem; "
+                    "restore in a future session via action='import' with "
+                    "the saved content."
+                ),
+            }))
+            return fm + "\n\n" + body
         else:
             return f"Error: Unknown export format '{fmt}'. Use bibtex, ris, or json."
 
