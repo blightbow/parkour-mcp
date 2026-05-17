@@ -9,6 +9,16 @@ permissions:
   contents: write    # gh release create + asset upload
   id-token: write    # PyPI trusted publisher + MCP Registry OIDC
 
+# One release run per tag. A tag delivered as two push events (GitHub
+# double-dispatch, or a manual re-push) would otherwise spawn racing
+# runs that collide on the PyPI upload and `gh release create`.
+# cancel-in-progress is false: never interrupt an in-flight release —
+# a late duplicate queues and then fails fast on the duplicate upload
+# rather than risking a half-published release.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   release:
     runs-on: ubuntu-latest
@@ -40,6 +50,15 @@ jobs:
           tag="${GITHUB_REF#refs/tags/}"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+          # A clean vX.Y.Z tag is a final release; anything else (rc0,
+          # a1, b2, ...) is a pre-release and must not be published as
+          # GitHub's "Latest". PEP 440 RC tags carry no `-`, so a
+          # SemVer-style dash check would miss them.
+          if [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Verify tag matches pyproject and version files are in sync
         # The tag's numeric suffix must match pyproject.toml. sync_versions.py
@@ -103,6 +122,7 @@ jobs:
           gh release create "${{ steps.version.outputs.tag }}" \
             --title "${{ steps.version.outputs.tag }}" \
             --notes-file release-notes.md \
+            ${{ steps.version.outputs.prerelease == 'true' && '--prerelease' || '' }} \
             dist/parkour-mcp.mcpb
 
       - name: Install mcp-publisher
