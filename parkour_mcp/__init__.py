@@ -577,11 +577,10 @@ Wiki instance via wiki= parameter:
 }
 
 
-# Description fragments resolved into {search_positioning} / {summarize_positioning}.
-# Kept out of TOOL_DESCRIPTIONS because the Hermes plugin swaps in the *_OVERRIDE
-# variants when parkour replaces the host's web_extract / web_search: once
-# parkour *is* that built-in, the prose must stop positioning itself against a
-# sibling tool that no longer exists.
+# Positioning fragments kept out of TOOL_DESCRIPTIONS because the Hermes plugin
+# swaps in the *_OVERRIDE variants when parkour replaces the host's web_extract
+# / web_search: once parkour *is* that built-in, the prose must stop positioning
+# itself against a sibling tool that no longer exists.
 _SEARCH_POSITIONING = """Use this as an alternative to {web_search} when it returns few or poor quality
 results. Kagi's index is independently curated, resistant to SEO spam, and
 may surface different sources. Returns compact results with snippets and
@@ -628,23 +627,21 @@ def _build_description(
 ) -> str:
     """Build a tool description by resolving placeholders for the given profile.
 
-    ``override_web_extract`` / ``override_web_search`` apply only to the
-    ``hermes`` profile, where the plugin may replace the host's web_extract /
-    web_search tool. When set, the affected positioning fragment and the
-    fetch_direct naming swap to variants that read coherently once parkour's
-    own tool *is* that built-in (see hermes_plugin.py).
+    ``override_web_extract`` / ``override_web_search`` are passed only by the
+    Hermes plugin, for the ``hermes`` profile, when parkour replaces the host's
+    web_extract / web_search tool. When set, the affected positioning fragment
+    and the fetch_direct naming swap to variants that read coherently once
+    parkour's own tool *is* that built-in (see hermes_plugin.py).
     """
     profile_vars = dict(PROFILE_VARS[profile])
-    hermes_override_extract = profile == "hermes" and override_web_extract
-    hermes_override_search = profile == "hermes" and override_web_search
-    if hermes_override_extract:
+    if override_web_extract:
         profile_vars["fetch_direct"] = "web_extract"
         profile_vars["fetch_direct_when_to_use"] = _HERMES_FETCH_DIRECT_WHEN_TO_USE_OVERRIDE
     search_positioning = (
-        _SEARCH_POSITIONING_OVERRIDE if hermes_override_search else _SEARCH_POSITIONING
+        _SEARCH_POSITIONING_OVERRIDE if override_web_search else _SEARCH_POSITIONING
     )
     summarize_positioning = (
-        _SUMMARIZE_POSITIONING_OVERRIDE if hermes_override_extract else _SUMMARIZE_POSITIONING
+        _SUMMARIZE_POSITIONING_OVERRIDE if override_web_extract else _SUMMARIZE_POSITIONING
     )
     fragments = {
         "search_grammar": SEARCH_GRAMMAR_DOC,
@@ -671,6 +668,17 @@ def _apply_s2_enrichment() -> None:
     )
 
 
+def _resolve_catalog(s2_on: bool) -> list[tuple[str, Callable[..., Any]]]:
+    """Return the tool catalog for an entrypoint: the always-on tools, plus
+    semantic_scholar when ``s2_on`` (the Semantic Scholar opt-in) is set.
+    """
+    catalog: list[tuple[str, Callable[..., Any]]] = list(_ALWAYS_ON_TOOLS)
+    if s2_on:
+        from .semantic_scholar import semantic_scholar
+        catalog.append(("semantic_scholar", semantic_scholar))
+    return catalog
+
+
 def main():
     """Run the MCP server."""
     parser = argparse.ArgumentParser(description="Parkour MCP Server")
@@ -685,16 +693,12 @@ def main():
     init_tool_names(args.profile)
 
     # Conditionally enrich descriptions when S2 is opted in
-    _s2_on = s2_enabled()
-    if _s2_on:
+    s2_on = s2_enabled()
+    if s2_on:
         _apply_s2_enrichment()
 
     # Register all tools with profile-specific names and descriptions
-    tools: list[tuple[str, Callable[..., Any]]] = list(_ALWAYS_ON_TOOLS)
-    if _s2_on:
-        from .semantic_scholar import semantic_scholar
-        tools.append(("semantic_scholar", semantic_scholar))
-    for internal_name, func in tools:
+    for internal_name, func in _resolve_catalog(s2_on):
         name = TOOL_NAMES[internal_name][args.profile]
         # Title is the canonical PascalCase form regardless of active profile
         # — clients display this in tool pickers (Anthropic Software Directory

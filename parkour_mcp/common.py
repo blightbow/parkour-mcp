@@ -243,7 +243,8 @@ _TOOL_DISPLAY_NAMES: dict[str, str] = {}
 def init_tool_names(profile: str) -> None:
     """Populate display-name lookup from TOOL_NAMES for the given profile.
 
-    Called once from main() and from test conftest.py.
+    Called once per entrypoint — the MCP server's main(), the Hermes plugin's
+    register() — and from test conftest.py.
     """
     assert profile in ("code", "desktop"), f"Unknown profile: {profile!r}"
     _TOOL_DISPLAY_NAMES.clear()

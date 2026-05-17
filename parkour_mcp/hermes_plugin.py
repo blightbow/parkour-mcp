@@ -52,7 +52,7 @@ from typing import Any
 
 from mcp.server.fastmcp.tools.base import Tool as _FastMCPTool
 
-from . import _ALWAYS_ON_TOOLS, _apply_s2_enrichment, _build_description
+from . import _apply_s2_enrichment, _build_description, _resolve_catalog
 from .common import TOOL_NAMES, init_tool_names, s2_enabled
 
 logger = logging.getLogger(__name__)
@@ -149,14 +149,6 @@ def _schema_for(func: _ToolFunc, name: str, description: str) -> dict:
     return {"name": name, "description": description, "parameters": tool.parameters}
 
 
-# parkour internal tool name -> the Hermes built-in it replaces when the
-# matching plugins.entries.parkour.* flag is set.
-_OVERRIDE_TARGETS = {
-    "web_fetch_direct": "web_extract",
-    "search": "web_search",
-}
-
-
 def _read_override_flags() -> tuple[bool, bool]:
     """Read (override_web_extract, override_web_search) from config.yaml.
 
@@ -197,18 +189,13 @@ def register(ctx: Any) -> None:
         _apply_s2_enrichment()
 
     override_extract, override_search = _read_override_flags()
-    override_names = {
-        internal: host
-        for internal, host in _OVERRIDE_TARGETS.items()
-        if (internal == "web_fetch_direct" and override_extract)
-        or (internal == "search" and override_search)
-    }
+    override_names: dict[str, str] = {}
+    if override_extract:
+        override_names["web_fetch_direct"] = "web_extract"
+    if override_search:
+        override_names["search"] = "web_search"
 
-    catalog: list[tuple[str, _ToolFunc]] = list(_ALWAYS_ON_TOOLS)
-    if s2_on:
-        from .semantic_scholar import semantic_scholar
-        catalog.append(("semantic_scholar", semantic_scholar))
-
+    catalog = _resolve_catalog(s2_on)
     for internal_name, func in catalog:
         host_name = override_names.get(internal_name)
         name = host_name or TOOL_NAMES[internal_name][_NAME_PROFILE]
