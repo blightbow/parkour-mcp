@@ -16,7 +16,7 @@ import httpx
 from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
 
-from .common import _FETCH_HEADERS, _classify_content_type
+from .common import _FETCH_HEADERS, _classify_content_type, guarded_fetch, ResponseTooLarge
 from .markdown import (
     FMEntries,
     html_to_markdown, _build_frontmatter, _apply_hard_truncation,
@@ -294,7 +294,17 @@ async def _render_js(
                 content_kind = _classify_content_type(ct)
 
                 if content_kind is not None and content_kind != "html":
-                    get_resp = await client.get(url, headers=_FETCH_HEADERS)
+                    # Route the body fetch through guarded_fetch so a raw
+                    # JSON/XML payload gets the same size cap and wall-clock
+                    # deadline the static web_fetch_direct path applies.
+                    # web_fetch_direct runs check_url_ssrf before dispatching
+                    # here, so url is already SSRF-validated.
+                    try:
+                        get_resp = await guarded_fetch(  # nosemgrep: ssrf-check-precedes-outbound-fetch
+                            url, headers=_FETCH_HEADERS,
+                        )
+                    except ResponseTooLarge as e:
+                        return f"Error: Response too large for {url} — {e}"
                     get_resp.raise_for_status()
                     text = get_resp.text.strip()
                     if not text:
