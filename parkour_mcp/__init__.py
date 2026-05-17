@@ -178,17 +178,40 @@ PROFILE_VARS = {
             "bans of data-center subnets, or when web_fetch is rejected with PERMISSIONS_ERROR.\n"
         ),
     },
+    # hermes profile: snake_case (matches Hermes' built-in tool naming). The
+    # sibling-tool placeholders point at Hermes' own web_search / web_extract,
+    # and the description prose drops the Anthropic-proxy framing that only
+    # applies under Claude clients. Consumed by the Hermes plugin entrypoint
+    # (parkour_mcp/hermes_plugin.py), never by the standalone MCP server.
+    "hermes": {
+        "web_search": "web_search",
+        "web_fetch": "web_extract",
+        "fetch_direct": "web_fetch_incisive",
+        "fetch_sections": "web_fetch_sections",
+        "summarize": "kagi_summarize",
+        "mediawiki_tool": "mediawiki",
+        "github_tool": "github",
+        "arxiv_tool": "arxiv",
+        "ietf_tool": "ietf",
+        "semantic_scholar_tool": "semantic_scholar",
+        "shelf_tool": "research_shelf",
+        "youtube_tool": "youtube",
+        "youtube_comments_tool": "youtube_comments",
+        "fetch_direct_when_to_use": (
+            "Unlike web_extract, fetches through the user's device with precise\n"
+            "content extraction and clean first-party APIs instead of summarization.\n"
+            "Use this for a rich content exploring experience that is not subject to 403\n"
+            "bans of data-center subnets, or for extracting specific details that\n"
+            "summarization would discard."
+        ),
+    },
 }
 
 # Tool descriptions — one entry per tool, with {var} placeholders resolved per-profile.
 TOOL_DESCRIPTIONS = {
     "search": """Search the web using Kagi's curated search index.
 
-Use this as an alternative to {web_search} when it returns few or poor quality
-results. Kagi's index is independently curated, resistant to SEO spam, and
-may surface different sources. Returns compact results with snippets and
-timestamps — much lighter on context than {web_search}'s summarized snippets,
-making it better suited for multi-query research workflows.
+{search_positioning}
 
 Supports search operators in the query string:
 - site:example.com — restrict to a domain
@@ -264,13 +287,7 @@ Supports HTML, plain text, JSON, and XML content types.""",
 
     "summarize": """Summarize content from a URL using Kagi's Universal Summarizer.
 
-Position relative to the two fetch tools:
-- {web_fetch} summarizes through Anthropic's layer (fast, default;
-  subject to agent blacklisting and IP bans)
-- {fetch_direct} returns raw unsummarized content (local fetch through
-  the user's device; bypasses agent/IP bans that block {web_fetch})
-- this tool summarizes through Kagi's layer — returns a condensed
-  digest only, never raw content
+{summarize_positioning}
 
 Reach for this when even {fetch_direct} can't retrieve the source
 (captcha-gated pages, anti-bot walls), or for formats neither built-in
@@ -560,12 +577,106 @@ Wiki instance via wiki= parameter:
 }
 
 
-def _build_description(tool_name: str, profile: str) -> str:
-    """Build a tool description by resolving placeholders for the given profile."""
-    return TOOL_DESCRIPTIONS[tool_name].format(
-        **PROFILE_VARS[profile],
-        search_grammar=SEARCH_GRAMMAR_DOC,
+# Positioning fragments kept out of TOOL_DESCRIPTIONS because the Hermes plugin
+# swaps in the *_OVERRIDE variants when parkour replaces the host's web_extract
+# / web_search: once parkour *is* that built-in, the prose must stop positioning
+# itself against a sibling tool that no longer exists.
+_SEARCH_POSITIONING = """Use this as an alternative to {web_search} when it returns few or poor quality
+results. Kagi's index is independently curated, resistant to SEO spam, and
+may surface different sources. Returns compact results with snippets and
+timestamps — much lighter on context than {web_search}'s summarized snippets,
+making it better suited for multi-query research workflows."""
+
+_SEARCH_POSITIONING_OVERRIDE = """Returns the web results Kagi surfaces for a query. Kagi's index is
+independently curated and resistant to SEO spam. Results stay compact
+(snippets and timestamps per hit), keeping context lean across
+multi-query research workflows."""
+
+_SUMMARIZE_POSITIONING = """Position relative to the two fetch tools:
+- {web_fetch} returns host-summarized content (fast, default; subject
+  to bot detection and datacenter IP bans)
+- {fetch_direct} returns raw unsummarized content (local fetch through
+  the user's device; bypasses the bot detection and IP bans that
+  block {web_fetch})
+- this tool summarizes through Kagi's layer — returns a condensed
+  digest only, never raw content"""
+
+_SUMMARIZE_POSITIONING_OVERRIDE = """Position relative to the fetch tools:
+- {fetch_direct} returns raw unsummarized content (local fetch through
+  the user's device; bypasses the bot detection and IP bans that block
+  datacenter fetchers)
+- this tool summarizes through Kagi's layer, returning a condensed
+  digest only, never raw content"""
+
+# Override variant of the hermes profile's fetch_direct_when_to_use: drops the
+# "Unlike web_extract" comparison, since under override parkour *is* web_extract.
+_HERMES_FETCH_DIRECT_WHEN_TO_USE_OVERRIDE = (
+    "Fetches through the user's device with precise content extraction and\n"
+    "clean first-party APIs instead of summarization. Returns a rich\n"
+    "content-exploring experience not subject to 403 bans of data-center\n"
+    "subnets, and surfaces specific details that summarization discards."
+)
+
+
+def _build_description(
+    tool_name: str,
+    profile: str,
+    *,
+    override_web_extract: bool = False,
+    override_web_search: bool = False,
+) -> str:
+    """Build a tool description by resolving placeholders for the given profile.
+
+    ``override_web_extract`` / ``override_web_search`` are passed only by the
+    Hermes plugin, for the ``hermes`` profile, when parkour replaces the host's
+    web_extract / web_search tool. When set, the affected positioning fragment
+    and the fetch_direct naming swap to variants that read coherently once
+    parkour's own tool *is* that built-in (see hermes_plugin.py).
+    """
+    profile_vars = dict(PROFILE_VARS[profile])
+    if override_web_extract:
+        profile_vars["fetch_direct"] = "web_extract"
+        profile_vars["fetch_direct_when_to_use"] = _HERMES_FETCH_DIRECT_WHEN_TO_USE_OVERRIDE
+    search_positioning = (
+        _SEARCH_POSITIONING_OVERRIDE if override_web_search else _SEARCH_POSITIONING
     )
+    summarize_positioning = (
+        _SUMMARIZE_POSITIONING_OVERRIDE if override_web_extract else _SUMMARIZE_POSITIONING
+    )
+    fragments = {
+        "search_grammar": SEARCH_GRAMMAR_DOC,
+        "search_positioning": search_positioning.format(**profile_vars),
+        "summarize_positioning": summarize_positioning.format(**profile_vars),
+    }
+    return TOOL_DESCRIPTIONS[tool_name].format(**profile_vars, **fragments)
+
+
+def _apply_s2_enrichment() -> None:
+    """Enrich the arxiv / research_shelf descriptions for the Semantic Scholar opt-in.
+
+    Mutates TOOL_DESCRIPTIONS in place. Each entrypoint (the MCP server's
+    main(), the Hermes plugin's register()) calls this at most once, before
+    descriptions are resolved, so the non-idempotent ``+=`` is safe.
+    """
+    TOOL_DESCRIPTIONS["arxiv"] += (
+        "\n\nFor citation counts and cross-references, use SemanticScholar with\n"
+        "ARXIV:<id> after retrieving the arXiv ID."
+    )
+    TOOL_DESCRIPTIONS["research_shelf"] = TOOL_DESCRIPTIONS["research_shelf"].replace(
+        "ArXiv, DOI, or IETF",
+        "ArXiv, SemanticScholar, DOI, or IETF",
+    )
+
+
+def _resolve_catalog(s2_on: bool) -> list[tuple[str, Callable[..., Any]]]:
+    """Return the tool catalog for an entrypoint: the always-on tools, plus
+    semantic_scholar when ``s2_on`` (the Semantic Scholar opt-in) is set.
+    """
+    catalog: list[tuple[str, Callable[..., Any]]] = list(_ALWAYS_ON_TOOLS)
+    if s2_on:
+        from .semantic_scholar import semantic_scholar
+        catalog.append(("semantic_scholar", semantic_scholar))
+    return catalog
 
 
 def main():
@@ -582,23 +693,12 @@ def main():
     init_tool_names(args.profile)
 
     # Conditionally enrich descriptions when S2 is opted in
-    _s2_on = s2_enabled()
-    if _s2_on:
-        TOOL_DESCRIPTIONS["arxiv"] += (
-            "\n\nFor citation counts and cross-references, use SemanticScholar with\n"
-            "ARXIV:<id> after retrieving the arXiv ID."
-        )
-        TOOL_DESCRIPTIONS["research_shelf"] = TOOL_DESCRIPTIONS["research_shelf"].replace(
-            "ArXiv, DOI, or IETF",
-            "ArXiv, SemanticScholar, DOI, or IETF",
-        )
+    s2_on = s2_enabled()
+    if s2_on:
+        _apply_s2_enrichment()
 
     # Register all tools with profile-specific names and descriptions
-    tools: list[tuple[str, Callable[..., Any]]] = list(_ALWAYS_ON_TOOLS)
-    if _s2_on:
-        from .semantic_scholar import semantic_scholar
-        tools.append(("semantic_scholar", semantic_scholar))
-    for internal_name, func in tools:
+    for internal_name, func in _resolve_catalog(s2_on):
         name = TOOL_NAMES[internal_name][args.profile]
         # Title is the canonical PascalCase form regardless of active profile
         # — clients display this in tool pickers (Anthropic Software Directory

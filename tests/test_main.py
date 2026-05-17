@@ -24,7 +24,7 @@ _INTERNAL_NAMES = (
     [name for name, _ in _ALWAYS_ON_TOOLS]
     + list(_OPTIONAL_TOOLS)
 )
-_PROFILES = ("code", "desktop")
+_PROFILES = ("code", "desktop", "hermes")
 
 
 @pytest.mark.parametrize("internal_name", _INTERNAL_NAMES)
@@ -106,16 +106,31 @@ def test_tool_descriptions_dict_keys_match_registry():
         )
 
 
-def test_profile_vars_cover_both_profiles():
-    """PROFILE_VARS must define both 'code' and 'desktop' profiles, and
-    they must cover the same set of placeholder names — a placeholder
-    in one profile but not the other would silently miss when the
-    other profile renders.
+def test_profile_vars_cover_all_profiles():
+    """PROFILE_VARS must define every profile the entrypoints use — 'code'
+    and 'desktop' for the MCP server, 'hermes' for the plugin — and all of
+    them must cover the same set of placeholder names. A placeholder present
+    in one profile but not another would silently miss when that other
+    profile renders.
     """
-    assert set(PROFILE_VARS) == {"code", "desktop"}
-    code_keys = set(PROFILE_VARS["code"])
-    desktop_keys = set(PROFILE_VARS["desktop"])
-    assert code_keys == desktop_keys, (
-        f"profile keys differ: code-only={code_keys - desktop_keys}, "
-        f"desktop-only={desktop_keys - code_keys}"
-    )
+    assert set(PROFILE_VARS) == {"code", "desktop", "hermes"}
+    reference = set(PROFILE_VARS["code"])
+    for profile, profile_vars in PROFILE_VARS.items():
+        keys = set(profile_vars)
+        assert keys == reference, (
+            f"profile {profile!r} placeholder keys differ from 'code': "
+            f"missing={reference - keys}, extra={keys - reference}"
+        )
+
+
+def test_hermes_profile_descriptions_drop_anthropic_framing():
+    """The hermes profile targets non-Claude hosts. Its descriptions must not
+    claim parkour's sibling tools route through Anthropic's infrastructure —
+    that prose is true only for Claude Code / Claude Desktop.
+    """
+    for internal_name in _INTERNAL_NAMES:
+        desc = _build_description(internal_name, "hermes")
+        assert "Anthropic" not in desc, (
+            f"hermes-profile description for {internal_name!r} still "
+            f"references Anthropic"
+        )

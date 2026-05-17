@@ -53,6 +53,13 @@ Issues = "https://github.com/blightbow/parkour-mcp/issues"
 [project.scripts]
 parkour-mcp = "parkour_mcp:main"
 
+# Hermes Agent discovers plugins exposing this entry-point group and calls
+# `register(ctx)` on the referenced module. The same installed wheel is both
+# the `parkour-mcp` MCP server and a native Hermes plugin; the entrypoint
+# decides which. See parkour_mcp/hermes_plugin.py.
+[project.entry-points."hermes_agent.plugins"]
+parkour = "parkour_mcp.hermes_plugin"
+
 [tool.setuptools.packages.find]
 exclude = ["tmp*", "tests*", "scripts*"]
 
