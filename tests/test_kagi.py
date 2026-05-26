@@ -157,6 +157,85 @@ class TestSummarizeLockout:
         assert kagi_mod._summarize_locked is True
 
 
+# --- kagi-cli delegation ---
+
+
+def _write_fake_kagi_cli(tmp_path):
+    """Create a real executable that behaves like the kagi-cli subset used here."""
+    cli_path = tmp_path / "kagi"
+    cli_path.write_text(
+        """#!/usr/bin/env python3
+import json
+import sys
+
+args = sys.argv[1:]
+
+if args[:1] == ["search"]:
+    print(json.dumps({
+        "data": [
+            {
+                "t": 0,
+                "title": "CLI Result",
+                "url": "https://example.com/cli",
+                "snippet": "Result from kagi-cli",
+                "published": "2026-01-02",
+            },
+            {"t": 1, "list": ["cli related"]},
+        ]
+    }))
+elif args[:1] == ["summarize"]:
+    summary_type = args[args.index("--summary-type") + 1]
+    subscriber = "--subscriber" in args
+    print(f"Summary via CLI type={summary_type} subscriber={subscriber}")
+else:
+    print("unexpected command", args, file=sys.stderr)
+    raise SystemExit(2)
+""",
+        encoding="utf-8",
+    )
+    cli_path.chmod(0o755)
+    return cli_path
+
+
+class TestKagiCliDelegation:
+    def setup_method(self):
+        kagi_mod._summarize_locked = False
+
+    @pytest.mark.asyncio
+    async def test_search_uses_kagi_cli_when_enabled(self, tmp_path, monkeypatch):
+        cli_path = _write_fake_kagi_cli(tmp_path)
+        monkeypatch.setenv("PARKOUR_KAGI_USE_CLI", "1")
+        monkeypatch.setenv("KAGI_CLI_PATH", str(cli_path))
+        monkeypatch.delenv("KAGI_API_KEY", raising=False)
+
+        result = await search("test query", limit=2)
+
+        assert "CLI Result" in result
+        assert "Result from kagi-cli" in result
+        assert "Related searches: cli related" in result
+
+    @pytest.mark.asyncio
+    async def test_summarize_uses_kagi_cli_subscriber_mode(self, tmp_path, monkeypatch):
+        cli_path = _write_fake_kagi_cli(tmp_path)
+        monkeypatch.setenv("PARKOUR_KAGI_USE_CLI", "1")
+        monkeypatch.setenv("KAGI_CLI_PATH", str(cli_path))
+        monkeypatch.delenv("KAGI_API_KEY", raising=False)
+
+        result = await summarize(url="https://example.com", summary_type="takeaway")
+
+        assert "Summary via CLI type=keypoints subscriber=True" in result
+
+    @pytest.mark.asyncio
+    async def test_missing_kagi_cli_reports_configuration_error(self, monkeypatch):
+        monkeypatch.setenv("PARKOUR_KAGI_USE_CLI", "1")
+        monkeypatch.setenv("KAGI_CLI_PATH", "/does/not/exist/kagi")
+        monkeypatch.delenv("KAGI_API_KEY", raising=False)
+
+        result = await search("test query")
+
+        assert "Kagi CLI not found" in result
+
+
 # --- _handle_kagi_error ---
 
 

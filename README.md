@@ -395,6 +395,39 @@ echo "your-api-key" > ~/.config/parkour/kagi_api_key
 
 Get your API key at https://kagi.com/settings?p=api
 
+### Kagi CLI (optional, for session-token auth)
+
+If you already use [kagi-cli](https://github.com/microck/kagi-cli) with a
+session token, Parkour can delegate Kagi search and summarization to that CLI
+instead of requiring a Kagi API key:
+
+```bash
+export PARKOUR_KAGI_USE_CLI=1
+export KAGI_CLI_PATH=/path/to/kagi
+```
+
+MCP configuration example:
+
+```json
+{
+  "mcpServers": {
+    "parkour-mcp": {
+      "command": "uv",
+      "args": ["--directory", "/path/to/parkour-mcp", "run", "parkour-mcp"],
+      "env": {
+        "PARKOUR_KAGI_USE_CLI": "1",
+        "KAGI_CLI_PATH": "/path/to/kagi"
+      }
+    }
+  }
+}
+```
+
+When this option is enabled, Parkour calls `kagi search --format json` and
+`kagi summarize --subscriber` through the configured executable. If
+`PARKOUR_KAGI_USE_CLI` is unset, Parkour keeps using `KAGI_API_KEY` or
+`~/.config/parkour/kagi_api_key`.
+
 ### Semantic Scholar (opt-in)
 
 The SemanticScholar tool is disabled by default. Use of the Semantic Scholar API is governed by the [S2 API License Agreement](https://www.semanticscholar.org/product/api/license). To enable the tool, acknowledge the license terms by opting in:

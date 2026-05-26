@@ -1,5 +1,7 @@
 """Kagi search and summarization tools."""
 
+import asyncio
+import json
 import logging
 from pathlib import Path
 from typing import Any, Literal, Optional
@@ -19,7 +21,11 @@ logger = logging.getLogger(__name__)
 
 CONFIG_PATH = Path.home() / ".config" / "parkour" / "kagi_api_key"
 
-_NO_KEY_MSG = "Error: API key not found. Create ~/.config/parkour/kagi_api_key or set KAGI_API_KEY env var."
+_NO_KEY_MSG = (
+    "Error: Kagi credentials not found. Create ~/.config/parkour/kagi_api_key, "
+    "set KAGI_API_KEY, or set PARKOUR_KAGI_USE_CLI=1 with KAGI_CLI_PATH."
+)
+_NO_CLI_MSG = "Error: Kagi CLI not found. Set KAGI_CLI_PATH to the local kagi executable."
 
 _LOW_BALANCE_THRESHOLD = 1.00  # dollars
 
@@ -111,6 +117,91 @@ def get_client() -> Optional[KagiClient]:
     return KagiClient(api_key=api_key)
 
 
+def _use_kagi_cli() -> bool:
+    """Return whether Parkour should delegate Kagi calls to kagi-cli."""
+    from .common import clean_env
+    return clean_env("PARKOUR_KAGI_USE_CLI").lower() in {"1", "true", "yes", "on"}
+
+
+def _kagi_cli_path() -> str:
+    """Resolve the kagi-cli executable path configured for this MCP server."""
+    from .common import clean_env
+    return clean_env("KAGI_CLI_PATH") or clean_env("KAGI_CLI") or "kagi"
+
+
+async def _run_kagi_cli(*args: str) -> tuple[int, str, str]:
+    """Run kagi-cli and return its exit code, stdout, and stderr.
+
+    The MCP server already runs as an async process. Using an async subprocess
+    keeps slow network requests from blocking other Parkour tools.
+    """
+    cli_path = _kagi_cli_path()
+    try:
+        process = await asyncio.create_subprocess_exec(
+            cli_path,
+            *args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+    except FileNotFoundError:
+        return 127, "", _NO_CLI_MSG
+
+    stdout, stderr = await process.communicate()
+    return (
+        process.returncode,
+        stdout.decode("utf-8", errors="replace").strip(),
+        stderr.decode("utf-8", errors="replace").strip(),
+    )
+
+
+async def _search_with_cli(query: str, limit: int) -> Optional[dict[str, Any] | str]:
+    """Run Kagi search through kagi-cli when session-token auth is preferred."""
+    code, stdout, stderr = await _run_kagi_cli(
+        "search",
+        query,
+        "--limit",
+        str(limit),
+        "--format",
+        "json",
+    )
+    if code != 0:
+        return f"Error: kagi-cli search failed: {stderr or stdout or f'exit {code}'}"
+
+    try:
+        return json.loads(stdout)
+    except json.JSONDecodeError as e:
+        return f"Error: kagi-cli returned invalid JSON: {e}"
+
+
+async def _summarize_with_cli(
+    url: Optional[str],
+    text: Optional[str],
+    summary_type: Literal["summary", "takeaway"],
+) -> str:
+    """Run Kagi summarization through kagi-cli subscriber/session auth."""
+    cli_summary_type = "keypoints" if summary_type == "takeaway" else "summary"
+    args = [
+        "summarize",
+        "--subscriber",
+        "--summary-type",
+        cli_summary_type,
+        "--target-language",
+        "EN",
+    ]
+    if url:
+        args.extend(["--url", url])
+    else:
+        assert text is not None
+        args.extend(["--text", text])
+
+    code, stdout, stderr = await _run_kagi_cli(*args)
+    if code != 0:
+        return f"Error: kagi-cli summarize failed: {stderr or stdout or f'exit {code}'}"
+    if not stdout:
+        return "Error: No summary returned from kagi-cli."
+    return stdout
+
+
 async def search(query: str, limit: int = 5) -> str:
     """Search the web using Kagi's curated search index.
 
@@ -133,15 +224,21 @@ async def search(query: str, limit: int = 5) -> str:
         query: The search query (supports operators above)
         limit: Maximum number of results to return (default 5)
     """
-    client = get_client()
-    if not client:
-        return _NO_KEY_MSG
+    if _use_kagi_cli():
+        cli_response = await _search_with_cli(query, limit)
+        if isinstance(cli_response, str):
+            return cli_response
+        response = cli_response
+    else:
+        client = get_client()
+        if not client:
+            return _NO_KEY_MSG
 
-    try:
-        response = client.search(query, limit=limit)
-    except Exception as e:
-        logger.exception("Error during search")
-        return _handle_kagi_error(e)
+        try:
+            response = client.search(query, limit=limit)
+        except Exception as e:
+            logger.exception("Error during search")
+            return _handle_kagi_error(e)
 
     # Parse results
     results = []
@@ -232,10 +329,6 @@ async def summarize(
             "funds at https://kagi.com/settings?p=billing"
         )
 
-    client = get_client()
-    if not client:
-        return _NO_KEY_MSG
-
     if not url and not text:
         return "Error: Either 'url' or 'text' must be provided."
 
@@ -245,21 +338,31 @@ async def summarize(
     if summary_type not in ("summary", "takeaway"):
         return "Error: summary_type must be 'summary' or 'takeaway'."
 
-    try:
-        if url:
-            response = client.summarize(url=url, summary_type=summary_type, target_language="EN")
-        else:
-            assert text is not None  # guarded by earlier url/text validation
-            response = client.summarize(text=text, summary_type=summary_type, target_language="EN")
-    except Exception as e:
-        logger.exception("Error during summarization")
-        return _handle_kagi_error(e)
+    if _use_kagi_cli():
+        content = await _summarize_with_cli(url, text, summary_type)
+        if content.startswith("Error:"):
+            return content
+        response = {}
+    else:
+        client = get_client()
+        if not client:
+            return _NO_KEY_MSG
 
-    # Extract summary
-    content = response.get("data", {}).get("output", "")
+        try:
+            if url:
+                response = client.summarize(url=url, summary_type=summary_type, target_language="EN")
+            else:
+                assert text is not None  # guarded by earlier url/text validation
+                response = client.summarize(text=text, summary_type=summary_type, target_language="EN")
+        except Exception as e:
+            logger.exception("Error during summarization")
+            return _handle_kagi_error(e)
 
-    if not content:
-        return "Error: No summary returned from API."
+        # Extract summary
+        content = response.get("data", {}).get("output", "")
+
+        if not content:
+            return "Error: No summary returned from API."
 
     fm_entries = FMEntries({
         "source": url or "text input",
