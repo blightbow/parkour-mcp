@@ -39,6 +39,21 @@ _NO_KEY_MSG = (
 _V1_BASE = "https://kagi.com/api/v1"
 _V1_TIMEOUT = 30.0
 
+# Workflow → primary result key in the v1 response's data object.  Confirmed
+# against the live endpoint: every workflow uses the singular form (video,
+# not videos), and the workflow name in the request body uses the plural form
+# (videos, not video).  data may carry additional secondary categories per
+# workflow (video_creator, interesting_news, podcast_creator, infobox,
+# related_search) — only related_search is surfaced here.
+_WORKFLOW_RESULT_KEY: dict[str, str] = {
+    "search": "search",
+    "videos": "video",
+    "news": "news",
+    "images": "image",
+    "podcasts": "podcast",
+}
+_VALID_WORKFLOWS = frozenset(_WORKFLOW_RESULT_KEY)
+
 
 # ---------------------------------------------------------------------------
 # v0 dormant island (powers summarize until /summarize lands on v1)
@@ -207,7 +222,35 @@ def get_api_key() -> str:
 # v1 search
 # ---------------------------------------------------------------------------
 
-async def search(query: str, limit: int = 5) -> str:
+def _format_result_line(item: dict) -> str:
+    """Format a single v1 result item as ``[title](url) - snippet (time)``.
+
+    Snippet and time are optional and omitted cleanly when absent (image
+    workflow items lack snippet, infobox items lack time).
+    """
+    title = item.get("title", "Untitled")
+    item_url = item.get("url", "")
+    snippet = item.get("snippet", "")
+    published = item.get("time")
+    line = f"[{title}]({item_url})"
+    if snippet:
+        line += f" - {snippet}"
+    if published:
+        line += f" ({published})"
+    return line
+
+
+async def search(
+    query: str,
+    limit: int = 5,
+    *,
+    workflow: Optional[str] = None,
+    lens_id: Optional[str] = None,
+    page: Optional[int] = None,
+    region: Optional[str] = None,
+    after: Optional[str] = None,
+    before: Optional[str] = None,
+) -> str:
     """Search the web using Kagi's curated search index.
 
     Use this as an alternative to the built-in WebSearch tool when WebSearch
@@ -227,13 +270,55 @@ async def search(query: str, limit: int = 5) -> str:
 
     Args:
         query: The search query (supports operators above)
-        limit: Maximum number of results to return (default 5)
+        limit: Maximum number of results to return (default 5; max 1024)
+        workflow: Result category to return. One of ``search`` (default),
+            ``images``, ``videos``, ``news``, ``podcasts``. The default
+            web-search workflow surfaces related-query suggestions; other
+            workflows surface their own primary result category only.
+        lens_id: Apply a Kagi Lens to the search. Accepts a built-in lens
+            identifier or a shareable lens ID from
+            ``https://kagi.com/settings/lenses``. The lens scopes the search
+            (site restrictions, keyword filters, region) before user filters
+            apply.
+        page: Page number for paginated results (1..10).
+        region: ISO 3166-1 alpha-2 country code to localize results
+            (e.g. ``US``, ``DE``, ``JP``). See
+            https://help.kagi.com/api/regions for the supported set.
+        after: Return only results published or updated on or after this
+            ISO date (``YYYY-MM-DD``).
+        before: Return only results published or updated on or before this
+            ISO date (``YYYY-MM-DD``).
     """
     api_key = get_api_key()
     if not api_key:
         return _NO_KEY_MSG
 
+    if workflow is not None and workflow not in _VALID_WORKFLOWS:
+        return (
+            f"Error: Invalid workflow {workflow!r}. "
+            f"Must be one of: {', '.join(sorted(_VALID_WORKFLOWS))}."
+        )
+
+    if page is not None and not 1 <= page <= 10:
+        return f"Error: page must be between 1 and 10 (got {page})."
+
     body: dict[str, Any] = {"query": query, "limit": limit}
+    if workflow is not None:
+        body["workflow"] = workflow
+    if lens_id is not None:
+        body["lens_id"] = lens_id
+    if page is not None:
+        body["page"] = page
+
+    filters: dict[str, Any] = {}
+    if region:
+        filters["region"] = region
+    if after:
+        filters["after"] = after
+    if before:
+        filters["before"] = before
+    if filters:
+        body["filters"] = filters
 
     headers = {
         "User-Agent": _API_USER_AGENT,
@@ -263,25 +348,19 @@ async def search(query: str, limit: int = 5) -> str:
     if not isinstance(data, dict):
         return "Error: Unexpected response format from Kagi v1 search."
 
-    # v1 returns category-keyed arrays under data, not the v0 t-coded
-    # flat list. Format the primary search results and a flat list of
-    # related-query suggestions; other categories (video, infobox) are
-    # ignored here since this tool is shaped for the search workflow.
-    search_items = data.get("search", [])
+    # v1 returns category-keyed arrays under data, not the v0 t-coded flat
+    # list. The primary category depends on workflow; related_search is the
+    # search-workflow companion (other workflows have their own secondary
+    # arrays like video_creator/interesting_news that we skip here).
+    primary_key = _WORKFLOW_RESULT_KEY.get(workflow or "search", "search")
+    primary_items = data.get(primary_key, [])
     related_items = data.get("related_search", [])
 
-    results: list[str] = []
-    for item in search_items:
-        if not isinstance(item, dict):
-            continue
-        title = item.get("title", "Untitled")
-        item_url = item.get("url", "")
-        snippet = item.get("snippet", "")
-        published = item.get("time")
-        if published:
-            results.append(f"[{title}]({item_url}) - {snippet} ({published})")
-        else:
-            results.append(f"[{title}]({item_url}) - {snippet}")
+    results: list[str] = [
+        _format_result_line(item)
+        for item in primary_items
+        if isinstance(item, dict)
+    ]
 
     related_titles = [
         r.get("title", "")
@@ -304,7 +383,7 @@ async def search(query: str, limit: int = 5) -> str:
     content = "\n".join(output_parts)
 
     fm_entries = FMEntries({
-        "source": f"kagi search: {query}",
+        "source": f"kagi {workflow or 'search'}: {query}",
         "trust": _TRUST_ADVISORY,
     })
 

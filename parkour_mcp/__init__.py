@@ -213,6 +213,10 @@ TOOL_DESCRIPTIONS = {
 
 {search_positioning}
 
+Switch result categories via workflow= (search / images / videos / news /
+podcasts). Scope with lens_id=, paginate with page=, filter with region= /
+after= / before=.
+
 Supports search operators in the query string:
 - site:example.com — restrict to a domain
 - filetype:pdf — restrict to a file type

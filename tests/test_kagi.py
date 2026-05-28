@@ -362,3 +362,155 @@ class TestSearchV1:
         monkeypatch.setattr(kagi_mod, "CONFIG_PATH", tmp_path / "missing")
         result = await search("test")
         assert "API key not found" in result
+
+
+# --- v1 search args (workflow / lens_id / page / region / after / before) ---
+
+class TestSearchV1Args:
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_workflow_videos_renders_data_video(self, _kagi_key):
+        respx.post("https://kagi.com/api/v1/search").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "meta": {"trace": "t", "ms": 1, "node": "x"},
+                    "data": {
+                        "video": [{
+                            "url": "https://www.youtube.com/watch?v=abc",
+                            "title": "Climate Change Explained",
+                            "snippet": "A short overview.",
+                            "time": "2024-03-15T10:00:00Z",
+                            "props": {},
+                        }],
+                    },
+                },
+            )
+        )
+
+        result = await search("climate change", workflow="videos")
+
+        assert "Climate Change Explained" in result
+        assert "https://www.youtube.com/watch?v=abc" in result
+        assert "kagi videos:" in result  # source label reflects workflow
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_workflow_images_handles_missing_snippet(self, _kagi_key):
+        # Image workflow items have no snippet field; formatter must omit
+        # the dash-space prefix instead of emitting "[title](url) -".
+        respx.post("https://kagi.com/api/v1/search").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "meta": {"trace": "t", "ms": 1, "node": "x"},
+                    "data": {
+                        "image": [{
+                            "url": "https://example.com/photo.jpg",
+                            "title": "Photo Title",
+                            "image": {"url": "https://thumb.example.com/x.jpg"},
+                            "props": {},
+                        }],
+                    },
+                },
+            )
+        )
+
+        result = await search("photo", workflow="images")
+
+        assert "[Photo Title](https://example.com/photo.jpg)" in result
+        # Specifically: no trailing " - " on the line for the image entry.
+        assert "Photo Title](https://example.com/photo.jpg) -" not in result
+
+    @pytest.mark.asyncio
+    async def test_invalid_workflow_short_circuits(self, _kagi_key):
+        result = await search("test", workflow="audiobooks")
+        assert "Invalid workflow" in result
+        assert "audiobooks" in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_lens_id_passes_through_to_body(self, _kagi_key):
+        route = respx.post("https://kagi.com/api/v1/search").mock(
+            return_value=httpx.Response(
+                200,
+                json={"meta": {"trace": "t", "ms": 1, "node": "x"}, "data": {"search": []}},
+            )
+        )
+
+        await search("research", lens_id="academic-papers")
+
+        sent = json.loads(route.calls.last.request.content)
+        assert sent["lens_id"] == "academic-papers"
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_page_passes_through_to_body(self, _kagi_key):
+        route = respx.post("https://kagi.com/api/v1/search").mock(
+            return_value=httpx.Response(
+                200,
+                json={"meta": {"trace": "t", "ms": 1, "node": "x"}, "data": {"search": []}},
+            )
+        )
+
+        await search("paginated", page=3)
+
+        sent = json.loads(route.calls.last.request.content)
+        assert sent["page"] == 3
+
+    @pytest.mark.asyncio
+    async def test_page_out_of_range_short_circuits(self, _kagi_key):
+        result = await search("test", page=11)
+        assert "page must be between 1 and 10" in result
+
+        result_zero = await search("test", page=0)
+        assert "page must be between 1 and 10" in result_zero
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_filters_assembled_from_region_after_before(self, _kagi_key):
+        route = respx.post("https://kagi.com/api/v1/search").mock(
+            return_value=httpx.Response(
+                200,
+                json={"meta": {"trace": "t", "ms": 1, "node": "x"}, "data": {"search": []}},
+            )
+        )
+
+        await search("brexit", region="GB", after="2020-01-01", before="2020-12-31")
+
+        sent = json.loads(route.calls.last.request.content)
+        assert sent["filters"] == {
+            "region": "GB",
+            "after": "2020-01-01",
+            "before": "2020-12-31",
+        }
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_no_filters_omits_filters_field(self, _kagi_key):
+        route = respx.post("https://kagi.com/api/v1/search").mock(
+            return_value=httpx.Response(
+                200,
+                json={"meta": {"trace": "t", "ms": 1, "node": "x"}, "data": {"search": []}},
+            )
+        )
+
+        await search("plain query")
+
+        sent = json.loads(route.calls.last.request.content)
+        assert "filters" not in sent
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_partial_filters_only_includes_set_fields(self, _kagi_key):
+        route = respx.post("https://kagi.com/api/v1/search").mock(
+            return_value=httpx.Response(
+                200,
+                json={"meta": {"trace": "t", "ms": 1, "node": "x"}, "data": {"search": []}},
+            )
+        )
+
+        await search("recent", after="2025-01-01")
+
+        sent = json.loads(route.calls.last.request.content)
+        assert sent["filters"] == {"after": "2025-01-01"}
