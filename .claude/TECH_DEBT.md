@@ -60,6 +60,15 @@ Acknowledged warnings and deferred fixes. Each entry includes the source, the is
 - **Why deferred**: `segment-any-text/wtpsplit`'s SaT model is the field's converged answer for sentence segmentation of unpunctuated text (~95ms per 1000 sentences on CPU, ONNX-deployable). But it adds an ONNX runtime dependency (~50MB model download) that we deferred until empirical evidence shows the pause-only branch actually produces visibly worse retrieval on auto-captions.
 - **How to evaluate**: Compare retrieval quality on a corpus of auto-captioned videos: BM25 search recall using time-window coalescing vs. the same content coalesced via SaT-derived sentence boundaries. If the difference is meaningful, wire SaT in as the unpunctuated branch's coalescer.
 
+## `fetch_direct.py` — deferred enhancements
+
+### Classifier rejects `text/markdown` and `application/yaml`
+
+- **Location**: `parkour_mcp/common.py#_classify_content_type` (whitelist), with the rejection emitted in `parkour_mcp/fetch_direct.py#web_fetch_direct` when the classifier returns `None`.
+- **Issue**: The classifier whitelists `text/html`, `application/json`, `application/xml`, and `text/plain`. Markdown (`text/markdown`) and YAML (`application/yaml`, `text/yaml`) return `None`, producing `Error: Unsupported content type '...'`. Both are machine-readable text formats, and the existing non-HTML branch in `web_fetch_direct` already renders raw text with frontmatter, so the data path could carry them trivially. Concrete affected target: Kagi's v1 API spec is served as `text/markdown` (`.md` flat pages) and `application/yaml` (bundle download); see the `kagi.py` bullet in `CLAUDE.md` for URLs. Sessions that need the source-of-truth Kagi spec currently have to shell out to `curl`.
+- **Why deferred**: Out of scope for the documentation-first turn that surfaced it. The fix is small (two added branches in `_classify_content_type` returning new classifier labels), and `_SOURCE_EXT_MAP` in `common.py` already maps `.md` to `markdown` and `.yaml`/`.yml` to `yaml`, so the syntax-tag plumbing is in place.
+- **Mitigation**: Fetch via `curl` until the classifier is extended.
+
 ## Structural tradeoffs
 
 ### `<header>` stripped from all pages — loses real h1s on spec docs

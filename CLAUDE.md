@@ -45,7 +45,7 @@ cog.outl(f"- **`__init__.py`** — MCP server entry point. Registers {tool_count
 - **`shelf.py`** — Research shelf implementation. All public methods guarded by `asyncio.Lock`.
 
 API integration modules, each self-contained:
-- **`kagi.py`** — Search and summarize via kagiapi. Balance tracking with low-credit lockout.
+- **`kagi.py`** — Search and summarize via kagiapi. Balance tracking with low-credit lockout. v1 API spec (public preview) is available as flat markdown for non-JS fetching under `https://kagi.com/api/docs/`: overview `openapi.md`, search `openapi/search.md` and operation `openapi/search/search.md`, extract `openapi/extract.md` and operation `openapi/extract/extractcontent.md`, full bundles `_bundle/openapi.yaml?download` and `_bundle/openapi.json?download`. Fetch via `curl`; `web_fetch_direct` currently rejects `text/markdown` and `application/yaml` content types.
 - **`fetch_direct.py`** — The `web_fetch_direct` tool (WebFetchIncisive). Static HTTP fetching with content-type detection. Routes URLs through the fast-path chain; falls back to static HTTP, or to the headless-browser renderer when `requires_js=True` / `actions` is set.
 - **`fetch_js.py`** — `_render_js`, the headless-browser render path for `web_fetch_direct`'s `requires_js` mode. Not a registered tool. Playwright automation with live-app detection (Gradio, Streamlit) and ReAct-style `actions` chains; `web_fetch_direct` owns the fast paths and SSRF check before dispatching here.
 - **`arxiv.py`** — arXiv Atom API. Field-prefix query syntax. 3s rate limit.
