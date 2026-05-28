@@ -1,14 +1,19 @@
-"""Tests for parkour_mcp.kagi module — balance checking and lockout logic."""
+"""Tests for parkour_mcp.kagi — v1 search, v0 summarize island, error parsers."""
 
+import json
+from unittest.mock import patch, MagicMock
+
+import httpx
 import pytest
 import requests
-from unittest.mock import patch, MagicMock
+import respx
 
 import parkour_mcp.kagi as kagi_mod
 from parkour_mcp.kagi import (
-    _extract_balance,
     _check_balance,
-    _handle_kagi_error,
+    _extract_balance,
+    _handle_v0_error,
+    _handle_v1_error,
     search,
     summarize,
 )
@@ -26,7 +31,24 @@ def _make_http_error(status_code: int, body: bytes = b"") -> requests.HTTPError:
     return err
 
 
-# --- _extract_balance ---
+def _make_v1_http_status_error(status_code: int, body: dict | None = None) -> httpx.HTTPStatusError:
+    """Build an httpx.HTTPStatusError matching the v1 envelope shape."""
+    request = httpx.Request("POST", "https://kagi.com/api/v1/search")
+    content = json.dumps(body).encode() if body is not None else b""
+    response = httpx.Response(
+        status_code,
+        content=content,
+        request=request,
+        headers={"content-type": "application/json"} if body is not None else {},
+    )
+    return httpx.HTTPStatusError(
+        f"{status_code} for {request.url}",
+        request=request,
+        response=response,
+    )
+
+
+# --- _extract_balance (v0) ---
 
 class TestExtractBalance:
     def test_extracts_float_balance(self):
@@ -48,7 +70,7 @@ class TestExtractBalance:
         assert _extract_balance({"meta": {"api_balance": "not_a_number"}}) is None
 
 
-# --- _check_balance and lockout ---
+# --- _check_balance and lockout (v0) ---
 
 class TestCheckBalance:
     def setup_method(self):
@@ -95,9 +117,13 @@ class TestCheckBalance:
         assert kagi_mod._summarize_locked is False
 
 
-# --- Lockout integration ---
+# --- Lockout integration (v0 summarize) ---
 
 class TestSummarizeLockout:
+    """v1 search never touches the balance machinery (v1 dropped api_balance),
+    so only the summarize-side lockout behaviors remain testable here.
+    """
+
     def setup_method(self):
         kagi_mod._summarize_locked = False
 
@@ -107,38 +133,6 @@ class TestSummarizeLockout:
         result = await summarize(url="https://example.com")
         assert "temporarily disabled" in result
         assert "low API balance" in result
-
-    @pytest.mark.asyncio
-    async def test_search_clears_lockout_on_healthy_balance(self):
-        kagi_mod._summarize_locked = True
-
-        mock_client = MagicMock()
-        mock_client.search.return_value = {
-            "meta": {"api_balance": 10.00},
-            "data": [],
-        }
-
-        with patch.object(kagi_mod, "get_client", return_value=mock_client):
-            result = await search("test query")
-
-        assert kagi_mod._summarize_locked is False
-        assert "balance low" not in result.lower()
-
-    @pytest.mark.asyncio
-    async def test_search_warns_and_locks_on_low_balance(self):
-        mock_client = MagicMock()
-        mock_client.search.return_value = {
-            "meta": {"api_balance": 0.42},
-            "data": [{"t": 0, "title": "Result", "url": "https://example.com", "snippet": "A result"}],
-        }
-
-        with patch.object(kagi_mod, "get_client", return_value=mock_client):
-            result = await search("test query")
-
-        assert kagi_mod._summarize_locked is True
-        assert "balance_warning:" in result
-        assert "$0.42" in result
-        assert "Result" in result  # actual results still returned
 
     @pytest.mark.asyncio
     async def test_summarize_warns_on_low_balance(self):
@@ -157,34 +151,214 @@ class TestSummarizeLockout:
         assert kagi_mod._summarize_locked is True
 
 
-# --- _handle_kagi_error ---
+# --- _handle_v0_error (kagiapi-shaped exceptions) ---
 
-
-class TestHandleKagiError:
+class TestHandleV0Error:
     def test_recognizes_insufficient_credit_in_400_body(self):
-        # Kagi returns 400 (not 402) for wallet exhaustion; the structured
+        # Kagi v0 returns 400 (not 402) for wallet exhaustion; the structured
         # error code lives in the response body. requests.Response.__bool__
         # returns False for 4xx, so the body branch must guard with `is not None`.
         body = (
             b'{"meta":{"api_balance":0.0},"data":null,'
             b'"error":[{"code":101,"msg":"Insufficient credit to perform this request."}]}'
         )
-        result = _handle_kagi_error(_make_http_error(400, body))
+        result = _handle_v0_error(_make_http_error(400, body))
         assert "Insufficient API credits" in result
 
     def test_recognizes_401_via_status_code(self):
-        result = _handle_kagi_error(_make_http_error(401))
+        result = _handle_v0_error(_make_http_error(401))
         assert "Invalid API key" in result
 
     def test_recognizes_402_via_status_code(self):
-        result = _handle_kagi_error(_make_http_error(402))
+        result = _handle_v0_error(_make_http_error(402))
         assert "Insufficient API credits" in result
 
     def test_falls_through_on_unrecognized_status(self):
-        result = _handle_kagi_error(_make_http_error(503))
+        result = _handle_v0_error(_make_http_error(503))
         assert "503" in result
 
     def test_handles_exception_without_response(self):
         # Network errors (timeouts, DNS failures) raise without a response object.
-        result = _handle_kagi_error(requests.ConnectionError("connection refused"))
+        result = _handle_v0_error(requests.ConnectionError("connection refused"))
         assert "connection refused" in result
+
+
+# --- _handle_v1_error (httpx-shaped exceptions) ---
+
+class TestHandleV1Error:
+    def test_unauthorized_via_envelope_code(self):
+        body = {
+            "meta": {"trace": "abc", "ms": 2, "node": "us-east4"},
+            "data": None,
+            "errors": [{
+                "code": "general.unauthorized",
+                "url": "https://kagi.com/api#todo",
+                "message": "Unauthorized",
+            }],
+        }
+        result = _handle_v1_error(_make_v1_http_status_error(401, body))
+        assert "Invalid API key" in result
+
+    def test_insufficient_credit_via_envelope_code(self):
+        body = {
+            "meta": {"trace": "abc", "ms": 1, "node": "us-east4"},
+            "data": None,
+            "errors": [{
+                "code": "billing.insufficient_credit",
+                "url": "https://kagi.com/api#todo",
+                "message": "Insufficient credit",
+            }],
+        }
+        result = _handle_v1_error(_make_v1_http_status_error(402, body))
+        assert "Insufficient API credits" in result
+
+    def test_other_envelope_message_passes_through(self):
+        body = {
+            "meta": {"trace": "abc", "ms": 1, "node": "us-east4"},
+            "data": None,
+            "errors": [{
+                "code": "search.invalid_workflow",
+                "url": "https://kagi.com/api#todo",
+                "message": "Unknown workflow 'foo'",
+            }],
+        }
+        result = _handle_v1_error(_make_v1_http_status_error(400, body))
+        assert "Unknown workflow" in result
+        assert "search.invalid_workflow" in result
+
+    def test_fallback_to_status_code_without_envelope(self):
+        result = _handle_v1_error(_make_v1_http_status_error(503))
+        assert "503" in result
+        assert "Kagi v1" in result
+
+    def test_unauthorized_via_bare_401(self):
+        # 401 with no parseable body still maps to the invalid-key message.
+        result = _handle_v1_error(_make_v1_http_status_error(401))
+        assert "Invalid API key" in result
+
+    def test_timeout_message(self):
+        result = _handle_v1_error(httpx.ReadTimeout("read timeout"))
+        assert "timed out" in result
+
+    def test_request_error_names_class(self):
+        result = _handle_v1_error(httpx.ConnectError("connection refused"))
+        assert "ConnectError" in result
+
+
+# --- v1 search end-to-end (respx mocks) ---
+
+@pytest.fixture
+def _kagi_key(monkeypatch):
+    """Provide a stable API key without touching the real config file."""
+    monkeypatch.setenv("KAGI_API_KEY", "test-key")
+    yield
+
+
+class TestSearchV1:
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_formats_search_and_related_results(self, _kagi_key):
+        respx.post("https://kagi.com/api/v1/search").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "meta": {"trace": "t1", "ms": 100, "node": "us-east4"},
+                    "data": {
+                        "search": [
+                            {
+                                "url": "https://en.wikipedia.org/wiki/Steve_Jobs",
+                                "title": "Steve Jobs - Wikipedia",
+                                "snippet": "Co-founder of Apple Inc.",
+                                "time": "2012-02-23T07:00:59Z",
+                                "props": {"language": "en"},
+                            },
+                            {
+                                "url": "https://example.com/jobs",
+                                "title": "Jobs profile",
+                                "snippet": "A biography.",
+                                "props": {},
+                            },
+                        ],
+                        "related_search": [
+                            {"url": "/search?q=apple", "title": "apple", "snippet": ""},
+                            {"url": "/search?q=ipod", "title": "ipod", "snippet": ""},
+                        ],
+                    },
+                },
+            )
+        )
+
+        result = await search("steve jobs", limit=2)
+
+        assert "Steve Jobs - Wikipedia" in result
+        assert "https://en.wikipedia.org/wiki/Steve_Jobs" in result
+        assert "Co-founder of Apple Inc." in result
+        assert "2012-02-23T07:00:59Z" in result
+        # Result without a `time` should not emit an empty parenthesized suffix.
+        assert "Jobs profile" in result
+        assert "A biography." in result
+        assert "Related searches: apple, ipod" in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_no_results_emits_widen_query_hint(self, _kagi_key):
+        respx.post("https://kagi.com/api/v1/search").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "meta": {"trace": "t2", "ms": 50, "node": "us-east4"},
+                    "data": {"search": []},
+                },
+            )
+        )
+
+        result = await search("unlikely query", limit=5)
+
+        assert "No results found." in result
+        assert "Widen the query" in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_sends_bearer_auth_and_post_body(self, _kagi_key):
+        route = respx.post("https://kagi.com/api/v1/search").mock(
+            return_value=httpx.Response(
+                200,
+                json={"meta": {"trace": "t3", "ms": 1, "node": "x"}, "data": {"search": []}},
+            )
+        )
+
+        await search("test", limit=3)
+
+        assert route.called
+        sent = route.calls.last.request
+        assert sent.headers["authorization"] == "Bearer test-key"
+        body = json.loads(sent.content)
+        assert body == {"query": "test", "limit": 3}
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_401_routes_through_v1_error_handler(self, _kagi_key):
+        respx.post("https://kagi.com/api/v1/search").mock(
+            return_value=httpx.Response(
+                401,
+                json={
+                    "meta": {"trace": "t4", "ms": 1, "node": "x"},
+                    "data": None,
+                    "errors": [{
+                        "code": "general.unauthorized",
+                        "url": "https://kagi.com/api#todo",
+                        "message": "Unauthorized",
+                    }],
+                },
+            )
+        )
+
+        result = await search("test")
+        assert "Invalid API key" in result
+
+    @pytest.mark.asyncio
+    async def test_missing_key_short_circuits(self, monkeypatch, tmp_path):
+        monkeypatch.delenv("KAGI_API_KEY", raising=False)
+        monkeypatch.setattr(kagi_mod, "CONFIG_PATH", tmp_path / "missing")
+        result = await search("test")
+        assert "API key not found" in result

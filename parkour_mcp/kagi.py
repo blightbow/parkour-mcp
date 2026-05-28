@@ -1,12 +1,20 @@
-"""Kagi search and summarization tools."""
+"""Kagi search and summarization tools.
+
+Search runs against the v1 public-preview API via httpx. Summarize remains
+on the v0 surface via the legacy kagiapi client until the /summarize
+endpoint lands on v1; the v0 helpers (`get_client`, `_extract_balance`,
+`_check_balance`, `_summarize_locked`, `_handle_v0_error`) are dormant
+load-bearing for that second tool and retire when the migration completes.
+"""
 
 import logging
 from pathlib import Path
 from typing import Any, Literal, Optional
 
+import httpx
 from kagiapi import KagiClient
 
-from .common import tool_name
+from .common import _API_USER_AGENT, clean_env, tool_name
 from .markdown import (
     FMEntries,
     _append_frontmatter_entry,
@@ -19,17 +27,33 @@ logger = logging.getLogger(__name__)
 
 CONFIG_PATH = Path.home() / ".config" / "parkour" / "kagi_api_key"
 
-_NO_KEY_MSG = "Error: API key not found. Create ~/.config/parkour/kagi_api_key or set KAGI_API_KEY env var."
+_NO_KEY_MSG = (
+    "Error: API key not found. "
+    "Create ~/.config/parkour/kagi_api_key or set KAGI_API_KEY env var."
+)
+
+# ---------------------------------------------------------------------------
+# v1 public-preview API
+# ---------------------------------------------------------------------------
+
+_V1_BASE = "https://kagi.com/api/v1"
+_V1_TIMEOUT = 30.0
+
+
+# ---------------------------------------------------------------------------
+# v0 dormant island (powers summarize until /summarize lands on v1)
+# ---------------------------------------------------------------------------
 
 _LOW_BALANCE_THRESHOLD = 1.00  # dollars
 
-# In-memory state: set True when any Kagi response shows balance < threshold.
-# Locks out summarize (expensive) until a non-summarize call sees balance recovered.
+# Session lockout for summarize. Flipped True by v0 responses with low
+# balance; cleared by v0 responses with healthy balance on non-summarize
+# calls. v1 search does not touch this — v1 dropped meta.api_balance.
 _summarize_locked: bool = False
 
 
 def _extract_balance(response: dict) -> Optional[float]:
-    """Extract api_balance from a Kagi API response, or None if absent."""
+    """Extract api_balance from a v0 Kagi response."""
     meta = response.get("meta", {})
     balance = meta.get("api_balance")
     if balance is not None:
@@ -41,7 +65,7 @@ def _extract_balance(response: dict) -> Optional[float]:
 
 
 def _check_balance(response: Any, is_summarize: bool = False) -> Optional[str]:
-    """Check balance from response, update lockout state, return warning or None.
+    """Check balance on a v0 response, update lockout state, return warning or None.
 
     Non-summarize calls clear the lockout if balance has recovered.
     """
@@ -57,16 +81,18 @@ def _check_balance(response: Any, is_summarize: bool = False) -> Optional[str]:
             f"Add funds at https://kagi.com/settings?p=billing"
         )
     else:
-        # Balance is healthy — clear lockout (only non-summarize calls reach here
-        # when locked, since summarize is blocked before the API call)
         if not is_summarize:
             _summarize_locked = False
         return None
 
 
-def _handle_kagi_error(e: Exception) -> str:
-    """Format a Kagi API exception into a user-facing error string."""
-    # requests.Response.__bool__ returns False for 4xx/5xx — compare with `is not None`.
+def _handle_v0_error(e: Exception) -> str:
+    """Format a kagiapi (v0) exception into a user-facing error string.
+
+    v0 error envelope: ``{"error": [{"code": 101, "msg": "..."}]}``.
+    requests.Response.__bool__ returns False for 4xx/5xx — compare with
+    ``is not None``.
+    """
     response = getattr(e, "response", None)
     status_code = getattr(response, "status_code", None)
 
@@ -91,25 +117,95 @@ def _handle_kagi_error(e: Exception) -> str:
     return f"Error: {e}"
 
 
-def get_api_key() -> str:
-    """Load API key from config file or environment."""
-    from .common import clean_env
-    # Environment variable takes precedence
-    if key := clean_env("KAGI_API_KEY"):
-        return key
-    # Fall back to config file
-    if CONFIG_PATH.exists():
-        return CONFIG_PATH.read_text().strip()
-    return ""
-
-
 def get_client() -> Optional[KagiClient]:
-    """Create a Kagi client with the configured API key."""
+    """Create a Kagi v0 client. Used only by summarize until /summarize migrates."""
     api_key = get_api_key()
     if not api_key:
         return None
     return KagiClient(api_key=api_key)
 
+
+# ---------------------------------------------------------------------------
+# v1 error parser
+# ---------------------------------------------------------------------------
+
+def _handle_v1_error(e: Exception) -> str:
+    """Format an httpx (v1) exception into a user-facing error string.
+
+    v1 error envelope::
+
+        {"errors": [{"code": "general.unauthorized",
+                     "url": "https://kagi.com/api#todo",
+                     "message": "Unauthorized"}]}
+
+    Codes are dotted strings; the structural shape applies on all non-2xx
+    responses observed so far.
+    """
+    if isinstance(e, httpx.TimeoutException):
+        return "Error: Kagi API request timed out."
+
+    if isinstance(e, httpx.HTTPStatusError):
+        status_code = e.response.status_code
+        try:
+            body = e.response.json()
+        except ValueError:
+            body = None
+
+        if isinstance(body, dict):
+            errors = body.get("errors") or []
+            if isinstance(errors, list) and errors:
+                err = errors[0] if isinstance(errors[0], dict) else {}
+                code = err.get("code") or ""
+                message = err.get("message") or ""
+                if code == "general.unauthorized":
+                    return (
+                        "Error: Invalid API key. "
+                        "Check ~/.config/parkour/kagi_api_key or KAGI_API_KEY env var."
+                    )
+                if "insufficient_credit" in code or "billing" in code:
+                    return (
+                        "Error: Insufficient API credits. "
+                        "Add funds at https://kagi.com/settings?p=billing_api"
+                    )
+                if message and code:
+                    return f"Error: Kagi v1: {message} ({code})"
+                if message:
+                    return f"Error: Kagi v1: {message}"
+
+        if status_code == 401:
+            return (
+                "Error: Invalid API key. "
+                "Check ~/.config/parkour/kagi_api_key or KAGI_API_KEY env var."
+            )
+        if status_code == 402:
+            return (
+                "Error: Insufficient API credits. "
+                "Add funds at https://kagi.com/settings?p=billing_api"
+            )
+        return f"Error: Kagi v1 returned HTTP {status_code}."
+
+    if isinstance(e, httpx.RequestError):
+        return f"Error: Kagi API request failed: {type(e).__name__}"
+
+    return f"Error: {e}"
+
+
+# ---------------------------------------------------------------------------
+# Key handling (shared)
+# ---------------------------------------------------------------------------
+
+def get_api_key() -> str:
+    """Load API key from config file or environment."""
+    if key := clean_env("KAGI_API_KEY"):
+        return key
+    if CONFIG_PATH.exists():
+        return CONFIG_PATH.read_text().strip()
+    return ""
+
+
+# ---------------------------------------------------------------------------
+# v1 search
+# ---------------------------------------------------------------------------
 
 async def search(query: str, limit: int = 5) -> str:
     """Search the web using Kagi's curated search index.
@@ -133,41 +229,67 @@ async def search(query: str, limit: int = 5) -> str:
         query: The search query (supports operators above)
         limit: Maximum number of results to return (default 5)
     """
-    client = get_client()
-    if not client:
+    api_key = get_api_key()
+    if not api_key:
         return _NO_KEY_MSG
 
+    body: dict[str, Any] = {"query": query, "limit": limit}
+
+    headers = {
+        "User-Agent": _API_USER_AGENT,
+        "Accept": "application/json",
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+
     try:
-        response = client.search(query, limit=limit)
+        async with httpx.AsyncClient(timeout=_V1_TIMEOUT) as client:
+            resp = await client.post(
+                f"{_V1_BASE}/search",
+                headers=headers,
+                json=body,
+            )
+            resp.raise_for_status()
     except Exception as e:
-        logger.exception("Error during search")
-        return _handle_kagi_error(e)
+        logger.exception("Error during v1 search")
+        return _handle_v1_error(e)
 
-    # Parse results
-    results = []
-    related_searches = []
+    try:
+        response = resp.json()
+    except ValueError:
+        return "Error: Unexpected response format from Kagi v1 search."
 
-    for item in response.get("data", []):
-        item_type = item.get("t")
+    data = response.get("data") or {}
+    if not isinstance(data, dict):
+        return "Error: Unexpected response format from Kagi v1 search."
 
-        if item_type == 0:  # Search result
-            title = item.get("title", "Untitled")
-            item_url = item.get("url", "")
-            snippet = item.get("snippet", "")
-            published = item.get("published")
+    # v1 returns category-keyed arrays under data, not the v0 t-coded
+    # flat list. Format the primary search results and a flat list of
+    # related-query suggestions; other categories (video, infobox) are
+    # ignored here since this tool is shaped for the search workflow.
+    search_items = data.get("search", [])
+    related_items = data.get("related_search", [])
 
-            # Format as markdown
-            if published:
-                results.append(f"[{title}]({item_url}) - {snippet} ({published})")
-            else:
-                results.append(f"[{title}]({item_url}) - {snippet}")
+    results: list[str] = []
+    for item in search_items:
+        if not isinstance(item, dict):
+            continue
+        title = item.get("title", "Untitled")
+        item_url = item.get("url", "")
+        snippet = item.get("snippet", "")
+        published = item.get("time")
+        if published:
+            results.append(f"[{title}]({item_url}) - {snippet} ({published})")
+        else:
+            results.append(f"[{title}]({item_url}) - {snippet}")
 
-        elif item_type == 1:  # Related searches
-            related_searches = item.get("list", [])
+    related_titles = [
+        r.get("title", "")
+        for r in related_items
+        if isinstance(r, dict) and r.get("title")
+    ]
 
-    # Build output
-    output_parts = []
-
+    output_parts: list[str] = []
     if results:
         output_parts.append("Results:")
         for i, result in enumerate(results, 1):
@@ -175,9 +297,9 @@ async def search(query: str, limit: int = 5) -> str:
     else:
         output_parts.append("No results found.")
 
-    if related_searches:
+    if related_titles:
         output_parts.append("")
-        output_parts.append(f"Related searches: {', '.join(related_searches)}")
+        output_parts.append(f"Related searches: {', '.join(related_titles)}")
 
     content = "\n".join(output_parts)
 
@@ -185,17 +307,12 @@ async def search(query: str, limit: int = 5) -> str:
         "source": f"kagi search: {query}",
         "trust": _TRUST_ADVISORY,
     })
-    balance_warning = _check_balance(response, is_summarize=False)
-    if balance_warning:
-        fm_entries["balance_warning"] = balance_warning
 
     if results:
         _append_frontmatter_entry(
             fm_entries, "hint",
             f"Drill into a result URL with {tool_name('web_fetch_sections')} "
-            f"to scout layout, {tool_name('web_fetch_direct')} for body "
-            f"content, or {tool_name('summarize')} when the source is "
-            "paywalled or blocks bots.",
+            f"to scout layout, or {tool_name('web_fetch_direct')} for body content.",
         )
     else:
         _append_frontmatter_entry(
@@ -208,6 +325,10 @@ async def search(query: str, limit: int = 5) -> str:
     fm = _build_frontmatter(fm_entries)
     return fm + "\n\n" + _fence_content(content)
 
+
+# ---------------------------------------------------------------------------
+# v0 summarize (dormant; unregistered until /summarize lands on v1)
+# ---------------------------------------------------------------------------
 
 async def summarize(
     url: Optional[str] = None,
@@ -253,7 +374,7 @@ async def summarize(
             response = client.summarize(text=text, summary_type=summary_type, target_language="EN")
     except Exception as e:
         logger.exception("Error during summarization")
-        return _handle_kagi_error(e)
+        return _handle_v0_error(e)
 
     # Extract summary
     content = response.get("data", {}).get("output", "")
