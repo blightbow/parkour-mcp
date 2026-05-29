@@ -685,6 +685,15 @@ def main():
         from .shelf import _format_shelf_list
         return _format_shelf_list(records)
 
+    # MCP resource: enumerated valid region codes for kagi_search.region.
+    # Static snapshot — refresh via scripts/generate_kagi_regions.py when
+    # Kagi adds region codes upstream.
+    @mcp.resource("kagi://regions")
+    async def kagi_regions_resource() -> str:
+        """Valid region codes for the kagi_search region parameter."""
+        from .kagi import kagi_regions_markdown
+        return kagi_regions_markdown()
+
     mcp.run(transport="stdio")
 
 

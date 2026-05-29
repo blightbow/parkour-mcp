@@ -503,6 +503,21 @@ class TestSearchV1Args:
         sent = json.loads(route.calls.last.request.content)
         assert "filters" not in sent
 
+    def test_regions_resource_markdown_shape(self):
+        from parkour_mcp.kagi import kagi_regions_markdown
+        md = kagi_regions_markdown()
+        assert "# Kagi region codes" in md
+        # Spot-check representative codes from each shape: ISO 3166 alpha-2
+        # and the language-suffix variant.
+        assert "| us | United States |" in md
+        assert "| ca_fr | Canada (fr) |" in md
+        # bangs.md lists `int` as a valid bang but the v1 search API
+        # rejects it for filters.region; the resource must not advertise it.
+        assert "| int |" not in md
+        # The region-pins-language coupling has to be on the resource itself
+        # since UAT kept asking about a separate language axis.
+        assert "language" in md.lower()
+
     @pytest.mark.asyncio
     @respx.mock
     async def test_partial_filters_only_includes_set_fields(self, _kagi_key):
