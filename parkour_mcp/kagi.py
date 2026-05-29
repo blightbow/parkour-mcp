@@ -457,12 +457,14 @@ async def search(
     )] = None,
     page: Annotated[Optional[int], Field(
         description=(
-            "Page number, 1-indexed (1..10). Page size is 'limit', so "
-            "page=2 with limit=10 returns results 11..20, and max "
-            "reach is page × limit. Deep paging needs a larger 'limit' "
-            "— at the default limit=5, page=10 only reaches result 50. "
-            "Omit (or pass null) for the first page. Applies across "
-            "all workflows."
+            "Page number, 1-indexed (1..10). Page size is 'limit'; max "
+            "practical reach is page × limit. Pagination is not strict "
+            "offset — adjacent pages can share some URLs, so deduplicate "
+            "downstream when consuming multiple pages. Repeated calls to "
+            "the same page return identical results in identical order. "
+            "Deep paging needs a larger 'limit' — at the default limit=5, "
+            "page=10 only reaches ~result 50. Omit (or pass null) for "
+            "the first page. Applies across all workflows."
         ),
         ge=1, le=10,
     )] = None,
@@ -482,6 +484,7 @@ async def search(
         description=(
             "ISO 8601 date 'YYYY-MM-DD' (e.g. '2025-01-01'). Returns "
             "only results published or updated on or after this date. "
+            "Results that lack a detectable date are silently excluded. "
             "Applies across all workflows. Overrides any date floor "
             "carried by 'lens_id'."
         ),
@@ -490,6 +493,7 @@ async def search(
         description=(
             "ISO 8601 date 'YYYY-MM-DD' (e.g. '2025-12-31'). Returns "
             "only results published or updated on or before this date. "
+            "Results that lack a detectable date are silently excluded. "
             "Applies across all workflows. Overrides any date ceiling "
             "carried by 'lens_id'."
         ),

@@ -576,6 +576,31 @@ class TestSearchV1Args:
                     f"description, not in profile-neutral Field metadata."
                 )
 
+    def test_page_field_description_discloses_pagination_caveats(self):
+        """Empirical UAT findings against the live v1 endpoint: same-page calls
+        are deterministic but adjacent pages overlap. Both facts have to stay
+        in the prose so a consumer of multiple pages knows to deduplicate."""
+        from typing import get_args
+        import inspect
+        sig = inspect.signature(search)
+        meta = get_args(sig.parameters["page"].annotation)
+        desc = next(m.description for m in meta if hasattr(m, "description"))
+        assert "not strict offset" in desc
+        assert "deduplicate" in desc
+        assert "identical results in identical order" in desc
+
+    def test_date_filters_disclose_undated_result_exclusion(self):
+        """Empirical UAT finding: after/before silently drop results that
+        carry no detectable date. Disclosing this in both filters keeps a
+        consumer from being surprised by a smaller-than-expected result set."""
+        from typing import get_args
+        import inspect
+        sig = inspect.signature(search)
+        for name in ("after", "before"):
+            meta = get_args(sig.parameters[name].annotation)
+            desc = next(m.description for m in meta if hasattr(m, "description"))
+            assert "silently excluded" in desc, f"{name} description missing undated-exclusion note"
+
     def test_lens_id_field_description_inlines_always_on_slugs(self):
         """Cross-client floor: the always-on lens slugs land in the schema so
         clients that can't autonomously read kagi://lenses (Claude Desktop,
