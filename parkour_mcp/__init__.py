@@ -694,6 +694,15 @@ def main():
         from .kagi import kagi_regions_markdown
         return kagi_regions_markdown()
 
+    # MCP resource: built-in lens catalog for kagi_search.lens_id.
+    # Static snapshot — refresh via scripts/generate_kagi_lenses.py when
+    # Kagi adds default lenses upstream.
+    @mcp.resource("kagi://lenses")
+    async def kagi_lenses_resource() -> str:
+        """Built-in Kagi lens catalog for the kagi_search lens_id parameter."""
+        from .kagi import kagi_lenses_markdown
+        return kagi_lenses_markdown()
+
     mcp.run(transport="stdio")
 
 

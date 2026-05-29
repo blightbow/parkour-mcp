@@ -518,6 +518,28 @@ class TestSearchV1Args:
         # since UAT kept asking about a separate language axis.
         assert "language" in md.lower()
 
+    def test_lenses_resource_markdown_shape(self):
+        from parkour_mcp.kagi import kagi_lenses_markdown
+        md = kagi_lenses_markdown()
+        assert "# Kagi default lenses" in md
+        # Both groups present and labeled.
+        assert "## Always available" in md
+        assert "## Require user activation" in md
+        # Always-on examples carry the lowercase-display-name slug (no
+        # underscore) — this is the empirically confirmed slug form.
+        assert "(`forums`)" in md
+        assert "(`news 360`)" in md
+        assert "(`kagi documentation`)" in md
+        # Activation-gated lenses appear under their own heading and the
+        # resource explains the fallback behavior.
+        assert "(`small web`)" in md
+        assert "(`cyber security`)" in md
+        assert "(`recipes`)" in md
+        # The slug-form rule needs to be on the resource because the
+        # lens_id Field description points here for the catalog.
+        assert "lowercase display name" in md.lower()
+        assert "underscore" in md.lower()
+
     @pytest.mark.asyncio
     @respx.mock
     async def test_partial_filters_only_includes_set_fields(self, _kagi_key):
