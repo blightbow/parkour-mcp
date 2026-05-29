@@ -38,7 +38,7 @@ import sys; sys.path.insert(0, "scripts")
 from cog_helpers import tool_count
 cog.outl(f"- **`__init__.py`** — MCP server entry point. Registers {tool_count(with_optional=True)}, with profile-specific names (PascalCase for `code`, snake_case for `desktop`). Description templates have placeholders replaced at registration time.")
 ]]] -->
-- **`__init__.py`** — MCP server entry point. Registers 13 always-on tools, plus 1 optional (SemanticScholar, gated by S2_ACCEPT_TOS), with profile-specific names (PascalCase for `code`, snake_case for `desktop`). Description templates have placeholders replaced at registration time.
+- **`__init__.py`** — MCP server entry point. Registers 12 always-on tools, plus 1 optional (SemanticScholar, gated by S2_ACCEPT_TOS), with profile-specific names (PascalCase for `code`, snake_case for `desktop`). Description templates have placeholders replaced at registration time.
 <!-- [[[end]]] -->
 - **`_pipeline.py`** — Shared processing layer. Owns the fast-path detection chain, multi-entry caching (`_WikiCache` LRU, `_PageCache` 2Q), slicing, BM25 search, and section filtering.
 - **`markdown.py`** — HTML→markdown conversion via custom `TextOnlyConverter`. Section extraction with fuzzy slug matching. Content fencing. Semantic truncation for markdown, hard truncation for structured formats.

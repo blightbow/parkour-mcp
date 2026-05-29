@@ -74,7 +74,6 @@ GLYPHS: list[Glyph] = [
 
     # Tool icons
     Glyph("search",    0x1F50D, "NotoSansSymbols2-Regular.ttf", "🔍", "MAGNIFYING GLASS"),
-    Glyph("summarize", 0x03A3, "NotoSansMono-Regular.ttf",     "Σ", "GREEK CAPITAL SIGMA"),
     Glyph("sections",  0x00A7, "NotoSansMono-Regular.ttf",     "§", "SECTION SIGN"),
     Glyph("exact",     0x2316, "NotoSansSymbols2-Regular.ttf", "⌖", "POSITION INDICATOR"),
     Glyph("arxiv",     0x03C7, "NotoSansMono-Regular.ttf",     "χ", "GREEK SMALL CHI"),

@@ -96,10 +96,6 @@
       "description": "Search the web using Kagi's curated search index"
     },
     {
-      "name": "kagi_summarize",
-      "description": "Summarize content from a URL or text using Kagi's Universal Summarizer"
-    },
-    {
       "name": "web_fetch_sections",
       "description": "List a document's section headings to understand page structure"
     },

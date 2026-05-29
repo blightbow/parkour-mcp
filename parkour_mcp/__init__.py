@@ -10,7 +10,7 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 from mcp.types import Icon, ToolAnnotations
 
-from .kagi import search, summarize
+from .kagi import search
 from .fetch_direct import web_fetch_direct, web_fetch_sections
 from .arxiv import arxiv
 from .github import github
@@ -37,7 +37,6 @@ _ICONS_DIR = pathlib.Path(__file__).parent / "assets" / "icons"
 # Internal tool key → SVG filename (without .svg extension)
 _ICON_FILES = {
     "search": "search",             # 🔍 U+1F50D MAGNIFYING GLASS (NotoSansSymbols2)
-    "summarize": "summarize",       # Σ  U+03A3 GREEK CAPITAL SIGMA (NotoSansMono)
     "web_fetch_sections": "sections",  # §  U+00A7 SECTION SIGN (NotoSansMono)
     "web_fetch_direct": "exact",    # ⌖  U+2316 POSITION INDICATOR (NotoSansSymbols2)
     "arxiv": "arxiv",               # χ  U+03C7 GREEK SMALL CHI (NotoSansMono)
@@ -63,7 +62,6 @@ _ALWAYS_ON_TOOLS: tuple[tuple[str, Callable[..., Any]], ...] = (
     ("search", search),
     ("web_fetch_sections", web_fetch_sections),
     ("web_fetch_direct", web_fetch_direct),
-    ("summarize", summarize),
     ("arxiv", arxiv),
     ("research_shelf", research_shelf),
     ("github", github),
@@ -138,7 +136,6 @@ PROFILE_VARS = {
         "web_fetch": "WebFetch",
         "fetch_direct": "WebFetchIncisive",
         "fetch_sections": "WebFetchSections",
-        "summarize": "KagiSummarize",
         "mediawiki_tool": "MediaWiki",
         "github_tool": "GitHub",
         "arxiv_tool": "ArXiv",
@@ -161,7 +158,6 @@ PROFILE_VARS = {
         "web_fetch": "web_fetch",
         "fetch_direct": "web_fetch_incisive",
         "fetch_sections": "web_fetch_sections",
-        "summarize": "kagi_summarize",
         "mediawiki_tool": "mediawiki",
         "github_tool": "github",
         "arxiv_tool": "arxiv",
@@ -188,7 +184,6 @@ PROFILE_VARS = {
         "web_fetch": "web_extract",
         "fetch_direct": "web_fetch_incisive",
         "fetch_sections": "web_fetch_sections",
-        "summarize": "kagi_summarize",
         "mediawiki_tool": "mediawiki",
         "github_tool": "github",
         "arxiv_tool": "arxiv",
@@ -236,9 +231,9 @@ with {fetch_direct} using the returned heading names as section= or
 slugs as slices=. URL fragments (e.g. #section-name) are resolved
 against the heading tree.
 
-For a quick sense of document scope, prefer this over {summarize} — the
-section tree reveals structure at minimal cost and leaves the source
-material unsummarized for precise follow-up.
+For a quick sense of document scope, the section tree reveals structure
+at minimal cost and leaves the source material unsummarized for precise
+follow-up.
 
 For Reddit threads, returns the comment tree with author, score, and
 content length metadata. Comment IDs serve as section identifiers for
@@ -288,22 +283,6 @@ A browser render annotates interactive elements for follow-up actions;
 max_elements caps that list, and 0 omits it.
 
 Supports HTML, plain text, JSON, and XML content types.""",
-
-    "summarize": """Summarize content from a URL using Kagi's Universal Summarizer.
-
-{summarize_positioning}
-
-Reach for this when even {fetch_direct} can't retrieve the source
-(captcha-gated pages, anti-bot walls), or for formats neither built-in
-fetcher processes: PDFs, YouTube videos, audio files, podcasts. Each
-call is billed against the user's Kagi API credits — treat it as
-higher-effort than {web_fetch}.
-
-Two summary modes via summary_type= parameter:
-- "summary" (default) — flowing prose paragraphs
-- "takeaway" — bullet-point key takeaways
-
-Summary length is determined by the source.""",
 
     "arxiv": """Search and retrieve academic papers from arXiv.
 
@@ -596,22 +575,6 @@ independently curated and resistant to SEO spam. Results stay compact
 (snippets and timestamps per hit), keeping context lean across
 multi-query research workflows."""
 
-_SUMMARIZE_POSITIONING = """Position relative to the two fetch tools:
-- {web_fetch} returns host-summarized content (fast, default; subject
-  to bot detection and datacenter IP bans)
-- {fetch_direct} returns raw unsummarized content (local fetch through
-  the user's device; bypasses the bot detection and IP bans that
-  block {web_fetch})
-- this tool summarizes through Kagi's layer — returns a condensed
-  digest only, never raw content"""
-
-_SUMMARIZE_POSITIONING_OVERRIDE = """Position relative to the fetch tools:
-- {fetch_direct} returns raw unsummarized content (local fetch through
-  the user's device; bypasses the bot detection and IP bans that block
-  datacenter fetchers)
-- this tool summarizes through Kagi's layer, returning a condensed
-  digest only, never raw content"""
-
 # Override variant of the hermes profile's fetch_direct_when_to_use: drops the
 # "Unlike web_extract" comparison, since under override parkour *is* web_extract.
 _HERMES_FETCH_DIRECT_WHEN_TO_USE_OVERRIDE = (
@@ -644,13 +607,9 @@ def _build_description(
     search_positioning = (
         _SEARCH_POSITIONING_OVERRIDE if override_web_search else _SEARCH_POSITIONING
     )
-    summarize_positioning = (
-        _SUMMARIZE_POSITIONING_OVERRIDE if override_web_extract else _SUMMARIZE_POSITIONING
-    )
     fragments = {
         "search_grammar": SEARCH_GRAMMAR_DOC,
         "search_positioning": search_positioning.format(**profile_vars),
-        "summarize_positioning": summarize_positioning.format(**profile_vars),
     }
     return TOOL_DESCRIPTIONS[tool_name].format(**profile_vars, **fragments)
 

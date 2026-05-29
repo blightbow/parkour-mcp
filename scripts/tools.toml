@@ -64,8 +64,3 @@ name = "mediawiki"
 pascal = "MediaWiki"
 description = "Search and retrieve Wikipedia / MediaWiki articles, with native footnote and inline-citation resolution ({actions}). First tool to use the split `title=` / `query=` parameter convention"
 actions = ["page", "search", "references"]
-
-[[tool]]
-name = "kagi_summarize"
-pascal = "KagiSummarize"
-description = "Summarize URLs or text (supports PDFs, YouTube, audio)"

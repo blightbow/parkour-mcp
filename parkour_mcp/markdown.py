@@ -339,8 +339,7 @@ def _apply_semantic_truncation(
     hint = (
         f"Full page is {total_kb:.1f} KB (~{total_tokens_est:,} tokens), "
         f"showing first ~{shown_tokens:,} tokens. "
-        "Use max_tokens to adjust, section to fetch specific sections, "
-        "or kagi_summarize for a summary."
+        "Use max_tokens to adjust, or section to fetch specific sections."
     )
     return truncated, hint
 
