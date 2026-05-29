@@ -696,6 +696,105 @@ class TestSearchV1Args:
 
     @pytest.mark.asyncio
     @respx.mock
+    async def test_region_with_images_workflow_emits_warning(self, _kagi_key):
+        respx.post("https://kagi.com/api/v1/search").mock(
+            return_value=httpx.Response(
+                200,
+                json={"meta": {"trace": "t", "ms": 1, "node": "x"},
+                      "data": {"image": [
+                          {"url": "https://example.com/x.jpg", "title": "x",
+                           "image": {"url": "https://thumb/x.jpg"}, "props": {}},
+                      ]}},
+            )
+        )
+
+        result = await search("cat", workflow="images", region="de")
+
+        assert "warning:" in result
+        assert "region has no visible effect on workflow='images'" in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_region_with_search_workflow_no_images_warning(self, _kagi_key):
+        respx.post("https://kagi.com/api/v1/search").mock(
+            return_value=httpx.Response(
+                200,
+                json={"meta": {"trace": "t", "ms": 1, "node": "x"},
+                      "data": {"search": []}},
+            )
+        )
+
+        result = await search("test", region="de")
+        assert "region has no visible effect" not in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_date_filter_with_images_workflow_emits_warning(self, _kagi_key):
+        respx.post("https://kagi.com/api/v1/search").mock(
+            return_value=httpx.Response(
+                200,
+                json={"meta": {"trace": "t", "ms": 1, "node": "x"},
+                      "data": {"image": []}},
+            )
+        )
+
+        result = await search("cat", workflow="images", after="2024-01-01")
+
+        assert "warning:" in result
+        assert "lack date metadata" in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_date_filter_with_search_workflow_no_images_warning(self, _kagi_key):
+        respx.post("https://kagi.com/api/v1/search").mock(
+            return_value=httpx.Response(
+                200,
+                json={"meta": {"trace": "t", "ms": 1, "node": "x"},
+                      "data": {"search": []}},
+            )
+        )
+
+        result = await search("test", after="2024-01-01")
+        assert "lack date metadata" not in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_empty_results_with_filters_hints_active_filters(self, _kagi_key):
+        respx.post("https://kagi.com/api/v1/search").mock(
+            return_value=httpx.Response(
+                200,
+                json={"meta": {"trace": "t", "ms": 1, "node": "x"},
+                      "data": {"search": []}},
+            )
+        )
+
+        result = await search("test", region="us", after="2024-01-01")
+
+        assert "hint:" in result
+        assert "No results with active filters" in result
+        assert "region='us'" in result
+        assert "after='2024-01-01'" in result
+        # The generic 'Widen the query' hint should NOT appear when the
+        # filter-aware hint takes its place — they are mutually exclusive.
+        assert "Widen the query" not in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_empty_results_without_filters_uses_generic_hint(self, _kagi_key):
+        respx.post("https://kagi.com/api/v1/search").mock(
+            return_value=httpx.Response(
+                200,
+                json={"meta": {"trace": "t", "ms": 1, "node": "x"},
+                      "data": {"search": []}},
+            )
+        )
+
+        result = await search("test")
+        assert "Widen the query" in result
+        assert "No results with active filters" not in result
+
+    @pytest.mark.asyncio
+    @respx.mock
     async def test_lens_with_search_workflow_no_warning(self, _kagi_key):
         """workflow='search' is the default for which lens_id is designed —
         no warning."""

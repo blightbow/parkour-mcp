@@ -617,6 +617,21 @@ async def search(
             "lens_id to compare.",
         )
 
+    if region is not None and workflow == "images":
+        _append_frontmatter_entry(
+            fm_entries, "warning",
+            "region has no visible effect on workflow='images'; the "
+            "result set will match the unlocalized search.",
+        )
+
+    if (after is not None or before is not None) and workflow == "images":
+        _append_frontmatter_entry(
+            fm_entries, "warning",
+            "'images' results typically lack date metadata; after/"
+            "before may not engage and the result set will be smaller "
+            "or empty.",
+        )
+
     if results:
         _append_frontmatter_entry(
             fm_entries, "hint",
@@ -624,12 +639,29 @@ async def search(
             f"to scout layout, or {tool_name('web_fetch_direct')} for body content.",
         )
     else:
-        _append_frontmatter_entry(
-            fm_entries, "hint",
-            'Widen the query: drop site: or filetype: qualifiers, quote '
-            'phrases as "exact match", or replace +required terms with '
-            "looser alternatives.",
-        )
+        active_filters: list[str] = []
+        if lens_id is not None:
+            active_filters.append(f"lens_id={lens_id!r}")
+        if region is not None:
+            active_filters.append(f"region={region!r}")
+        if after is not None:
+            active_filters.append(f"after={after!r}")
+        if before is not None:
+            active_filters.append(f"before={before!r}")
+        if active_filters:
+            _append_frontmatter_entry(
+                fm_entries, "hint",
+                f"No results with active filters: {', '.join(active_filters)}. "
+                "Retry without the most restrictive filter to localize the "
+                "cause.",
+            )
+        else:
+            _append_frontmatter_entry(
+                fm_entries, "hint",
+                'Widen the query: drop site: or filetype: qualifiers, quote '
+                'phrases as "exact match", or replace +required terms with '
+                "looser alternatives.",
+            )
 
     fm = _build_frontmatter(fm_entries)
     return fm + "\n\n" + _fence_content(content)
