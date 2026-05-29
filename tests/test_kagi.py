@@ -424,7 +424,10 @@ class TestSearchV1Args:
 
     @pytest.mark.asyncio
     async def test_invalid_workflow_short_circuits(self, _kagi_key):
-        result = await search("test", workflow="audiobooks")
+        # Static type rejects the Literal violation; the runtime guard
+        # exists for callers that bypass static typing (MCP-incoming
+        # values, **kwargs unpacking, dynamic dispatch).
+        result = await search("test", workflow="audiobooks")  # ty: ignore[invalid-argument-type]
         assert "Invalid workflow" in result
         assert "audiobooks" in result
 
@@ -476,11 +479,11 @@ class TestSearchV1Args:
             )
         )
 
-        await search("brexit", region="GB", after="2020-01-01", before="2020-12-31")
+        await search("brexit", region="gb", after="2020-01-01", before="2020-12-31")
 
         sent = json.loads(route.calls.last.request.content)
         assert sent["filters"] == {
-            "region": "GB",
+            "region": "gb",
             "after": "2020-01-01",
             "before": "2020-12-31",
         }

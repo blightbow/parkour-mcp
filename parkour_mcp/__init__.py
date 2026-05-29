@@ -209,18 +209,11 @@ TOOL_DESCRIPTIONS = {
 {search_positioning}
 
 Switch result categories via workflow= (search / images / videos / news /
-podcasts). Scope with lens_id=, paginate with page=, filter with region= /
-after= / before=.
-
-Supports search operators in the query string:
-- site:example.com — restrict to a domain
-- filetype:pdf — restrict to a file type
-- intitle:term — match in page title
-- inurl:term — match in URL
-- "exact phrase" — exact match
-- +term / -term — require / exclude a term
-- (A AND B), (A OR B) — boolean grouping, e.g. recipes (szechuan OR cantonese)
-- * — wildcard word substitution, e.g. best * ever""",
+podcasts). Cap returns with limit=, scope with lens_id=, paginate with
+page=, filter by region= / after= / before=. The query string supports
+site: / filetype: / intitle: / inurl: filters, "exact phrases", +/- terms,
+boolean (A AND B) / (A OR B) grouping, and * wildcards — full operator
+syntax is on the query parameter.""",
 
     "web_fetch_sections": """List a document's section headings to understand page composition or plan targeted extraction.
 

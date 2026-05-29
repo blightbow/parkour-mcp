@@ -256,66 +256,71 @@ async def search(
     )],
     limit: Annotated[int, Field(
         description=(
-            "Maximum number of results to return. Default 5; the v1 "
-            "API caps this at 1024 per page. Caps the response size "
-            "only — Kagi still selects its top results internally."
+            "Maximum number of results returned. Default 5; max 1024. "
+            "Caps the response count only — Kagi picks its top hits "
+            "internally, so a smaller limit returns the best of the "
+            "same ranking, not a different ranking."
         ),
         ge=1, le=1024,
     )] = 5,
     *,
     workflow: Annotated[Optional[_WorkflowType], Field(
         description=(
-            "Result category. Omit (or pass null) for the default "
-            "'search' workflow, which returns web results with "
-            "related-query suggestions. Other workflows surface only "
+            "Result category. Omit for 'search' (web results with "
+            "related-query suggestions). Other workflows surface only "
             "their named primary category: 'images' returns image "
             "hits, 'videos' returns video hits, 'news' returns news "
-            "articles, 'podcasts' returns podcast episodes. The "
-            "frontmatter source label reflects the workflow ('kagi "
-            "videos: <query>')."
+            "articles, 'podcasts' returns podcast episodes."
         ),
     )] = None,
     lens_id: Annotated[Optional[str], Field(
         description=(
-            "Kagi Lens to apply. A lens scopes the search to user-"
-            "configured site, keyword, and region rules before any "
-            "filters set here take effect. Accepts a built-in lens "
-            "slug, a shareable lens ID (the ID portion of "
-            "https://kagi.com/lenses/<id>), or the full lens URL. "
-            "Lenses must be configured first at "
-            "https://kagi.com/settings/lenses (and made shareable for "
-            "non-built-in lenses); without that setup, no value is "
-            "applicable here."
+            "Kagi Lens to apply. A lens is a stored search profile "
+            "that scopes the query (sites, keywords, file type, "
+            "region, time window) before any filters set here take "
+            "effect. The 'region', 'after', and 'before' parameters "
+            "override the lens's equivalents when both are supplied. "
+            "No programmatic discovery — pass null unless the user "
+            "has supplied a specific lens. Accepted forms: a built-"
+            "in lens slug, a shareable lens ID (the ID portion of "
+            "https://kagi.com/lenses/<id>), or the full lens URL."
         ),
     )] = None,
     page: Annotated[Optional[int], Field(
         description=(
             "Page number, 1-indexed, in the range 1..10. Page size is "
             "controlled by 'limit': page=2 with limit=10 returns "
-            "results 11..20. Omit (or pass null) for the first page."
+            "results 11..20. Omit (or pass null) for the first page. "
+            "Applies across all workflows."
         ),
         ge=1, le=10,
     )] = None,
     region: Annotated[Optional[str], Field(
         description=(
-            "ISO 3166-1 alpha-2 country code (e.g. 'US', 'DE', 'JP') "
-            "that localizes results to the named region. See "
-            "https://help.kagi.com/api/regions for the supported set. "
-            "Overrides any region carried by 'lens_id'."
+            "Lowercase Kagi region code (case-sensitive — 'us', not "
+            "'US'). Mostly lowercase ISO 3166-1 alpha-2 ('us', 'de', "
+            "'jp', 'fr', 'gb'), plus language-suffix variants for "
+            "multilingual countries ('ca_fr' for Canada in French, "
+            "'be_fr' for Belgium in French, 'es_ca' for Spain in "
+            "Catalan). Pins both region and result language — there "
+            "is no separate language argument. Omit to skip regional "
+            "localization. Overrides 'lens_id''s region."
         ),
     )] = None,
     after: Annotated[Optional[str], Field(
         description=(
             "ISO 8601 date 'YYYY-MM-DD' (e.g. '2025-01-01'). Returns "
             "only results published or updated on or after this date. "
-            "Overrides any date floor carried by 'lens_id'."
+            "Applies across all workflows. Overrides any date floor "
+            "carried by 'lens_id'."
         ),
     )] = None,
     before: Annotated[Optional[str], Field(
         description=(
             "ISO 8601 date 'YYYY-MM-DD' (e.g. '2025-12-31'). Returns "
             "only results published or updated on or before this date. "
-            "Overrides any date ceiling carried by 'lens_id'."
+            "Applies across all workflows. Overrides any date ceiling "
+            "carried by 'lens_id'."
         ),
     )] = None,
 ) -> str:
