@@ -69,6 +69,15 @@ Acknowledged warnings and deferred fixes. Each entry includes the source, the is
 - **Why deferred**: Out of scope for the documentation-first turn that surfaced it. The fix is small (two added branches in `_classify_content_type` returning new classifier labels), and `_SOURCE_EXT_MAP` in `common.py` already maps `.md` to `markdown` and `.yaml`/`.yml` to `yaml`, so the syntax-tag plumbing is in place.
 - **Mitigation**: Fetch via `curl` until the classifier is extended.
 
+## `kagi.py` — v0 dormant island
+
+### kagiapi dep, summarize backing code, and balance-lockout helpers retained alongside unregistered tool
+
+- **Location**: `parkour_mcp/kagi.py` (top-level `from kagiapi import KagiClient`; `get_client`, `_extract_balance`, `_check_balance`, `_summarize_locked`, `_handle_v0_error`, and the unregistered `summarize`), `pyproject.toml` (`kagiapi` declared in `dependencies`), `tests/test_kagi.py` (`TestExtractBalance`, `TestCheckBalance`, `TestSummarizeLockout::test_summarize_*`, `TestHandleV0Error`).
+- **Issue**: `kagi_summarize` is unregistered on rc1 because v1 has no `/summarize` counterpart yet, but the backing code stays as scaffolding for re-registration. `summarize()` still calls `kagiapi.KagiClient.summarize()` against v0, so the dep, the balance-lockout helpers (`_extract_balance`, `_check_balance`, `_summarize_locked`), the v0 error parser (`_handle_v0_error`), and `get_client` all stay alive even though no registered tool exercises them. Tests preserve coverage on the dormant code so a future re-registration starts from a green suite.
+- **Why deferred**: When Kagi ships `/summarize` on v1, the natural follow-up is one focused commit: rewrite `summarize()` against the v1 endpoint, decide whether v1's new billing signal warrants a similar lockout (v1 dropped `meta.api_balance` and the replacement billing flow hasn't shipped), re-register the tool in `__init__.py`, and delete the entire v0 island (kagiapi import + dep, `get_client`, balance helpers, v0 error parser) in the same pass. Removing the island now would force a stub or skip-marker on the dormant function, churn we'd undo on re-registration.
+- **How to evaluate**: Watch the Kagi API changelog and the Kagi Discord `#api` forum for `/v1/summarize` landing. On landing, do the migration above and remove this entry.
+
 ## Structural tradeoffs
 
 ### `<header>` stripped from all pages — loses real h1s on spec docs
