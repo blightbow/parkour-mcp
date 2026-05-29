@@ -259,7 +259,9 @@ async def search(
             "Maximum number of results returned. Default 5; max 1024. "
             "Caps the response count only — Kagi picks its top hits "
             "internally, so a smaller limit returns the best of the "
-            "same ranking, not a different ranking."
+            "same ranking, not a different ranking. Also doubles as "
+            "page size when 'page' is set; see 'page' for the math. "
+            "Applies across all workflows."
         ),
         ge=1, le=1024,
     )] = 5,
@@ -288,10 +290,12 @@ async def search(
     )] = None,
     page: Annotated[Optional[int], Field(
         description=(
-            "Page number, 1-indexed, in the range 1..10. Page size is "
-            "controlled by 'limit': page=2 with limit=10 returns "
-            "results 11..20. Omit (or pass null) for the first page. "
-            "Applies across all workflows."
+            "Page number, 1-indexed (1..10). Page size is 'limit', so "
+            "page=2 with limit=10 returns results 11..20, and max "
+            "reach is page × limit. Deep paging needs a larger 'limit' "
+            "— at the default limit=5, page=10 only reaches result 50. "
+            "Omit (or pass null) for the first page. Applies across "
+            "all workflows."
         ),
         ge=1, le=10,
     )] = None,
