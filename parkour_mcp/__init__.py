@@ -8,7 +8,7 @@ from collections.abc import Callable
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
-from mcp.types import Icon, ToolAnnotations
+from mcp.types import Annotations, Icon, ToolAnnotations
 
 from .kagi import search
 from .fetch_direct import web_fetch_direct, web_fetch_sections
@@ -152,6 +152,13 @@ PROFILE_VARS = {
             "bans of data-center subnets, or for extracting specific details that\n"
             "summarization would discard."
         ),
+        # Claude Code wraps MCP resources as model-callable read tools, so the
+        # LLM in this profile can act on the kagi://* URIs directly.
+        "kagi_resource_pointer": (
+            "For per-lens purpose descriptions and activation status, see "
+            "the kagi://lenses resource. For the full region code list, see "
+            "the kagi://regions resource."
+        ),
     },
     "desktop": {
         "web_search": "web_search",
@@ -173,6 +180,11 @@ PROFILE_VARS = {
             "Use this for a rich content exploring experience that is not subject to 403\n"
             "bans of data-center subnets, or when web_fetch is rejected with PERMISSIONS_ERROR.\n"
         ),
+        # Claude Desktop surfaces MCP resources via user @-mention attachment
+        # only — the LLM cannot autonomously read kagi://* URIs in this profile,
+        # so the lens_id Field description's inline slug list is the floor and
+        # the pointer resolves to nothing.
+        "kagi_resource_pointer": "",
     },
     # hermes profile: snake_case (matches Hermes' built-in tool naming). The
     # sibling-tool placeholders point at Hermes' own web_search / web_extract,
@@ -199,6 +211,11 @@ PROFILE_VARS = {
             "bans of data-center subnets, or for extracting specific details that\n"
             "summarization would discard."
         ),
+        # Hermes plugins register through ctx.register_tool only — Hermes'
+        # plugin API has no resource primitive, so the kagi://* URIs do not
+        # resolve in this profile and the pointer stays empty. The lens_id
+        # Field description's inline slug list is the floor.
+        "kagi_resource_pointer": "",
     },
 }
 
@@ -213,7 +230,9 @@ podcasts). Cap returns with limit=, scope with lens_id=, paginate with
 page=, filter by region= / after= / before=. The query string supports
 site: / filetype: / intitle: / inurl: filters, "exact phrases", +/- terms,
 boolean (A AND B) / (A OR B) grouping, and * wildcards — full operator
-syntax is on the query parameter.""",
+syntax is on the query parameter.
+
+{kagi_resource_pointer}""",
 
     "web_fetch_sections": """List a document's section headings to understand page composition or plan targeted extraction.
 
@@ -604,7 +623,10 @@ def _build_description(
         "search_grammar": SEARCH_GRAMMAR_DOC,
         "search_positioning": search_positioning.format(**profile_vars),
     }
-    return TOOL_DESCRIPTIONS[tool_name].format(**profile_vars, **fragments)
+    # rstrip() collapses the trailing blank line(s) when a profile-specific
+    # placeholder (e.g. kagi_resource_pointer) resolves to an empty string,
+    # so descriptions terminate cleanly across profiles.
+    return TOOL_DESCRIPTIONS[tool_name].format(**profile_vars, **fragments).rstrip()
 
 
 def _apply_s2_enrichment() -> None:
@@ -687,8 +709,13 @@ def main():
 
     # MCP resource: enumerated valid region codes for kagi_search.region.
     # Static snapshot — refresh via scripts/generate_kagi_regions.py when
-    # Kagi adds region codes upstream.
-    @mcp.resource("kagi://regions")
+    # Kagi adds region codes upstream.  audience=["assistant"] signals model-
+    # facing intent per MCP spec; non-binding, ignored by clients that don't
+    # honor the hint, but the spec-blessed forward-compat marker.
+    @mcp.resource(
+        "kagi://regions",
+        annotations=Annotations(audience=["assistant"]),
+    )
     async def kagi_regions_resource() -> str:
         """Valid region codes for the kagi_search region parameter."""
         from .kagi import kagi_regions_markdown
@@ -697,7 +724,10 @@ def main():
     # MCP resource: built-in lens catalog for kagi_search.lens_id.
     # Static snapshot — refresh via scripts/generate_kagi_lenses.py when
     # Kagi adds default lenses upstream.
-    @mcp.resource("kagi://lenses")
+    @mcp.resource(
+        "kagi://lenses",
+        annotations=Annotations(audience=["assistant"]),
+    )
     async def kagi_lenses_resource() -> str:
         """Built-in Kagi lens catalog for the kagi_search lens_id parameter."""
         from .kagi import kagi_lenses_markdown

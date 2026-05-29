@@ -364,6 +364,43 @@ class TestSearchV1:
         assert "API key not found" in result
 
 
+# --- Per-profile description portability for resource pointers ---
+
+class TestSearchDescriptionPerProfile:
+    """The kagi://lenses and kagi://regions resources are only autonomously
+    readable in clients that wrap MCP resources as model-callable tools
+    (Claude Code does, Claude Desktop and the Hermes plugin profile do not).
+    The 'code' profile carries a resource pointer in the tool description;
+    'desktop' and 'hermes' resolve the placeholder to empty so the
+    description terminates cleanly and the LLM is not steered toward a
+    URI it cannot reach.
+    """
+
+    def test_code_profile_advertises_kagi_resources(self):
+        from parkour_mcp import _build_description
+        desc = _build_description("search", "code")
+        assert "kagi://lenses" in desc
+        assert "kagi://regions" in desc
+        # No trailing whitespace — rstrip() in _build_description guards this.
+        assert desc == desc.rstrip()
+
+    def test_desktop_profile_omits_resource_pointer(self):
+        from parkour_mcp import _build_description
+        desc = _build_description("search", "desktop")
+        assert "kagi://lenses" not in desc
+        assert "kagi://regions" not in desc
+        # The description still terminates cleanly — no dangling blank lines
+        # where the empty placeholder used to live.
+        assert desc == desc.rstrip()
+
+    def test_hermes_profile_omits_resource_pointer(self):
+        from parkour_mcp import _build_description
+        desc = _build_description("search", "hermes")
+        assert "kagi://lenses" not in desc
+        assert "kagi://regions" not in desc
+        assert desc == desc.rstrip()
+
+
 # --- v1 search args (workflow / lens_id / page / region / after / before) ---
 
 class TestSearchV1Args:
@@ -517,6 +554,29 @@ class TestSearchV1Args:
         # The region-pins-language coupling has to be on the resource itself
         # since UAT kept asking about a separate language axis.
         assert "language" in md.lower()
+
+    def test_lens_id_field_description_inlines_always_on_slugs(self):
+        """Cross-client floor: the always-on lens slugs land in the schema so
+        clients that can't autonomously read kagi://lenses (Claude Desktop,
+        Hermes plugin) still get an actionable catalog from the parameter
+        prose alone."""
+        from typing import get_args
+        import inspect
+        sig = inspect.signature(search)
+        field = sig.parameters["lens_id"].annotation
+        # Annotated[Optional[str], Field(description=...)] — pull the Field.
+        meta = get_args(field)
+        descs = [m.description for m in meta if hasattr(m, "description")]
+        assert descs, f"lens_id has no Field description: {field}"
+        desc = descs[0]
+        for slug in (
+            "forums", "programming", "news 360", "fediverse forums",
+            "usenet/archive", "academic", "pdfs", "kagi documentation",
+        ):
+            assert f"'{slug}'" in desc, f"slug {slug!r} missing from lens_id description"
+        # The resource reference must not be the only path advertised — the
+        # inline list is the floor for clients that can't fetch resources.
+        assert "always-available slugs are" in desc
 
     def test_lenses_resource_markdown_shape(self):
         from parkour_mcp.kagi import kagi_lenses_markdown
