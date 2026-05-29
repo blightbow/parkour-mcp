@@ -417,12 +417,12 @@ async def search(
     )],
     limit: Annotated[int, Field(
         description=(
-            "Maximum number of results returned. Default 5; max 1024. "
-            "Caps the response count only — Kagi picks its top hits "
-            "internally, so a smaller limit returns the best of the "
-            "same ranking, not a different ranking. Also doubles as "
-            "page size when 'page' is set; see 'page' for the math. "
-            "Applies across all workflows."
+            "Maximum number of results returned per page. Default 5; "
+            "max 1024. limit is always the page size — when 'page' is "
+            "omitted you implicitly receive page 1. Caps the response "
+            "count only — Kagi picks its top hits internally, so a "
+            "smaller limit returns the best of the same ranking, not "
+            "a different ranking. Applies across all workflows."
         ),
         ge=1, le=1024,
     )] = 5,
@@ -441,14 +441,16 @@ async def search(
             "Kagi Lens to apply. A lens is a stored search profile "
             "that scopes the query (sites, keywords, file type, "
             "region, time window) before any filters set here take "
-            "effect. The 'region', 'after', and 'before' parameters "
-            "override the lens's equivalents when both are supplied. "
-            "Accepted forms: a built-in lens slug (lowercase display "
-            "name with spaces preserved; always-available slugs are "
-            "'forums', 'programming', 'news 360', 'fediverse forums', "
-            "'usenet/archive', 'academic', 'pdfs', 'kagi "
-            "documentation'), a shareable lens ID (the ID portion of "
-            "https://kagi.com/lenses/<id>), or the full lens URL. "
+            "effect. Designed for the default 'search' workflow; on "
+            "other workflows the lens may be silently ignored or may "
+            "filter results to empty. The 'region', 'after', and "
+            "'before' parameters override the lens's equivalents when "
+            "both are supplied. Accepted forms: a built-in lens slug "
+            "(lowercase display name with spaces preserved; always-"
+            "available slugs are 'forums', 'programming', 'news 360', "
+            "'fediverse forums', 'usenet/archive', 'academic', 'pdfs', "
+            "'kagi documentation'), a shareable lens ID (the ID portion "
+            "of https://kagi.com/lenses/<id>), or the full lens URL. "
             "User-created lenses have no programmatic discovery path "
             "— pass null unless the user has handed you one."
         ),
@@ -470,7 +472,6 @@ async def search(
             "'US'). Codes include lowercase ISO 3166-1 alpha-2 forms "
             "like 'us', 'de', 'jp', plus language-suffix variants for "
             "multilingual countries like 'ca_fr' (Canada in French). "
-            "Consult the kagi://regions resource for the full set. "
             "Pins both region and result language — there is no "
             "separate language argument. Omit to skip regional "
             "localization. Applies across all workflows. Overrides "
@@ -592,6 +593,15 @@ async def search(
         "source": f"kagi {workflow or 'search'}: {query}",
         "trust": _TRUST_ADVISORY,
     })
+
+    if lens_id is not None and workflow is not None and workflow != "search":
+        _append_frontmatter_entry(
+            fm_entries, "warning",
+            f"lens_id is unreliable on workflow={workflow!r}; may be "
+            "silently ignored or filter results to empty. The lens is "
+            "designed for the default 'search' workflow. Retry without "
+            "lens_id to compare.",
+        )
 
     if results:
         _append_frontmatter_entry(

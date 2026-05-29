@@ -555,6 +555,27 @@ class TestSearchV1Args:
         # since UAT kept asking about a separate language axis.
         assert "language" in md.lower()
 
+    def test_no_field_description_references_kagi_resources(self):
+        """Field descriptions are profile-neutral and apply to all clients,
+        including those (Claude Desktop, Hermes plugin) where kagi://* URIs
+        cannot be dereferenced. The kagi://lenses and kagi://regions
+        references belong exclusively in the profile-aware tool description
+        (kagi_resource_pointer) so they only surface in 'code' profile.
+        """
+        from typing import get_args
+        import inspect
+        sig = inspect.signature(search)
+        for name, param in sig.parameters.items():
+            for meta in get_args(param.annotation):
+                desc = getattr(meta, "description", None)
+                if not desc:
+                    continue
+                assert "kagi://" not in desc, (
+                    f"{name} Field description references kagi:// URIs; "
+                    f"resource pointers belong in the profile-aware tool "
+                    f"description, not in profile-neutral Field metadata."
+                )
+
     def test_lens_id_field_description_inlines_always_on_slugs(self):
         """Cross-client floor: the always-on lens slugs land in the schema so
         clients that can't autonomously read kagi://lenses (Claude Desktop,
@@ -599,6 +620,72 @@ class TestSearchV1Args:
         # lens_id Field description points here for the catalog.
         assert "lowercase display name" in md.lower()
         assert "underscore" in md.lower()
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_lens_with_nondefault_workflow_emits_warning(self, _kagi_key):
+        respx.post("https://kagi.com/api/v1/search").mock(
+            return_value=httpx.Response(
+                200,
+                json={"meta": {"trace": "t", "ms": 1, "node": "x"},
+                      "data": {"video": []}},
+            )
+        )
+
+        result = await search("async", workflow="videos", lens_id="programming")
+
+        assert "warning:" in result
+        assert "lens_id is unreliable" in result
+        assert "'videos'" in result
+        # Driver-actionable remediation is named so the LLM can recover.
+        assert "Retry without lens_id" in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_lens_with_search_workflow_no_warning(self, _kagi_key):
+        """workflow='search' is the default for which lens_id is designed —
+        no warning."""
+        respx.post("https://kagi.com/api/v1/search").mock(
+            return_value=httpx.Response(
+                200,
+                json={"meta": {"trace": "t", "ms": 1, "node": "x"},
+                      "data": {"search": []}},
+            )
+        )
+
+        result = await search("test", workflow="search", lens_id="forums")
+        assert "lens_id is unreliable" not in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_lens_with_omitted_workflow_no_warning(self, _kagi_key):
+        """workflow=None defaults to 'search' server-side; no warning."""
+        respx.post("https://kagi.com/api/v1/search").mock(
+            return_value=httpx.Response(
+                200,
+                json={"meta": {"trace": "t", "ms": 1, "node": "x"},
+                      "data": {"search": []}},
+            )
+        )
+
+        result = await search("test", lens_id="forums")
+        assert "lens_id is unreliable" not in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_nondefault_workflow_without_lens_no_warning(self, _kagi_key):
+        """A non-default workflow on its own is fine — the warning is gated
+        on the lens_id+workflow combination, not on workflow alone."""
+        respx.post("https://kagi.com/api/v1/search").mock(
+            return_value=httpx.Response(
+                200,
+                json={"meta": {"trace": "t", "ms": 1, "node": "x"},
+                      "data": {"video": []}},
+            )
+        )
+
+        result = await search("test", workflow="videos")
+        assert "lens_id is unreliable" not in result
 
     @pytest.mark.asyncio
     @respx.mock
