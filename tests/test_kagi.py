@@ -589,12 +589,12 @@ class TestSearchV1Args:
         assert "deduplicate" in desc
         assert "identical results in identical order" in desc
 
-    def test_region_discloses_failure_mode_and_workflow_variance(self):
-        """Empirical UAT round-6 findings: bad region codes return HTTP 400
-        with structured errors (never silent), and region's effect varies by
-        workflow (strong on web/news, weak/absent on images). Both have to
-        stay in the prose because they shape the driver's expectations of
-        what going wrong with this argument looks like."""
+    def test_region_discloses_loud_failure_mode(self):
+        """Empirical UAT round-6 finding: bad region codes return HTTP 400
+        with structured errors — never silently degrades. The workflow-
+        specific 'weak on images' caveat moved to the consolidated note on
+        workflow itself (UAT round 7 asked for one consolidated source of
+        truth on the images workflow's filter behavior)."""
         from typing import get_args
         import inspect
         sig = inspect.signature(search)
@@ -602,7 +602,59 @@ class TestSearchV1Args:
         desc = next(m.description for m in meta if hasattr(m, "description"))
         assert "HTTP 400" in desc
         assert "never silently degrades" in desc
-        assert "varies by workflow" in desc
+
+    def test_page_reconciles_ranking_stability_with_limit(self):
+        """UAT round 7: limit claims stable ranking, page claimed not-strict-
+        offset. Empirically both are true — limit prefixes are stable, page
+        selection is independent. The page description must say this clearly
+        so the two parameters do not appear to contradict each other."""
+        from typing import get_args
+        import inspect
+        sig = inspect.signature(search)
+        meta = get_args(sig.parameters["page"].annotation)
+        desc = next(m.description for m in meta if hasattr(m, "description"))
+        assert "underlying ranking is stable" in desc
+        assert "not strict offset slicing" in desc
+
+    def test_date_filters_disclose_strict_iso_8601_requirement(self):
+        """UAT round 7 + empirical: malformed forms 400 except US-style
+        'MM-DD-YYYY' which silently accepts and produces wrong filtering.
+        Both filters need to disclose this so a driver does not assume any
+        date-shaped string parses."""
+        from typing import get_args
+        import inspect
+        sig = inspect.signature(search)
+        for name in ("after", "before"):
+            meta = get_args(sig.parameters[name].annotation)
+            desc = next(m.description for m in meta if hasattr(m, "description"))
+            assert "strict ISO 8601" in desc, f"{name} missing strict-ISO note"
+            assert "MM-DD-YYYY" in desc, f"{name} missing silent-accept gotcha"
+
+    def test_workflow_consolidates_images_caveat_and_default_equivalence(self):
+        """UAT round 7 item 6: three filters had been independently flagging
+        the 'images' workflow weakness; round 7 asked for a single consolidated
+        caveat on workflow. Item 7 minor: omitting workflow vs workflow='search'
+        should be stated equivalent."""
+        from typing import get_args
+        import inspect
+        sig = inspect.signature(search)
+        meta = get_args(sig.parameters["workflow"].annotation)
+        desc = next(m.description for m in meta if hasattr(m, "description"))
+        assert "equivalent to workflow='search'" in desc
+        assert "'images' workflow does not respond predictably" in desc
+
+    def test_lens_id_discloses_case_sensitivity_and_operator_intersection(self):
+        """UAT round 7 items 3 and 4: lens slugs are case-sensitive (empirically
+        confirmed by three case variants returning different results), and
+        site:/filetype: query operators intersect with the lens scope
+        (confirmed by site:reddit.com + academic lens returning empty)."""
+        from typing import get_args
+        import inspect
+        sig = inspect.signature(search)
+        meta = get_args(sig.parameters["lens_id"].annotation)
+        desc = next(m.description for m in meta if hasattr(m, "description"))
+        assert "Slugs are case-sensitive" in desc
+        assert "intersects with any 'site:' / 'filetype:' operators" in desc
 
     def test_lens_id_discloses_silent_fallback_and_news360_distinction(self):
         """Empirical UAT round-6 findings: unknown lens slugs do not error —
@@ -693,6 +745,55 @@ class TestSearchV1Args:
         assert "'videos'" in result
         # Driver-actionable remediation is named so the LLM can recover.
         assert "Retry without lens_id" in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_lens_id_wrong_case_emits_warning(self, _kagi_key):
+        respx.post("https://kagi.com/api/v1/search").mock(
+            return_value=httpx.Response(
+                200,
+                json={"meta": {"trace": "t", "ms": 1, "node": "x"},
+                      "data": {"search": []}},
+            )
+        )
+
+        result = await search("async", lens_id="Programming")
+
+        assert "warning:" in result
+        assert "'Programming' differs in case from the built-in slug 'programming'" in result
+        assert "Retry with 'programming'" in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_lens_id_correct_case_no_warning(self, _kagi_key):
+        respx.post("https://kagi.com/api/v1/search").mock(
+            return_value=httpx.Response(
+                200,
+                json={"meta": {"trace": "t", "ms": 1, "node": "x"},
+                      "data": {"search": []}},
+            )
+        )
+
+        result = await search("async", lens_id="programming")
+        assert "differs in case" not in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_lens_id_unknown_slug_no_case_warning(self, _kagi_key):
+        """A slug that does not lowercase to any built-in does NOT trigger the
+        case-mismatch warning — only the existing 'cannot confirm the lens
+        engaged' prose covers it (in the parameter description, not runtime).
+        Avoids noise on legitimate user-supplied lens IDs."""
+        respx.post("https://kagi.com/api/v1/search").mock(
+            return_value=httpx.Response(
+                200,
+                json={"meta": {"trace": "t", "ms": 1, "node": "x"},
+                      "data": {"search": []}},
+            )
+        )
+
+        result = await search("test", lens_id="totally-custom-lens")
+        assert "differs in case" not in result
 
     @pytest.mark.asyncio
     @respx.mock

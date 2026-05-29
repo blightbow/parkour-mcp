@@ -430,10 +430,16 @@ async def search(
     workflow: Annotated[Optional[_WorkflowType], Field(
         description=(
             "Result category. Omit for 'search' (web results with "
-            "related-query suggestions). Other workflows surface only "
-            "their named primary category: 'images' returns image "
-            "hits, 'videos' returns video hits, 'news' returns news "
-            "articles, 'podcasts' returns podcast episodes."
+            "related-query suggestions); omitting is equivalent to "
+            "workflow='search'. Other workflows surface only their "
+            "named primary category: 'images' returns image hits, "
+            "'videos' returns video hits, 'news' returns news "
+            "articles, 'podcasts' returns podcast episodes. The "
+            "'images' workflow does not respond predictably to most "
+            "filters — region has no visible effect, after/before "
+            "often do not engage (image results commonly lack date "
+            "metadata), and lens_id may filter to empty or be "
+            "silently ignored."
         ),
     )] = None,
     lens_id: Annotated[Optional[str], Field(
@@ -443,33 +449,41 @@ async def search(
             "region, time window) before any filters set here take "
             "effect. Designed for the default 'search' workflow; on "
             "other workflows the lens may be silently ignored or may "
-            "filter results to empty. Unknown slugs are not rejected "
-            "— they fall back silently to results that ignore the "
-            "lens, so the response cannot confirm the lens engaged. "
-            "The 'region', 'after', and 'before' parameters override "
-            "the lens's equivalents when both are supplied. Accepted "
-            "forms: a built-in lens slug (lowercase display name with "
-            "spaces preserved; always-available slugs are 'forums', "
-            "'programming', 'news 360', 'fediverse forums', "
-            "'usenet/archive', 'academic', 'pdfs', 'kagi "
-            "documentation' — note that 'news 360' is a web-search "
-            "lens distinct from the 'news' workflow), a shareable "
-            "lens ID (the ID portion of https://kagi.com/lenses/<id>), "
-            "or the full lens URL. User-created lenses have no "
-            "programmatic discovery path — pass null unless the user "
-            "has handed you one."
+            "filter results to empty. Slugs are case-sensitive — use "
+            "'programming', not 'Programming'; wrong case silently "
+            "falls back like an unknown slug. Unknown slugs are not "
+            "rejected — they fall back silently to results that "
+            "ignore the lens, so the response cannot confirm the lens "
+            "engaged. The lens's site / filetype scope intersects "
+            "with any 'site:' / 'filetype:' operators in the query — "
+            "a conflict (e.g. 'site:reddit.com' with the 'academic' "
+            ".edu lens) returns empty. The 'region', 'after', and "
+            "'before' parameters override the lens's equivalents when "
+            "both are supplied. Accepted forms: a built-in lens slug "
+            "(lowercase display name with spaces preserved; always-"
+            "available slugs are 'forums', 'programming', 'news 360', "
+            "'fediverse forums', 'usenet/archive', 'academic', 'pdfs', "
+            "'kagi documentation' — note that 'news 360' is a web-"
+            "search lens distinct from the 'news' workflow), a "
+            "shareable lens ID (the ID portion of "
+            "https://kagi.com/lenses/<id>), or the full lens URL. "
+            "User-created lenses have no programmatic discovery path "
+            "— pass null unless the user has handed you one."
         ),
     )] = None,
     page: Annotated[Optional[int], Field(
         description=(
             "Page number, 1-indexed (1..10). Page size is 'limit'; max "
-            "practical reach is page × limit. Pagination is not strict "
-            "offset — adjacent pages can share some URLs, so deduplicate "
-            "downstream when consuming multiple pages. Repeated calls to "
-            "the same page return identical results in identical order. "
-            "Deep paging needs a larger 'limit' — at the default limit=5, "
-            "page=10 only reaches ~result 50. Omit (or pass null) for "
-            "the first page. Applies across all workflows."
+            "practical reach is page × limit. The underlying ranking "
+            "is stable — limit=N page=1 always returns the same top "
+            "N — but adjacent pages can share some URLs because page "
+            "selection is not strict offset slicing, so deduplicate "
+            "downstream when consuming multiple pages. Repeated calls "
+            "to the same page return identical results in identical "
+            "order. Deep paging needs a larger 'limit' — at the "
+            "default limit=5, page=10 only reaches ~result 50. Omit "
+            "(or pass null) for the first page. Applies across all "
+            "workflows."
         ),
         ge=1, le=10,
     )] = None,
@@ -482,30 +496,33 @@ async def search(
             "Bad codes (unknown values, wrong case) return HTTP 400 "
             "with a structured error — the filter never silently "
             "degrades. Pins both region and result language; there is "
-            "no separate language argument. Effectiveness varies by "
-            "workflow — strongest on web search and news, weak or "
-            "absent on images. Omit to skip regional localization. "
-            "Overrides lens_id's region."
+            "no separate language argument. Omit to skip regional "
+            "localization. Overrides lens_id's region."
         ),
     )] = None,
     after: Annotated[Optional[str], Field(
         description=(
-            "ISO 8601 date 'YYYY-MM-DD' (e.g. '2025-01-01'). Returns "
+            "ISO 8601 date 'YYYY-MM-DD' (e.g. '2025-01-01'). Dates "
+            "must be strict ISO 8601 — other forms either return HTTP "
+            "400 (search.filters_after_invalid) or are silently "
+            "accepted with incorrect filtering (US-style "
+            "'MM-DD-YYYY' is the known silent-accept case). Returns "
             "only results published or updated on or after this date. "
-            "Results that lack a detectable date are silently excluded "
-            "— on workflows where results commonly carry no date "
-            "('images' especially), this filter can produce few or no "
-            "results. Overrides any date floor carried by 'lens_id'."
+            "Results that lack a detectable date are silently "
+            "excluded. Overrides any date floor carried by 'lens_id'."
         ),
     )] = None,
     before: Annotated[Optional[str], Field(
         description=(
-            "ISO 8601 date 'YYYY-MM-DD' (e.g. '2025-12-31'). Returns "
-            "only results published or updated on or before this date. "
-            "Results that lack a detectable date are silently excluded "
-            "— on workflows where results commonly carry no date "
-            "('images' especially), this filter can produce few or no "
-            "results. Overrides any date ceiling carried by 'lens_id'."
+            "ISO 8601 date 'YYYY-MM-DD' (e.g. '2025-12-31'). Dates "
+            "must be strict ISO 8601 — other forms either return HTTP "
+            "400 (search.filters_before_invalid) or are silently "
+            "accepted with incorrect filtering (US-style "
+            "'MM-DD-YYYY' is the known silent-accept case). Returns "
+            "only results published or updated on or before this "
+            "date. Results that lack a detectable date are silently "
+            "excluded. Overrides any date ceiling carried by "
+            "'lens_id'."
         ),
     )] = None,
 ) -> str:
@@ -616,6 +633,20 @@ async def search(
             "designed for the default 'search' workflow. Retry without "
             "lens_id to compare.",
         )
+
+    if lens_id is not None:
+        lens_lower = lens_id.lower()
+        if lens_id != lens_lower:
+            known_slugs = {str(entry["slug"]) for entry in _DEFAULT_LENSES}
+            if lens_lower in known_slugs:
+                _append_frontmatter_entry(
+                    fm_entries, "warning",
+                    f"lens_id={lens_id!r} differs in case from the "
+                    f"built-in slug {lens_lower!r}; Kagi treats "
+                    "wrong-case slugs as unknown and silently falls "
+                    f"back. Retry with {lens_lower!r} to engage the "
+                    "lens.",
+                )
 
     if region is not None and workflow == "images":
         _append_frontmatter_entry(
