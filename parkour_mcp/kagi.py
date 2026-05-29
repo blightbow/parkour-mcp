@@ -9,10 +9,11 @@ load-bearing for that second tool and retire when the migration completes.
 
 import logging
 from pathlib import Path
-from typing import Any, Literal, Optional
+from typing import Annotated, Any, Literal, Optional
 
 import httpx
 from kagiapi import KagiClient
+from pydantic import Field
 
 from .common import _API_USER_AGENT, clean_env, tool_name
 from .markdown import (
@@ -38,6 +39,8 @@ _NO_KEY_MSG = (
 
 _V1_BASE = "https://kagi.com/api/v1"
 _V1_TIMEOUT = 30.0
+
+_WorkflowType = Literal["search", "images", "videos", "news", "podcasts"]
 
 # Workflow → primary result key in the v1 response's data object.  Confirmed
 # against the live endpoint: every workflow uses the singular form (video,
@@ -241,54 +244,82 @@ def _format_result_line(item: dict) -> str:
 
 
 async def search(
-    query: str,
-    limit: int = 5,
+    query: Annotated[str, Field(
+        description=(
+            "Search query string. Supports operators: site:example.com "
+            "(restrict to a domain), filetype:pdf (restrict to a file "
+            "type), intitle:term (match in page title), inurl:term "
+            '(match in URL), "exact phrase" (exact match), '
+            "+term / -term (require / exclude), (A AND B) / (A OR B) "
+            "(boolean grouping), * (wildcard word substitution)."
+        ),
+    )],
+    limit: Annotated[int, Field(
+        description=(
+            "Maximum number of results to return. Default 5; the v1 "
+            "API caps this at 1024 per page. Caps the response size "
+            "only — Kagi still selects its top results internally."
+        ),
+        ge=1, le=1024,
+    )] = 5,
     *,
-    workflow: Optional[str] = None,
-    lens_id: Optional[str] = None,
-    page: Optional[int] = None,
-    region: Optional[str] = None,
-    after: Optional[str] = None,
-    before: Optional[str] = None,
+    workflow: Annotated[Optional[_WorkflowType], Field(
+        description=(
+            "Result category. Omit (or pass null) for the default "
+            "'search' workflow, which returns web results with "
+            "related-query suggestions. Other workflows surface only "
+            "their named primary category: 'images' returns image "
+            "hits, 'videos' returns video hits, 'news' returns news "
+            "articles, 'podcasts' returns podcast episodes. The "
+            "frontmatter source label reflects the workflow ('kagi "
+            "videos: <query>')."
+        ),
+    )] = None,
+    lens_id: Annotated[Optional[str], Field(
+        description=(
+            "Kagi Lens to apply. A lens scopes the search to user-"
+            "configured site, keyword, and region rules before any "
+            "filters set here take effect. Accepts a built-in lens "
+            "slug, a shareable lens ID (the ID portion of "
+            "https://kagi.com/lenses/<id>), or the full lens URL. "
+            "Lenses must be configured first at "
+            "https://kagi.com/settings/lenses (and made shareable for "
+            "non-built-in lenses); without that setup, no value is "
+            "applicable here."
+        ),
+    )] = None,
+    page: Annotated[Optional[int], Field(
+        description=(
+            "Page number, 1-indexed, in the range 1..10. Page size is "
+            "controlled by 'limit': page=2 with limit=10 returns "
+            "results 11..20. Omit (or pass null) for the first page."
+        ),
+        ge=1, le=10,
+    )] = None,
+    region: Annotated[Optional[str], Field(
+        description=(
+            "ISO 3166-1 alpha-2 country code (e.g. 'US', 'DE', 'JP') "
+            "that localizes results to the named region. See "
+            "https://help.kagi.com/api/regions for the supported set. "
+            "Overrides any region carried by 'lens_id'."
+        ),
+    )] = None,
+    after: Annotated[Optional[str], Field(
+        description=(
+            "ISO 8601 date 'YYYY-MM-DD' (e.g. '2025-01-01'). Returns "
+            "only results published or updated on or after this date. "
+            "Overrides any date floor carried by 'lens_id'."
+        ),
+    )] = None,
+    before: Annotated[Optional[str], Field(
+        description=(
+            "ISO 8601 date 'YYYY-MM-DD' (e.g. '2025-12-31'). Returns "
+            "only results published or updated on or before this date. "
+            "Overrides any date ceiling carried by 'lens_id'."
+        ),
+    )] = None,
 ) -> str:
-    """Search the web using Kagi's curated search index.
-
-    Use this as an alternative to the built-in WebSearch tool when WebSearch
-    returns few or poor quality results. Kagi's index is independently curated,
-    resistant to SEO spam, and may surface different sources. Returns raw search
-    results with snippets and timestamps, plus related search suggestions.
-
-    Supports search operators in the query string:
-    - site:example.com — restrict to a domain
-    - filetype:pdf — restrict to a file type
-    - intitle:term — match in page title
-    - inurl:term — match in URL
-    - "exact phrase" — exact match
-    - +term / -term — require / exclude a term
-    - (A AND B), (A OR B) — boolean grouping, e.g. recipes (szechuan OR cantonese)
-    - * — wildcard word substitution, e.g. best * ever
-
-    Args:
-        query: The search query (supports operators above)
-        limit: Maximum number of results to return (default 5; max 1024)
-        workflow: Result category to return. One of ``search`` (default),
-            ``images``, ``videos``, ``news``, ``podcasts``. The default
-            web-search workflow surfaces related-query suggestions; other
-            workflows surface their own primary result category only.
-        lens_id: Apply a Kagi Lens to the search. Accepts a built-in lens
-            identifier or a shareable lens ID from
-            ``https://kagi.com/settings/lenses``. The lens scopes the search
-            (site restrictions, keyword filters, region) before user filters
-            apply.
-        page: Page number for paginated results (1..10).
-        region: ISO 3166-1 alpha-2 country code to localize results
-            (e.g. ``US``, ``DE``, ``JP``). See
-            https://help.kagi.com/api/regions for the supported set.
-        after: Return only results published or updated on or after this
-            ISO date (``YYYY-MM-DD``).
-        before: Return only results published or updated on or before this
-            ISO date (``YYYY-MM-DD``).
-    """
+    """Search the web using Kagi's curated v1 search index."""
     api_key = get_api_key()
     if not api_key:
         return _NO_KEY_MSG
