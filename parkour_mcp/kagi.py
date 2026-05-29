@@ -443,16 +443,21 @@ async def search(
             "region, time window) before any filters set here take "
             "effect. Designed for the default 'search' workflow; on "
             "other workflows the lens may be silently ignored or may "
-            "filter results to empty. The 'region', 'after', and "
-            "'before' parameters override the lens's equivalents when "
-            "both are supplied. Accepted forms: a built-in lens slug "
-            "(lowercase display name with spaces preserved; always-"
-            "available slugs are 'forums', 'programming', 'news 360', "
-            "'fediverse forums', 'usenet/archive', 'academic', 'pdfs', "
-            "'kagi documentation'), a shareable lens ID (the ID portion "
-            "of https://kagi.com/lenses/<id>), or the full lens URL. "
-            "User-created lenses have no programmatic discovery path "
-            "— pass null unless the user has handed you one."
+            "filter results to empty. Unknown slugs are not rejected "
+            "— they fall back silently to results that ignore the "
+            "lens, so the response cannot confirm the lens engaged. "
+            "The 'region', 'after', and 'before' parameters override "
+            "the lens's equivalents when both are supplied. Accepted "
+            "forms: a built-in lens slug (lowercase display name with "
+            "spaces preserved; always-available slugs are 'forums', "
+            "'programming', 'news 360', 'fediverse forums', "
+            "'usenet/archive', 'academic', 'pdfs', 'kagi "
+            "documentation' — note that 'news 360' is a web-search "
+            "lens distinct from the 'news' workflow), a shareable "
+            "lens ID (the ID portion of https://kagi.com/lenses/<id>), "
+            "or the full lens URL. User-created lenses have no "
+            "programmatic discovery path — pass null unless the user "
+            "has handed you one."
         ),
     )] = None,
     page: Annotated[Optional[int], Field(
@@ -474,28 +479,33 @@ async def search(
             "'US'). Codes include lowercase ISO 3166-1 alpha-2 forms "
             "like 'us', 'de', 'jp', plus language-suffix variants for "
             "multilingual countries like 'ca_fr' (Canada in French). "
-            "Pins both region and result language — there is no "
-            "separate language argument. Omit to skip regional "
-            "localization. Applies across all workflows. Overrides "
-            "lens_id's region."
+            "Bad codes (unknown values, wrong case) return HTTP 400 "
+            "with a structured error — the filter never silently "
+            "degrades. Pins both region and result language; there is "
+            "no separate language argument. Effectiveness varies by "
+            "workflow — strongest on web search and news, weak or "
+            "absent on images. Omit to skip regional localization. "
+            "Overrides lens_id's region."
         ),
     )] = None,
     after: Annotated[Optional[str], Field(
         description=(
             "ISO 8601 date 'YYYY-MM-DD' (e.g. '2025-01-01'). Returns "
             "only results published or updated on or after this date. "
-            "Results that lack a detectable date are silently excluded. "
-            "Applies across all workflows. Overrides any date floor "
-            "carried by 'lens_id'."
+            "Results that lack a detectable date are silently excluded "
+            "— on workflows where results commonly carry no date "
+            "('images' especially), this filter can produce few or no "
+            "results. Overrides any date floor carried by 'lens_id'."
         ),
     )] = None,
     before: Annotated[Optional[str], Field(
         description=(
             "ISO 8601 date 'YYYY-MM-DD' (e.g. '2025-12-31'). Returns "
             "only results published or updated on or before this date. "
-            "Results that lack a detectable date are silently excluded. "
-            "Applies across all workflows. Overrides any date ceiling "
-            "carried by 'lens_id'."
+            "Results that lack a detectable date are silently excluded "
+            "— on workflows where results commonly carry no date "
+            "('images' especially), this filter can produce few or no "
+            "results. Overrides any date ceiling carried by 'lens_id'."
         ),
     )] = None,
 ) -> str:

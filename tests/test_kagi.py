@@ -589,6 +589,35 @@ class TestSearchV1Args:
         assert "deduplicate" in desc
         assert "identical results in identical order" in desc
 
+    def test_region_discloses_failure_mode_and_workflow_variance(self):
+        """Empirical UAT round-6 findings: bad region codes return HTTP 400
+        with structured errors (never silent), and region's effect varies by
+        workflow (strong on web/news, weak/absent on images). Both have to
+        stay in the prose because they shape the driver's expectations of
+        what going wrong with this argument looks like."""
+        from typing import get_args
+        import inspect
+        sig = inspect.signature(search)
+        meta = get_args(sig.parameters["region"].annotation)
+        desc = next(m.description for m in meta if hasattr(m, "description"))
+        assert "HTTP 400" in desc
+        assert "never silently degrades" in desc
+        assert "varies by workflow" in desc
+
+    def test_lens_id_discloses_silent_fallback_and_news360_distinction(self):
+        """Empirical UAT round-6 findings: unknown lens slugs do not error —
+        Kagi silently degrades to results that ignore the lens. Separately,
+        'news 360' is a web-search lens, not the news workflow, so the
+        Field description disambiguates the two."""
+        from typing import get_args
+        import inspect
+        sig = inspect.signature(search)
+        meta = get_args(sig.parameters["lens_id"].annotation)
+        desc = next(m.description for m in meta if hasattr(m, "description"))
+        assert "Unknown slugs are not rejected" in desc
+        assert "fall back silently" in desc
+        assert "'news 360' is a web-search lens distinct from the 'news' workflow" in desc
+
     def test_date_filters_disclose_undated_result_exclusion(self):
         """Empirical UAT finding: after/before silently drop results that
         carry no detectable date. Disclosing this in both filters keeps a
