@@ -3,9 +3,11 @@
 import socket
 from unittest.mock import patch
 
+import httpx
 import pytest
+import respx
 
-from parkour_mcp.common import check_url_ssrf, _is_private_ip
+from parkour_mcp.common import check_url_ssrf, _is_private_ip, guarded_fetch
 
 
 class TestIsPrivateIp:
@@ -115,3 +117,52 @@ class TestCheckUrlSsrf:
         with patch("parkour_mcp.common.socket.getaddrinfo", return_value=fake_addrinfo):
             result = check_url_ssrf("http://dual-homed.example.com/")
             assert result is not None
+
+
+class TestGuardedFetchHttp2Fallback:
+    """guarded_fetch issues HTTP/2 and pivots to HTTP/1.1 on a broken-h2 server.
+
+    ALPN downgrade for HTTP/1.1-only origins is automatic inside httpx and
+    needs no fallback; the only failure these tests cover is an origin that
+    *negotiates* HTTP/2 and then violates the protocol mid-flight.
+    """
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_remote_protocol_error_retries_on_http1(self):
+        """RemoteProtocolError on the first (HTTP/2) attempt retries once, and
+        the HTTP/1.1 attempt's response is returned."""
+        route = respx.get("https://example.com/doc").mock(
+            side_effect=[
+                httpx.RemoteProtocolError("server broke HTTP/2"),
+                httpx.Response(200, text="recovered"),
+            ]
+        )
+        resp = await guarded_fetch("https://example.com/doc")
+        assert resp.status_code == 200
+        assert resp.text == "recovered"
+        assert route.call_count == 2
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_remote_protocol_error_both_attempts_propagates(self):
+        """If the HTTP/1.1 retry also fails, the error surfaces — exactly one
+        retry, no loop."""
+        route = respx.get("https://example.com/doc").mock(
+            side_effect=httpx.RemoteProtocolError("broken both ways")
+        )
+        with pytest.raises(httpx.RemoteProtocolError):
+            await guarded_fetch("https://example.com/doc")
+        assert route.call_count == 2
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_clean_response_makes_no_retry(self):
+        """A clean first response is returned with a single request."""
+        route = respx.get("https://example.com/doc").mock(
+            return_value=httpx.Response(200, text="ok")
+        )
+        resp = await guarded_fetch("https://example.com/doc")
+        assert resp.status_code == 200
+        assert resp.text == "ok"
+        assert route.call_count == 1

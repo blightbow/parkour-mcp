@@ -209,3 +209,25 @@ class TestLiveRequiresJs:
         )
         assert "tip:" in result
         assert "detects JavaScript-shell pages" in result
+
+
+class TestLiveAkamaiHttp2:
+    """HTTP/2 + browser-coherent headers clear Akamai Bot Manager 403s."""
+
+    # Akamai-fronted PDF on Whirlpool's CDN.  Over HTTP/1.1 with a bare UA it
+    # 403s; HTTP/2 plus the Sec-Fetch/Client-Hint headers clear it.  Asserted at
+    # the guarded_fetch layer because PDF *content* support is a separate
+    # content-type concern — here we only prove the transport-level block is gone.
+    AKAMAI_PDF = (
+        "https://www.maytag.com/content/dam/global/documents/"
+        "201801/techsheet-w10828193-revd.pdf"
+    )
+
+    @pytest.mark.asyncio
+    async def test_guarded_fetch_clears_akamai_403(self):
+        from parkour_mcp.common import guarded_fetch
+
+        resp = await guarded_fetch(self.AKAMAI_PDF, max_bytes=None)
+        assert resp.status_code == 200
+        assert resp.http_version == "HTTP/2"
+        assert resp.content[:5] == b"%PDF-"

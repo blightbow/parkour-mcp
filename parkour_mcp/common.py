@@ -26,11 +26,39 @@ _PLATFORM = platform.system()  # "Darwin", "Linux", "Windows"
 # ---------------------------------------------------------------------------
 # User-Agent strings
 # ---------------------------------------------------------------------------
-# Browser-spoofing UA for HTML page fetches (sites expect a browser)
+# Browser-spoofing identity for HTML page fetches (sites expect a browser).
+# Everything that encodes the Chrome version is derived from _CHROME_MAJOR so
+# the User-Agent and the Client-Hint headers can never drift out of sync.  WAFs
+# weight UA-vs-Client-Hint *inconsistency*, not the version number itself, so
+# coherence matters more than currency — bumping Chrome is a one-line change.
+_CHROME_MAJOR = "149"
+
+# The Sec-Fetch-* quad describes a top-level, user-initiated navigation with no
+# referrer, which is exactly what a parkour fetch is (a human asked for this
+# URL).  Sending them — plus the Client Hints a real Chrome always emits — is
+# what clears modern WAF consistency checks: Akamai Bot Manager 403s an
+# otherwise-Chrome request that arrives without them (and over HTTP/1.1; see
+# guarded_fetch).
 _FETCH_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.5",
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        f"Chrome/{_CHROME_MAJOR}.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "sec-ch-ua": (
+        f'"Chromium";v="{_CHROME_MAJOR}", '
+        f'"Google Chrome";v="{_CHROME_MAJOR}", '
+        '"Not_A Brand";v="99"'
+    ),
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": '"macOS"',
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Upgrade-Insecure-Requests": "1",
 }
 
 def clean_env(name: str) -> str:
@@ -367,6 +395,15 @@ async def guarded_fetch(
     fast path, for example).  Layer 3 still defends against slow-drip
     firehoses that per-phase timeouts can't catch.
 
+    The request is issued over **HTTP/2** when the origin supports it (ALPN
+    negotiation, with automatic, transparent fallback to HTTP/1.1 for
+    HTTP/1.1-only origins).  Speaking HTTP/2 is required by some WAFs (e.g.
+    Akamai Bot Manager) that treat an HTTP/1.1 request carrying a modern-Chrome
+    User-Agent as internally inconsistent and 403 it.  If an origin negotiates
+    HTTP/2 and then violates the protocol — a rare server bug, or a stale
+    pooled connection — the fetch retries once on HTTP/1.1, the more
+    battle-hardened transport, before surfacing the error.
+
     Returns a fully-buffered ``httpx.Response`` (i.e. ``response.text`` works
     synchronously after this call).
 
@@ -379,46 +416,60 @@ async def guarded_fetch(
     if headers is None:
         headers = dict(_FETCH_HEADERS)
 
+    async def _attempt(http2: bool) -> httpx.Response:
+        async with httpx.AsyncClient(
+            follow_redirects=follow_redirects,
+            timeout=timeout,
+            http2=http2,
+        ) as client:
+            async with client.stream("GET", url, headers=headers) as resp:
+                # Layer 1: Content-Length gate
+                if max_bytes is not None:
+                    cl = resp.headers.get("content-length")
+                    if cl is not None:
+                        try:
+                            if int(cl) > max_bytes:
+                                raise ResponseTooLarge(
+                                    f"Content-Length {cl} exceeds "
+                                    f"{max_bytes:,} byte limit"
+                                )
+                        except ValueError:
+                            pass  # malformed header — fall through to streaming
+
+                # Layer 2: streaming size cap
+                chunks: list[bytes] = []
+                total = 0
+                async for chunk in resp.aiter_bytes(chunk_size=65_536):
+                    total += len(chunk)
+                    if max_bytes is not None and total > max_bytes:
+                        raise ResponseTooLarge(
+                            f"Response body exceeded {max_bytes:,} "
+                            f"byte limit at {total:,} bytes"
+                        )
+                    chunks.append(chunk)
+
+                # Populate _content so .text / .json() work after the
+                # stream context exits — same attr httpx uses internally.
+                resp._content = b"".join(chunks)
+        # The response object (headers, status_code, _content) survives the
+        # context-manager exit; only the transport is closed.
+        return resp
+
     try:
         async with asyncio.timeout(deadline):
-            async with httpx.AsyncClient(
-                follow_redirects=follow_redirects,
-                timeout=timeout,
-            ) as client:
-                async with client.stream("GET", url, headers=headers) as resp:
-                    # Layer 1: Content-Length gate
-                    if max_bytes is not None:
-                        cl = resp.headers.get("content-length")
-                        if cl is not None:
-                            try:
-                                if int(cl) > max_bytes:
-                                    raise ResponseTooLarge(
-                                        f"Content-Length {cl} exceeds "
-                                        f"{max_bytes:,} byte limit"
-                                    )
-                            except ValueError:
-                                pass  # malformed header — fall through to streaming
-
-                    # Layer 2: streaming size cap
-                    chunks: list[bytes] = []
-                    total = 0
-                    async for chunk in resp.aiter_bytes(chunk_size=65_536):
-                        total += len(chunk)
-                        if max_bytes is not None and total > max_bytes:
-                            raise ResponseTooLarge(
-                                f"Response body exceeded {max_bytes:,} "
-                                f"byte limit at {total:,} bytes"
-                            )
-                        chunks.append(chunk)
-
-                    # Populate _content so .text / .json() work after the
-                    # stream context exits — same attr httpx uses internally.
-                    resp._content = b"".join(chunks)
+            try:
+                return await _attempt(http2=True)
+            except httpx.RemoteProtocolError:
+                # The origin negotiated HTTP/2 via ALPN, then broke the
+                # protocol (a buggy server stack, or a stale pooled h2
+                # connection).  HTTP/1.1 is the more battle-hardened
+                # transport; retry once on it, sharing the same wall-clock
+                # deadline, before letting the error surface.
+                _logger.debug(
+                    "HTTP/2 RemoteProtocolError for %s; retrying on HTTP/1.1", url
+                )
+                return await _attempt(http2=False)
     except TimeoutError:
         raise httpx.ReadTimeout(
             f"Wall-clock deadline of {deadline}s exceeded for {url}"
         )
-
-    # The response object (headers, status_code, _content) survives the
-    # context-manager exit; only the transport is closed.
-    return resp

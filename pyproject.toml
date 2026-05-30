@@ -12,7 +12,7 @@ dependencies = [
     "mcp[cli]",
     "kagiapi",
     "beautifulsoup4",
-    "httpx",
+    "httpx[http2]",
     "curl-cffi>=0.15.0",
     "playwright",
     "markdownify",
