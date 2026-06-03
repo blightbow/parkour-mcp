@@ -331,7 +331,7 @@ Conditional:
 | `hint`             | BM25 search, slice retrieval, and `web_fetch_sections` (incl. TOC pagination guidance) |
 | `note`             | Section extraction depth warning, or `web_fetch_sections` slice-clamp explanation |
 | `shelf`            | Research shelf tracking status (auto-tracked papers) |
-| `api`              | API origin identifier (e.g. `GitHub`, `GitHub (raw)`, `Reddit (.json)`, `arXiv`) |
+| `api`              | API origin identifier (e.g. `GitHub`, `GitHub (raw)`, `Reddit (oauth.reddit.com)`, `arXiv`) |
 | `language`         | GitHub blob: file extension (e.g. `py`, `ts`) |
 | `definitions`      | GitHub blob via `web_fetch_sections`: count of extracted code definitions |
 | `type`             | GitHub issue/PR: `issue` or `pull_request` |

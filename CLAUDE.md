@@ -52,7 +52,7 @@ API integration modules, each self-contained:
 - **`semantic_scholar.py`** — S2 API with optimized field sets per query type. 1s rate limit (higher with `S2_API_KEY`).
 - **`doi.py`** — DOI resolution via content negotiation. Registration agency detection. DataCite enrichment (ORCID, affiliations, licenses).
 - **`mediawiki.py`** — Wikipedia/MediaWiki API. Probes for api.php endpoint. Full-page fetch with downstream section filtering.
-- **`reddit.py`** — Reddit fast path via `old.reddit.com` `.json` endpoint. URL rewriting, comment tree parsing, section-based comment navigation. 2s rate limit.
+- **`reddit.py`** — Reddit fast path via the `oauth.reddit.com` API with a *userless* OAuth token. Reddit retired the unauthenticated `.json` endpoints on 2026-05-29; access now requires a bearer token. Mirrors redlib (`redlib-org/redlib`, `src/oauth.rs` + `src/client.rs`): two-tier token acquisition (`_mint_mobile_token` against the Android-app loid grant, `_mint_web_token` generic-web fallback), background refresh daemon (`_token_daemon`, refreshes ~120s before expiry), reactive refresh on 401 (`_force_refresh_token`), and in-band JSON error mapping (`_check_reddit_json_error`: suspended / quarantined / gated / private / banned). Client IDs are Reddit's own first-party app credentials (`_ANDROID_OAUTH_CLIENT_ID`, `_WEB_OAUTH_CLIENT_ID`), not a third party's. The returned JSON shape is identical to the old `.json` endpoint, so the formatters (`_format_comment_thread`, `_format_listing`, `_build_comment_section_tree`, `_split_by_comments`) are unchanged. URL rewriting, comment tree parsing, section-based comment navigation. 2s rate limit; token cache is session-scoped.
 <!-- [[[cog
 import sys; sys.path.insert(0, "scripts")
 from cog_helpers import action_list
@@ -167,7 +167,7 @@ Public RCs are supported end-to-end. commitizen's `version_scheme = "pep440"` em
 - Parameter conflicts (e.g., `search` + `section`) resolve by picking the strongest signal and emitting a warning, never an error.
 - Rate limiters (`common.py`) use `asyncio.Lock` to serialize concurrent API calls; the second caller sleeps only for the remaining interval.
 - arXiv `/html/` URLs are intentionally NOT fast-pathed — they contain full rendered text worth slicing, unlike `/abs/` which is just metadata.
-- Reddit fast path uses browser UA (`_FETCH_HEADERS`), not API UA — the `.json` endpoint is a page variant, not a formal API, and Reddit blocks bot UAs on unauthenticated requests. This is intentionally NOT the official Reddit API; it requires no OAuth, no API key, and no approval process.
+- Reddit fast path authenticates with a *userless* OAuth token against `oauth.reddit.com`, minted via Reddit's own logged-out mobile-app grant (mirroring redlib). It uses `curl_cffi` with a Safari TLS profile (`_IMPERSONATE_PROFILE`) to clear Reddit's JA3 filter, plus spoofed Android device headers on the token mint. This is the userless/anonymous OAuth lane (no user account, no API key, no app registration), NOT a registered-app integration. The unauthenticated `.json` endpoints it formerly used were retired by Reddit on 2026-05-29.
 - Discourse fast path uses post-fetch header detection (`x-discourse-route`), not URL pattern matching. This is the only fast path that operates after the initial HTTP fetch rather than before it. Per-host rate limiting via `_discourse_limiters` dict (lazy-initialized, 1s default).
 
 ## Code references

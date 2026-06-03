@@ -875,7 +875,7 @@ async def _reddit_fast_path(url: str, max_tokens: int = 5000) -> Optional[str]:
 
     fm_entries = FMEntries({
         "source": url,
-        "api": "Reddit (.json)",
+        "api": "Reddit (oauth.reddit.com)",
         "trust": _TRUST_ADVISORY,
     })
     if trunc_hint:

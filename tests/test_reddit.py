@@ -1,8 +1,11 @@
 """Tests for the Reddit fast path."""
 
+import time
+
 import pytest
 from curl_cffi.requests import exceptions as cc_exc
 
+import parkour_mcp.reddit as reddit_mod
 from parkour_mcp.reddit import (
     _detect_reddit_url,
     _classify_reddit_url,
@@ -15,6 +18,7 @@ from parkour_mcp.reddit import (
     _format_relative_time,
     _build_comment_section_tree,
     _split_by_comments,
+    _check_reddit_json_error,
     _MAX_COMMENT_DEPTH,
     RedditPageType,
 )
@@ -222,6 +226,12 @@ class TestExtractCommentPermalink:
 class TestClassifyRedditUrl:
     def test_comment_thread(self):
         url = "https://old.reddit.com/r/Python/comments/abc123/title/"
+        assert _classify_reddit_url(url) == RedditPageType.COMMENT_THREAD
+
+    def test_comment_thread_without_subreddit_prefix(self):
+        # redd.it short links redirect to the subreddit-less /comments/{id}
+        # canonical form; it must still classify as a comment thread.
+        url = "https://old.reddit.com/comments/1t8r5sf/"
         assert _classify_reddit_url(url) == RedditPageType.COMMENT_THREAD
 
     def test_subreddit(self):
@@ -489,7 +499,7 @@ class TestFetchRedditContent:
     async def test_fetches_comment_thread(self, fake_async_session):
         url = "https://old.reddit.com/r/Python/comments/abc123/test/"
         fake_async_session.mock_get(
-            "https://old.reddit.com/r/Python/comments/abc123/test/.json",
+            "https://oauth.reddit.com/r/Python/comments/abc123/test/.json?raw_json=1",
             json_data=THREAD_JSON,
         )
 
@@ -501,7 +511,7 @@ class TestFetchRedditContent:
     async def test_fetches_subreddit_listing(self, fake_async_session):
         url = "https://old.reddit.com/r/Python/"
         fake_async_session.mock_get(
-            "https://old.reddit.com/r/Python/.json",
+            "https://oauth.reddit.com/r/Python/.json?raw_json=1",
             json_data=LISTING_JSON,
         )
 
@@ -513,7 +523,7 @@ class TestFetchRedditContent:
     async def test_http_error_returns_error_string(self, fake_async_session):
         url = "https://old.reddit.com/r/Python/comments/abc123/test/"
         fake_async_session.mock_get(
-            "https://old.reddit.com/r/Python/comments/abc123/test/.json",
+            "https://oauth.reddit.com/r/Python/comments/abc123/test/.json?raw_json=1",
             status=404,
         )
 
@@ -525,7 +535,7 @@ class TestFetchRedditContent:
     async def test_rate_limit_429(self, fake_async_session):
         url = "https://old.reddit.com/r/Python/"
         fake_async_session.mock_get(
-            "https://old.reddit.com/r/Python/.json",
+            "https://oauth.reddit.com/r/Python/.json?raw_json=1",
             status=429,
         )
 
@@ -536,7 +546,7 @@ class TestFetchRedditContent:
     async def test_timeout_returns_error(self, fake_async_session):
         url = "https://old.reddit.com/r/Python/"
         fake_async_session.raise_on_get(
-            "https://old.reddit.com/r/Python/.json",
+            "https://oauth.reddit.com/r/Python/.json?raw_json=1",
             cc_exc.Timeout("timeout"),
         )
 
@@ -553,7 +563,7 @@ class TestFetchRedditContent:
             final_url="https://www.reddit.com/r/Python/comments/abc123/test/",
         )
         fake_async_session.mock_get(
-            "https://old.reddit.com/r/Python/comments/abc123/test/.json",
+            "https://oauth.reddit.com/r/Python/comments/abc123/test/.json?raw_json=1",
             json_data=THREAD_JSON,
         )
 
@@ -570,14 +580,14 @@ class TestRedditFastPath:
     async def test_reddit_url_intercepted(self, fake_async_session):
         url = "https://www.reddit.com/r/Python/comments/abc123/test/"
         fake_async_session.mock_get(
-            "https://old.reddit.com/r/Python/comments/abc123/test/.json",
+            "https://oauth.reddit.com/r/Python/comments/abc123/test/.json?raw_json=1",
             json_data=THREAD_JSON,
         )
 
         result = await _reddit_fast_path(url)
         assert result is not None
         assert "Test Post Title" in result
-        assert "api: Reddit (.json)" in result
+        assert "api: Reddit (oauth.reddit.com)" in result
 
     @pytest.mark.asyncio
     async def test_non_reddit_url_returns_none(self):
@@ -588,7 +598,7 @@ class TestRedditFastPath:
     async def test_error_returns_string_not_none(self, fake_async_session):
         url = "https://www.reddit.com/r/Python/comments/abc123/test/"
         fake_async_session.mock_get(
-            "https://old.reddit.com/r/Python/comments/abc123/test/.json",
+            "https://oauth.reddit.com/r/Python/comments/abc123/test/.json?raw_json=1",
             status=500,
         )
 
@@ -600,7 +610,7 @@ class TestRedditFastPath:
     async def test_cache_populated(self, fake_async_session):
         url = "https://www.reddit.com/r/Python/comments/abc123/test/"
         fake_async_session.mock_get(
-            "https://old.reddit.com/r/Python/comments/abc123/test/.json",
+            "https://oauth.reddit.com/r/Python/comments/abc123/test/.json?raw_json=1",
             json_data=THREAD_JSON,
         )
 
@@ -615,7 +625,7 @@ class TestRedditFastPath:
         """BM25 search over cached Reddit content works."""
         url = "https://www.reddit.com/r/Python/comments/abc123/test/"
         fake_async_session.mock_get(
-            "https://old.reddit.com/r/Python/comments/abc123/test/.json",
+            "https://oauth.reddit.com/r/Python/comments/abc123/test/.json?raw_json=1",
             json_data=THREAD_JSON,
         )
 
@@ -630,7 +640,7 @@ class TestRedditFastPath:
         """Output should have content fencing for untrusted content."""
         url = "https://www.reddit.com/r/Python/comments/abc123/test/"
         fake_async_session.mock_get(
-            "https://old.reddit.com/r/Python/comments/abc123/test/.json",
+            "https://oauth.reddit.com/r/Python/comments/abc123/test/.json?raw_json=1",
             json_data=THREAD_JSON,
         )
 
@@ -652,7 +662,7 @@ class TestRedditFastPath:
         data = _make_thread_json(comments=[c1, c2])
         url = "https://www.reddit.com/r/Python/comments/abc123/test/"
         fake_async_session.mock_get(
-            "https://old.reddit.com/r/Python/comments/abc123/test/.json",
+            "https://oauth.reddit.com/r/Python/comments/abc123/test/.json?raw_json=1",
             json_data=data,
         )
 
@@ -692,7 +702,7 @@ class TestRedditCommentPermalinkIntegration:
 
         # Mock the WHOLE-POST .json — the normalizer strips COMMENTID before fetching
         fake_async_session.mock_get(
-            "https://old.reddit.com/r/Python/comments/abc123/title/.json",
+            "https://oauth.reddit.com/r/Python/comments/abc123/title/.json?raw_json=1",
             json_data=data,
         )
 
@@ -717,7 +727,7 @@ class TestRedditCommentPermalinkIntegration:
         data = _make_thread_json(comments=[target, other])
 
         fake_async_session.mock_get(
-            "https://old.reddit.com/r/Python/comments/abc123/title/.json",
+            "https://oauth.reddit.com/r/Python/comments/abc123/title/.json?raw_json=1",
             json_data=data,
         )
 
@@ -739,7 +749,7 @@ class TestRedditCommentPermalinkIntegration:
         data = _make_thread_json(comments=[target, other])
 
         fake_async_session.mock_get(
-            "https://old.reddit.com/r/Python/comments/abc123/title/.json",
+            "https://oauth.reddit.com/r/Python/comments/abc123/title/.json?raw_json=1",
             json_data=data,
         )
 
@@ -755,7 +765,7 @@ class TestRedditCommentPermalinkIntegration:
         from parkour_mcp.fetch_direct import web_fetch_direct
 
         fake_async_session.mock_get(
-            "https://old.reddit.com/r/Python/comments/abc123/title/.json",
+            "https://oauth.reddit.com/r/Python/comments/abc123/title/.json?raw_json=1",
             json_data=THREAD_JSON,
         )
 
@@ -798,3 +808,127 @@ class TestSplitByComments:
         chunks = _split_by_comments(md)
         for offset, text in chunks:
             assert md[offset:].startswith(text[:20])
+
+
+# ---------------------------------------------------------------------------
+# OAuth — userless token acquisition and authenticated fetch
+# ---------------------------------------------------------------------------
+
+class TestRedditOAuth:
+    """The autouse ``_reddit_oauth_state`` fixture seeds a valid token, so
+    these tests invalidate it (``_oauth_expires_at = 0``) or call the mint
+    helpers directly to exercise acquisition."""
+
+    @pytest.mark.asyncio
+    async def test_mint_mobile_success(self, fake_async_session):
+        fake_async_session.mock_post(
+            reddit_mod._MOBILE_TOKEN_URL,
+            json_data={"access_token": "mob-tok", "expires_in": 86400},
+            headers={"x-reddit-loid": "LOID", "x-reddit-session": "SESS"},
+        )
+        result = await reddit_mod._mint_mobile_token()
+        assert result is not None
+        token, expires_at, headers = result
+        assert token == "mob-tok"
+        assert expires_at > time.monotonic()
+        # loid/session headers are captured for replay on content requests
+        assert headers["x-reddit-loid"] == "LOID"
+        assert headers["x-reddit-session"] == "SESS"
+        assert headers["User-Agent"].startswith("Reddit/")
+
+    @pytest.mark.asyncio
+    async def test_mint_mobile_non_200_returns_none(self, fake_async_session):
+        fake_async_session.mock_post(reddit_mod._MOBILE_TOKEN_URL, status=403)
+        assert await reddit_mod._mint_mobile_token() is None
+
+    @pytest.mark.asyncio
+    async def test_authenticate_prefers_mobile(self, fake_async_session):
+        fake_async_session.mock_post(
+            reddit_mod._MOBILE_TOKEN_URL,
+            json_data={"access_token": "mob-tok", "expires_in": 86400},
+        )
+        assert await reddit_mod._authenticate() is True
+        assert reddit_mod._oauth_token == "mob-tok"
+        assert reddit_mod._oauth_backend == "mobile"
+
+    @pytest.mark.asyncio
+    async def test_authenticate_falls_back_to_web(self, fake_async_session):
+        # Mobile grant fails; web grant succeeds.
+        fake_async_session.mock_post(reddit_mod._MOBILE_TOKEN_URL, status=403)
+        fake_async_session.mock_post(
+            reddit_mod._WEB_TOKEN_URL,
+            json_data={"access_token": "web-tok", "expires_in": 3600},
+        )
+        assert await reddit_mod._authenticate() is True
+        assert reddit_mod._oauth_token == "web-tok"
+        assert reddit_mod._oauth_backend == "web"
+
+    @pytest.mark.asyncio
+    async def test_authenticate_total_failure(self, fake_async_session):
+        fake_async_session.mock_post(reddit_mod._MOBILE_TOKEN_URL, status=403)
+        fake_async_session.mock_post(reddit_mod._WEB_TOKEN_URL, status=403)
+        assert await reddit_mod._authenticate() is False
+
+    @pytest.mark.asyncio
+    async def test_ensure_token_uses_cached(self, fake_async_session):
+        # Seeded token is valid; no POST mock registered, so a mint attempt
+        # would raise — proving the cache short-circuit fired.
+        assert await reddit_mod._ensure_token() == "test-token"
+
+    @pytest.mark.asyncio
+    async def test_fetch_returns_error_when_auth_fails(
+        self, fake_async_session, monkeypatch,
+    ):
+        monkeypatch.setattr(reddit_mod, "_oauth_expires_at", 0.0)
+        fake_async_session.mock_post(reddit_mod._MOBILE_TOKEN_URL, status=403)
+        fake_async_session.mock_post(reddit_mod._WEB_TOKEN_URL, status=403)
+        result = await reddit_mod._fetch_reddit_json("https://old.reddit.com/r/Python/")
+        assert isinstance(result, str)
+        assert "Could not authenticate" in result
+
+    @pytest.mark.asyncio
+    async def test_401_triggers_refresh_and_retry(self, fake_async_session):
+        json_url = "https://oauth.reddit.com/r/Python/.json?raw_json=1"
+        # First content GET 401, second (after refresh) 200 with a listing.
+        fake_async_session.mock_get(json_url, status=401)
+        fake_async_session.mock_get(json_url, json_data=LISTING_JSON)
+        fake_async_session.mock_post(
+            reddit_mod._MOBILE_TOKEN_URL,
+            json_data={"access_token": "fresh", "expires_in": 86400},
+        )
+        result = await reddit_mod._fetch_reddit_json("https://old.reddit.com/r/Python/")
+        assert isinstance(result, list)
+        assert reddit_mod._oauth_token == "fresh"
+
+    @pytest.mark.asyncio
+    async def test_fetch_targets_oauth_host_with_raw_json(self, fake_async_session):
+        json_url = "https://oauth.reddit.com/r/Python/.json?raw_json=1"
+        fake_async_session.mock_get(json_url, json_data=LISTING_JSON)
+        # old.reddit input must be rewritten to oauth.reddit.com + raw_json=1;
+        # if it weren't, no mock would match and dispatch would raise.
+        result = await reddit_mod._fetch_reddit_json("https://old.reddit.com/r/Python/")
+        assert isinstance(result, list)
+
+    def test_check_json_error_private(self):
+        data = {"error": 403, "reason": "private", "message": "Forbidden"}
+        assert _check_reddit_json_error(data) == "Error: This subreddit is private."
+
+    def test_check_json_error_banned(self):
+        result = _check_reddit_json_error({"error": 404, "reason": "banned"})
+        assert isinstance(result, str) and "banned" in result.lower()
+
+    def test_check_json_error_quarantined(self):
+        result = _check_reddit_json_error({"error": 403, "reason": "quarantined"})
+        assert isinstance(result, str) and "quarantined" in result.lower()
+
+    def test_check_json_error_suspended(self):
+        result = _check_reddit_json_error({"data": {"is_suspended": True}})
+        assert isinstance(result, str) and "suspended" in result.lower()
+
+    def test_check_json_error_unauthorized(self):
+        result = _check_reddit_json_error({"error": 401, "message": "Unauthorized"})
+        assert isinstance(result, str) and "Unauthorized" in result
+
+    def test_check_json_error_passes_through_listing(self):
+        assert _check_reddit_json_error(LISTING_JSON) is LISTING_JSON
+        assert _check_reddit_json_error(THREAD_JSON) is THREAD_JSON

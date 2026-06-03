@@ -1,14 +1,35 @@
-"""Reddit fast path — fetches Reddit pages via old.reddit.com .json endpoint.
+"""Reddit fast path — fetches Reddit pages via the oauth.reddit.com API.
 
-Rewrites any reddit.com URL to old.reddit.com and appends .json to get
-structured JSON data without OAuth, API keys, or approval.  This bypasses
-Reddit's login/age walls on www.reddit.com and avoids their monetised API.
+Reddit retired its unauthenticated `.json` endpoints on 2026-05-29
+(r/modnews, "Protecting communities from scrapers and platform abuse"): both
+www and old.reddit `.json` now return a 403 "network security" block on every
+TLS profile. All structured access now flows through oauth.reddit.com with a
+bearer token.
+
+We restore the fast path with a *userless* OAuth token, mirroring redlib
+(redlib-org/redlib, src/oauth.rs + src/client.rs): mint a logged-out token
+via Reddit's own mobile-app grant, fall back to the generic-web grant, and
+refresh it shortly before expiry. There is no user account, no API key, and
+no app registration: the token is anonymous and carries only a logged-out id
+(`loid`). The same JSON shape the old `.json` endpoint returned comes back
+from oauth.reddit.com, so the formatters below are unchanged.
+
+The client IDs are Reddit's OWN first-party app credentials, not a third
+party's, so we borrow Reddit's identity (a browser-equivalent reader) rather
+than impersonating an indie app whose developer would become collateral when
+Reddit revokes a scraper-associated id.
 
 Supports comment threads, subreddit listings, and user pages.
 """
 
+import asyncio
+import base64
 import logging
 import re
+import secrets
+import string
+import time
+import uuid
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional, Union
@@ -22,17 +43,246 @@ from .common import RateLimiter
 logger = logging.getLogger(__name__)
 
 # Reddit began blocking httpx's TLS fingerprint in April 2026 while still
-# serving browsers — same headers via curl get 200, via httpx get 403. All
-# curl_cffi Chrome profiles are also blocked (their detector specifically
-# targets Chrome JA3/JA4); Safari and Firefox profiles pass. Keep this on
-# a recent Safari profile and revisit if Reddit broadens the filter.
+# serving browsers: same headers via curl get 200, via httpx get 403. Safari
+# and Firefox curl_cffi profiles pass; Chrome profiles are JA3-blocked. The
+# token mint and the oauth.reddit.com calls both go through this profile.
 _IMPERSONATE_PROFILE = "safari184"
 
 # ---------------------------------------------------------------------------
-# Rate limiter — 2s between unauthenticated requests
+# Rate limiter — 2s between API requests
 # ---------------------------------------------------------------------------
 
 _reddit_limiter = RateLimiter(2.0)
+
+# ---------------------------------------------------------------------------
+# OAuth — userless "installed_client" access tokens
+# ---------------------------------------------------------------------------
+#
+# Two-tier token acquisition mirroring redlib's Oauth::new: the mobile grant
+# first (Reddit-for-Android client id against the logged-out loid endpoint),
+# then the generic-web grant as a fallback. redlib retries the mobile grant
+# up to 5 times 5s apart before falling back and exits after 10 total
+# failures; we collapse that to one attempt per tier because we run inside an
+# interactive tool call, not a server boot loop, so a fast graceful failure
+# beats a 25s+ stall (the caller surfaces the error string).
+
+# Reddit's official Reddit-for-Android OAuth client id
+# (redlib oauth.rs#REDDIT_ANDROID_OAUTH_CLIENT_ID).
+_ANDROID_OAUTH_CLIENT_ID = "ohXpoqrZYub1kg"
+# Reddit's logged-out web client id (redlib GenericWebAuth, base64-decoded).
+_WEB_OAUTH_CLIENT_ID = "3XfBJWliHvqACnXrfIYlLw"
+
+_OAUTH_API_HOST = "oauth.reddit.com"
+_MOBILE_TOKEN_URL = "https://www.reddit.com/auth/v2/oauth/access-token/loid"
+_WEB_TOKEN_URL = "https://www.reddit.com/api/v1/access_token"
+_INSTALLED_CLIENT_GRANT = "https://oauth.reddit.com/grants/installed_client"
+
+# Refresh this many seconds before stated expiry so a content fetch never
+# blocks on a mint (redlib token_daemon: sleeps expires_in - 120).
+_TOKEN_REFRESH_MARGIN = 120.0
+
+# Recent Reddit-for-Android build strings, used to randomise the spoofed
+# mobile User-Agent (subset of redlib oauth_resources.rs#ANDROID_APP_VERSION_LIST).
+_ANDROID_APP_VERSIONS = (
+    "Version 2024.47.0/Build 2029755",
+    "Version 2024.46.0/Build 2012731",
+    "Version 2024.45.0/Build 2001943",
+    "Version 2024.44.0/Build 1988458",
+    "Version 2024.43.0/Build 1972250",
+    "Version 2024.42.0/Build 1952440",
+    "Version 2024.41.1/Build 1947805",
+    "Version 2024.40.0/Build 1928580",
+    "Version 2024.39.0/Build 1916713",
+    "Version 2024.38.0/Build 1902791",
+)
+
+_DEVICE_ID_ALPHABET = string.ascii_letters + string.digits
+
+# Module-level token cache. Session-scoped: resets when the server restarts,
+# like the page/wiki caches. Guarded by _oauth_lock so concurrent first
+# fetches mint only once.
+_oauth_lock = asyncio.Lock()
+_oauth_token: Optional[str] = None
+# Device UA plus the x-reddit-loid / x-reddit-session identifiers Reddit
+# issued, replayed on every content request so it looks like one device.
+_oauth_token_headers: dict[str, str] = {}
+_oauth_expires_at: float = 0.0
+_oauth_backend: Optional[str] = None  # "mobile" | "web"
+_refresh_task: Optional["asyncio.Task"] = None
+
+
+def _android_device_headers() -> dict[str, str]:
+    """Build a spoofed Reddit-for-Android device header set.
+
+    Mirrors redlib oauth.rs ``Device::android``: a random recent app build, a
+    random Android major version, and a per-device UUID used for both vendor
+    and device id.  The ``User-Agent`` is carried inside the returned dict and
+    replayed on subsequent content requests.
+    """
+    device_id = str(uuid.uuid4())
+    app_version = secrets.choice(_ANDROID_APP_VERSIONS)
+    android_version = secrets.randbelow(6) + 9  # 9..14 inclusive
+    return {
+        "User-Agent": f"Reddit/{app_version}/Android {android_version}",
+        "x-reddit-retry": "algo=no-retries",
+        "x-reddit-compression": "1",
+        "client-vendor-id": device_id,
+        "X-Reddit-Device-Id": device_id,
+    }
+
+
+async def _mint_mobile_token() -> Optional[tuple[str, float, dict[str, str]]]:
+    """Mint a userless token via the logged-out Android-app grant.
+
+    Mirrors redlib ``MobileSpoofAuth``: HTTP Basic with the Android client id
+    and empty secret against the loid endpoint.  Returns
+    ``(token, expires_at_monotonic, replay_headers)`` or ``None`` on failure.
+    """
+    device_headers = _android_device_headers()
+    auth = base64.standard_b64encode(f"{_ANDROID_OAUTH_CLIENT_ID}:".encode()).decode()
+    req_headers = {
+        **device_headers,
+        "Authorization": f"Basic {auth}",
+        "Content-Type": "application/json; charset=UTF-8",
+    }
+    try:
+        async with AsyncSession(impersonate=_IMPERSONATE_PROFILE) as client:
+            resp = await client.post(
+                _MOBILE_TOKEN_URL,
+                headers=req_headers,
+                json={"scopes": ["*", "email", "pii"]},
+                timeout=15,
+            )
+            if resp.status_code != 200:
+                logger.debug("Reddit mobile token mint: HTTP %s", resp.status_code)
+                return None
+            payload = resp.json()
+            token = payload.get("access_token")
+            expires_in = payload.get("expires_in")
+            if not token or not expires_in:
+                return None
+            replay = dict(device_headers)
+            for h in ("x-reddit-loid", "x-reddit-session"):
+                val = resp.headers.get(h)
+                if val:
+                    replay[h] = val
+            return token, time.monotonic() + float(expires_in), replay
+    except Exception as exc:
+        logger.debug("Reddit mobile token mint error: %s", exc)
+        return None
+
+
+async def _mint_web_token() -> Optional[tuple[str, float, dict[str, str]]]:
+    """Fallback mint via the generic-web installed_client grant.
+
+    Mirrors redlib ``GenericWebAuth``: Basic auth with the web client id and a
+    random device id, form-encoded ``installed_client`` grant.
+    """
+    device_id = "".join(secrets.choice(_DEVICE_ID_ALPHABET) for _ in range(20))
+    auth = base64.standard_b64encode(f"{_WEB_OAUTH_CLIENT_ID}:".encode()).decode()
+    req_headers = {
+        "Authorization": f"Basic {auth}",
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Accept": "*/*",
+        "Accept-Language": "en-US,en;q=0.5",
+    }
+    body = {"grant_type": _INSTALLED_CLIENT_GRANT, "device_id": device_id}
+    try:
+        async with AsyncSession(impersonate=_IMPERSONATE_PROFILE) as client:
+            resp = await client.post(
+                _WEB_TOKEN_URL, headers=req_headers, data=body, timeout=15,
+            )
+            if resp.status_code != 200:
+                logger.debug("Reddit web token mint: HTTP %s", resp.status_code)
+                return None
+            payload = resp.json()
+            token = payload.get("access_token")
+            expires_in = payload.get("expires_in")
+            if not token or not expires_in:
+                return None
+            replay = {"Origin": "https://www.reddit.com"}
+            for h in ("x-reddit-loid", "x-reddit-session"):
+                val = resp.headers.get(h)
+                if val:
+                    replay[h] = val
+            return token, time.monotonic() + float(expires_in), replay
+    except Exception as exc:
+        logger.debug("Reddit web token mint error: %s", exc)
+        return None
+
+
+async def _authenticate() -> bool:
+    """Acquire a userless token: mobile grant first, web fallback.
+
+    Sets the module token state on success and returns True.  On total
+    failure leaves any existing token untouched and returns False.
+    """
+    global _oauth_token, _oauth_token_headers, _oauth_expires_at, _oauth_backend
+    for backend, mint in (("mobile", _mint_mobile_token), ("web", _mint_web_token)):
+        result = await mint()
+        if result is not None:
+            _oauth_token, _oauth_expires_at, _oauth_token_headers = result
+            _oauth_backend = backend
+            logger.info("Reddit OAuth token acquired via %s grant", backend)
+            return True
+    logger.warning("Reddit OAuth token acquisition failed (mobile + web grants)")
+    return False
+
+
+def _token_valid() -> bool:
+    """True if a token exists and is not within the refresh margin of expiry."""
+    return bool(_oauth_token) and time.monotonic() < _oauth_expires_at - _TOKEN_REFRESH_MARGIN
+
+
+def _ensure_refresh_daemon() -> None:
+    """Start the background refresh task once, if an event loop is running."""
+    global _refresh_task
+    if _refresh_task is not None and not _refresh_task.done():
+        return
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    _refresh_task = loop.create_task(_token_daemon())
+
+
+async def _token_daemon() -> None:
+    """Refresh the token ~2 min before expiry (redlib token_daemon).
+
+    Runs for the life of the server once started.  On a refresh failure it
+    backs off briefly and retries rather than exiting; content fetches also
+    refresh reactively on 401, so a transient daemon miss is recoverable.
+    """
+    while True:
+        delay = _oauth_expires_at - _TOKEN_REFRESH_MARGIN - time.monotonic()
+        await asyncio.sleep(max(delay, 5.0))
+        async with _oauth_lock:
+            ok = await _authenticate()
+        if not ok:
+            await asyncio.sleep(30.0)
+
+
+async def _ensure_token() -> Optional[str]:
+    """Return a valid bearer token, minting/refreshing under lock if needed.
+
+    Starts the refresh daemon after the first successful mint so later
+    fetches never pay mint latency.  Returns ``None`` if acquisition fails.
+    """
+    if _token_valid():
+        return _oauth_token
+    async with _oauth_lock:
+        if _token_valid():  # another coroutine may have minted while we waited
+            return _oauth_token
+        if not await _authenticate():
+            return None
+        _ensure_refresh_daemon()
+        return _oauth_token
+
+
+async def _force_refresh_token() -> None:
+    """Re-mint the token now (reactive refresh on a 401)."""
+    async with _oauth_lock:
+        await _authenticate()
 
 # ---------------------------------------------------------------------------
 # URL detection
@@ -97,7 +347,10 @@ class RedditPageType(Enum):
     SHORT_LINK = "short_link"
 
 
-_COMMENT_RE = re.compile(r"/r/[^/]+/comments/\w+", re.IGNORECASE)
+# Matches a comment thread with or without the /r/SUB/ prefix: redd.it short
+# links redirect to the subreddit-less /comments/{id} canonical form, which
+# Reddit (and oauth.reddit.com) resolve to the full thread.
+_COMMENT_RE = re.compile(r"/(?:r/[^/]+/)?comments/\w+", re.IGNORECASE)
 _USER_RE = re.compile(r"/(?:u|user)/[^/]+", re.IGNORECASE)
 
 # Comment permalink: /r/SUB/comments/POSTID/slug/COMMENTID/ — points at
@@ -158,13 +411,25 @@ def _classify_reddit_url(url: str) -> RedditPageType:
 # ---------------------------------------------------------------------------
 
 async def _resolve_redd_it(url: str) -> Optional[str]:
-    """Follow a redd.it short link redirect to get the canonical URL."""
+    """Follow a redd.it short link redirect to get the canonical URL.
+
+    Attaches the bearer token and device headers when available (redlib
+    resolves share links with the OAuth client too); falls back to an
+    unauthenticated HEAD if no token could be minted.
+    """
+    token = await _ensure_token()
+    headers = (
+        {"Authorization": f"Bearer {token}", **_oauth_token_headers}
+        if token else {}
+    )
     try:
         await _reddit_limiter.wait()
         async with AsyncSession(
             impersonate=_IMPERSONATE_PROFILE,
         ) as client:
-            resp = await client.head(url, timeout=10, allow_redirects=True)
+            resp = await client.head(
+                url, headers=headers, timeout=10, allow_redirects=True,
+            )
             final = str(resp.url)
             return _detect_reddit_url(final)
     except Exception as exc:
@@ -172,38 +437,100 @@ async def _resolve_redd_it(url: str) -> Optional[str]:
         return None
 
 
-async def _fetch_reddit_json(url: str) -> Union[list, dict, str]:
-    """Fetch the .json endpoint for a Reddit URL.
+def _check_reddit_json_error(data: Union[list, dict]) -> Union[list, dict, str]:
+    """Map Reddit's in-band JSON error envelopes to error strings.
 
-    Returns parsed JSON (list or dict) on success, or an error string.
+    Mirrors redlib client.rs ``json()``: a suspended user, the quarantined /
+    gated / private / banned subreddit reasons, and the bare Unauthorized
+    envelope.  Normal listing/thread responses (lists, or dicts whose ``data``
+    holds a ``children`` body) carry no ``error`` field and pass through.
     """
-    # Append .json
+    if isinstance(data, dict):
+        inner = data.get("data")
+        if isinstance(inner, dict) and inner.get("is_suspended"):
+            return "Error: This Reddit account is suspended."
+        err = data.get("error")
+        if isinstance(err, int):
+            reason = data.get("reason")
+            mapping = {
+                "quarantined": "Error: This subreddit is quarantined.",
+                "gated": "Error: This subreddit is gated (age or community restricted).",
+                "private": "Error: This subreddit is private.",
+                "banned": "Error: This subreddit is banned.",
+            }
+            if reason in mapping:
+                return mapping[reason]
+            if data.get("message") == "Unauthorized":
+                return "Error: Reddit returned Unauthorized."
+            return f"Error: Reddit API error {err}: {data.get('message', '')}".rstrip()
+    return data
+
+
+async def _fetch_reddit_json(url: str) -> Union[list, dict, str]:
+    """Fetch a Reddit URL's JSON via the authenticated oauth.reddit.com API.
+
+    Rewrites the host to oauth.reddit.com, appends ``.json`` and
+    ``raw_json=1``, and attaches the userless bearer token plus the replayed
+    device headers.  Returns parsed JSON (list or dict) on success, or an
+    error string.  Retries once on a 401 after forcing a token refresh.
+    """
+    token = await _ensure_token()
+    if not token:
+        return (
+            "Error: Could not authenticate to Reddit. The unauthenticated "
+            ".json endpoints were retired 2026-05-29; the userless OAuth token "
+            "mint (oauth.reddit.com) failed, so Reddit may have changed the "
+            "logged-out token flow."
+        )
+
     parsed = urlparse(url)
     path = parsed.path.rstrip("/") + "/.json"
+    qs = parse_qs(parsed.query)
+    qs["raw_json"] = ["1"]
     json_url = urlunparse((
-        parsed.scheme, parsed.netloc, path,
-        parsed.params, parsed.query, "",
+        "https", _OAUTH_API_HOST, path, "", urlencode(qs, doseq=True), "",
     ))
 
+    return await _reddit_api_get(json_url, retry_on_401=True)
+
+
+async def _reddit_api_get(
+    json_url: str, *, retry_on_401: bool,
+) -> Union[list, dict, str]:
+    """GET an oauth.reddit.com JSON URL with the current bearer token."""
+    headers = {
+        "Authorization": f"Bearer {_oauth_token}",
+        "Accept": "application/json",
+        **_oauth_token_headers,
+    }
     await _reddit_limiter.wait()
     try:
         async with AsyncSession(
             impersonate=_IMPERSONATE_PROFILE,
         ) as client:
-            resp = await client.get(json_url, timeout=30, allow_redirects=True)
+            resp = await client.get(
+                json_url, headers=headers, timeout=30, allow_redirects=True,
+            )
+            if resp.status_code == 401 and retry_on_401:
+                await _force_refresh_token()
+                if not _oauth_token:
+                    return "Error: Reddit OAuth token expired and refresh failed."
+                return await _reddit_api_get(json_url, retry_on_401=False)
             if resp.status_code == 429:
                 return "Error: Reddit rate limit exceeded. Try again later."
             resp.raise_for_status()
-            return resp.json()
+            data = resp.json()
     except cc_exc.Timeout:
-        return f"Error: Request timed out for {url}"
+        return f"Error: Request timed out for {json_url}"
     except cc_exc.HTTPError as exc:
         status = exc.response.status_code if exc.response is not None else "unknown"
-        return f"Error: HTTP {status} for {url}"
+        return f"Error: HTTP {status} for {json_url}"
     except cc_exc.RequestException as exc:
-        return f"Error: Failed to fetch {url} — {type(exc).__name__}"
+        return f"Error: Failed to fetch {json_url} — {type(exc).__name__}"
     except ValueError:
-        return f"Error: Invalid JSON response from {url}"
+        return f"Error: Invalid JSON response from {json_url}"
+
+    return _check_reddit_json_error(data)
 
 
 async def _fetch_reddit_content(url: str) -> tuple[str, str]:

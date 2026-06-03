@@ -264,7 +264,7 @@ async def web_fetch_direct(
                             cached.markdown, section_names, max_tokens,
                             frontmatter_entries=FMEntries({
                                 "source": source_url,
-                                "api": "Reddit (.json)",
+                                "api": "Reddit (oauth.reddit.com)",
                                 "warning": fragment_warning,
                                 "note": permalink_note,
                             }),
@@ -794,7 +794,7 @@ async def web_fetch_sections(url: str, slice: int = 0) -> str:
                     _, section_body = _build_comment_section_tree(data)
                     fm = _build_frontmatter({
                         "source": original_url,
-                        "api": "Reddit (.json)",
+                        "api": "Reddit (oauth.reddit.com)",
                         "trust": _TRUST_ADVISORY,
                         "hint": f"Use {tool_name('web_fetch_direct')} with section=#comment_id to "
                                 "extract a specific comment and its replies, "
@@ -805,7 +805,7 @@ async def web_fetch_sections(url: str, slice: int = 0) -> str:
             # Non-thread Reddit pages: no meaningful section tree
             fm = _build_frontmatter({
                 "source": original_url,
-                "api": "Reddit (.json)",
+                "api": "Reddit (oauth.reddit.com)",
                 "note": "Section listing is only available for comment threads. "
                         f"Use {tool_name('web_fetch_direct')} with search= for keyword search.",
             })

@@ -16,7 +16,7 @@ API integrations:
 - deps.dev (library package lookups)
 - GitHub
 - MediaWiki (Wikipedia and other MediaWiki sites — dedicated tool with footnote and inline-citation resolution)
-- Reddit (old.reddit.com JSON API)
+- Reddit (userless OAuth API, oauth.reddit.com)
 - Discourse (header-detected, raw markdown API)
 
 ## Why Parkour?
@@ -42,7 +42,7 @@ Parkour also intercepts requests for content from websites with robust first-par
 | Semantic Scholar | `semanticscholar.org/paper/` | S2 Graph API (bypasses CAPTCHA) |
 | DOI | `doi.org/10.*` URLs | Content negotiation (CrossRef/DataCite metadata) |
 | GitHub | `github.com/*` | REST API (bypasses JS SPA) |
-| Reddit | `reddit.com`, `redd.it` | `old.reddit.com` `.json` endpoint (bypasses login wall) |
+| Reddit | `reddit.com`, `redd.it` | Userless OAuth API (`oauth.reddit.com`, anonymous token, no account or API key) |
 | Discourse | `x-discourse-route` response header | JSON API with raw author markdown |
 | IETF | `rfc-editor.org/rfc/rfcN[.json]`, `datatracker.ietf.org` | RFC Editor JSON / Datatracker REST. `.html`/`.txt`/`.xml` body URLs deliberately fall through to the generic HTML pipeline so `section=` / `search=` work over the rendered RFC. |
 

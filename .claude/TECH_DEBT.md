@@ -2,6 +2,34 @@
 
 Acknowledged warnings and deferred fixes. Each entry includes the source, the issue, and why it was deferred.
 
+## Reddit OAuth — deliberate deviations from redlib
+
+The Reddit fast path was rebuilt on `oauth.reddit.com` userless tokens after Reddit retired the unauthenticated `.json` endpoints on 2026-05-29. The implementation mirrors redlib (`redlib-org/redlib`, `src/oauth.rs` + `src/client.rs`), which we treat as the domain expert. A few intentional simplifications diverge from redlib; they are choices, not bugs.
+
+### Collapsed token-acquisition retry loop
+
+- **Location**: `parkour_mcp/reddit.py#_authenticate`.
+- **Deviation**: redlib's `Oauth::new` retries the mobile grant up to 5 times (5s apart), falls back to the web grant, and `process::exit`s after 10 total failures. We attempt each tier once and return a graceful error string on total failure.
+- **Why**: redlib is a long-running web server where a boot-time retry loop is appropriate. parkour mints inside an interactive tool call, where a 25s+ stall is worse UX than a fast, honest failure (the caller surfaces the error and can retry). The background daemon and the reactive 401 refresh still recover from transient failures after the first success.
+
+### No proactive `x-ratelimit-remaining` tracking
+
+- **Location**: `parkour_mcp/reddit.py#_reddit_api_get` (and the absence of redlib client.rs `OAUTH_RATELIMIT_REMAINING` accounting).
+- **Deviation**: redlib reads the `x-ratelimit-remaining` header on every response and spawns a token rollover when it drops below 10, to dodge per-IP limits across many concurrent users. We do not track it.
+- **Why**: parkour is a single-user sidecar gated by a 2s limiter (~30 req/min), comfortably under Reddit's userless ceiling (~100 req/min). The proactive accounting would add module state and complexity for a limit a single user does not approach. The daemon (proactive, time-based) plus 401-reactive refresh cover token freshness. Revisit if parkour ever fans out concurrent Reddit fetches.
+
+### redd.it short-link resolution is best-effort
+
+- **Location**: `parkour_mcp/reddit.py#_resolve_redd_it`.
+- **Deviation**: redlib resolves share/short links through a dedicated `canonical_path` HEAD-walk against multiple bases with full retry. We do a single authenticated HEAD on the `redd.it` URL (token attached when available, unauthenticated fallback otherwise) and read the redirect target.
+- **Why**: short links are a small fraction of Reddit traffic and the single HEAD currently resolves them. If Reddit starts gating `redd.it` redirects the way it gated `.json`, port redlib's `canonical_path` HEAD-walk.
+
+### Token cache ignores the requested page's quarantine state
+
+- **Location**: `parkour_mcp/reddit.py#_fetch_reddit_json` (no quarantine opt-in cookie).
+- **Deviation**: redlib sends a `_options` cookie opting into quarantined/gated content. We do not, so quarantined subreddits map to a `_check_reddit_json_error` error string rather than rendering.
+- **Why**: rendering quarantined content silently is a surprising default for a research sidecar; surfacing the quarantine status as an explicit error is the more PoLA-aligned behavior. Add the opt-in cookie behind a flag if a real use case needs quarantined threads.
+
 ## Pyright warnings (opted not to fix)
 
 ### `fetch_direct.py` — `_matched_meta` not accessed
