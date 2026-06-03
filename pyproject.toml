@@ -189,6 +189,14 @@ commit_parsers = [
   # Below `^feat` / `^fix` this rule would never be reached, and
   # feat(security) / fix(security) commits would leak into Added / Fixed.
   { message = "^[a-z]+\\(security\\)", group = "<!-- 3 -->Security" },
+  # Merge commits carry no conventional type ("Merge branch ..."). With
+  # `filter_unconventional = false` (below) they no longer raise a parse
+  # error, but they would then surface a *grouping* error instead since they
+  # match no group. This rule skips them so neither warning fires. Both
+  # settings are required: remove either and the warning returns (as a parse
+  # error without `filter_unconventional = false`, as a grouping error
+  # without this rule).
+  { message = "^Merge ", skip = true },
   { message = "^feat", group = "<!-- 0 -->Added" },
   { message = "^refactor", group = "<!-- 1 -->Changed" },
   { message = "^perf", group = "<!-- 1 -->Changed" },
@@ -202,6 +210,21 @@ commit_parsers = [
   { message = "^release", skip = true },
 ]
 filter_commits = true
+# Fold PEP 440 pre-release tags (rcN, aN, bN) into the next release rather
+# than letting them open their own changelog section. Without this, a range
+# anchored to the last final tag (e.g. v1.2.0..v2.0.0rc1) spans the
+# intermediate v2.0.0rc0 tag, and git-cliff emits a separate `## [2.0.0rc0]`
+# section, so a later RC's (or the final's) notes replay the earlier RC's
+# entries header and all. Folding requires the consumer to name the current
+# section explicitly with `--tag` (an ignored tag yields `## [unreleased]`
+# otherwise); both the CI release-notes step and the local /release flow do.
+ignore_tags = "(a|b|rc)[0-9]+$"
+# Treat non-conventional commits (merges, the rare "wip"/"fixup") as ordinary
+# commits rather than parse errors, silencing git-cliff's "skipped due to
+# parse error(s)" warning. They still produce no changelog output: the
+# `^Merge ` parser above skips merges, and `filter_commits = true` drops any
+# remaining commit that matches no group.
+filter_unconventional = false
 
 [tool.commitizen]
 name = "cz_conventional_commits"

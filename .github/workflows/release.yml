@@ -109,11 +109,18 @@ jobs:
         # only the rc-period commits. Selecting the most recent vX.Y.Z
         # ancestor makes both an RC and the final it precedes report the
         # whole body of work since the previous final release.
+        #
+        # --tag "$tag" is REQUIRED, not cosmetic: pyproject's
+        # `ignore_tags` folds intermediate rcN tags so they don't open
+        # their own `## [rcN]` section inside this range (without it, a
+        # later RC's notes replay the earlier RC's section header and all).
+        # But a folded current tag would otherwise render as
+        # `## [unreleased]`, so --tag names the single section explicitly.
         run: |
           tag="${{ steps.version.outputs.tag }}"
           last_final=$(git tag --list 'v*' --merged "$tag" --sort=-v:refname \
             | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | grep -vFx "$tag" | head -1)
-          git cliff "${last_final}..${tag}" --strip all -o release-notes.md
+          git cliff --tag "$tag" "${last_final}..${tag}" --strip all -o release-notes.md
 
       - name: Create GitHub Release
         env:
