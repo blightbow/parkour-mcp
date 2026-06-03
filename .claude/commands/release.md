@@ -23,6 +23,15 @@ and flag any commits that are missing one. `Why:` trailers are the
 source of release-note prose; commits without them fall back to the
 bare subject which produces weaker changelog entries.
 
+CAVEAT: git's `%(trailers)` only recognizes trailers in the final
+contiguous block of the message. The house style puts a blank line
+between `Why:` and `Co-Authored-By:`, which splits them, so this command
+reports `Why:` as missing on commits that actually have one. git-cliff
+uses its own footer parser and extracts them correctly. Do not act on a
+"missing" result here alone — confirm against the Step 2 git-cliff
+preview (if the bullet renders as the `Why:` prose, the trailer is fine;
+if it renders as the bare subject, it is genuinely absent).
+
 ## Step 2: Preview
 
 Show the user what will land:
@@ -112,10 +121,17 @@ Order matters: commit before tag so the tag points at the release
 commit, not its parent.
 
 ```
-git add -A
+git add pyproject.toml manifest.json server.json uv.lock CHANGELOG.md   # drop CHANGELOG.md for an RC
 git commit -m "release: v<NEXT>"
 just tag v<NEXT>
 ```
+
+Stage the release files explicitly. Do NOT `git add -A`: an untracked
+directory in the tree (e.g. a local `deploy/`) would otherwise be swept
+into the release commit. The release touches `pyproject.toml`,
+`manifest.json`, `server.json`, `uv.lock` (cz rebuilds it), and — finals
+only — `CHANGELOG.md`. An RC does not modify `CHANGELOG.md`, so omit it.
+Confirm the staged set with `git status` before committing.
 
 `just tag` runs `sync_versions.py --check`, the mocked test suite (with
 ruff lint), and the live test suite before creating the annotated tag.
@@ -123,16 +139,25 @@ Expect ~1-2 minutes for live tests.
 
 ## Step 6: Hand off
 
-Remind the user:
+Remind the user (substitute the current branch — releases need not be
+cut from `main`):
 
-> Tag created locally. Push with:
+> Tag created locally. Push the current branch and the tag with:
 >
->     git push origin main --follow-tags
+>     git push origin <branch> --follow-tags
 >
-> The release workflow fires on tag push and handles: uv build,
-> PyPI OIDC publish, mcpb pack, GitHub Release creation (body from
-> CHANGELOG.md slice), server.json mcpb asset coordinates, MCP Registry
-> publish. Watch the run at:
+> The release workflow fires on the tag push and handles: uv build,
+> PyPI OIDC publish, mcpb pack, GitHub Release creation (notes assembled
+> by git-cliff over the range since the last final tag), server.json
+> mcpb asset coordinates, MCP Registry publish. Watch the run at:
 > https://github.com/blightbow/parkour-mcp/actions
+
+The trigger is the tag, not the branch: the workflow keys on
+`refs/tags/v*` and runs regardless of which branch the tag is pushed
+from. Verified end to end for an RC cut from an integration branch
+(`v2.0.0rc1` from `integration/2.0.0`, 2026-06-03): PyPI pre-release
+upload, GitHub pre-release (`--prerelease`, not marked Latest), and MCP
+Registry publish all succeeded. So cutting a public RC off a long-lived
+integration branch before it merges to `main` is a supported flow.
 
 Do not push. Do not trigger the workflow. The user pushes.
