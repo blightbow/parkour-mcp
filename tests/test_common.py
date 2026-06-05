@@ -7,7 +7,60 @@ import httpx
 import pytest
 import respx
 
-from parkour_mcp.common import check_url_ssrf, _is_private_ip, guarded_fetch
+from parkour_mcp.common import (
+    check_url_ssrf,
+    _is_private_ip,
+    guarded_fetch,
+    _parse_truthy_env,
+    load_credential,
+)
+
+
+class TestParseTruthyEnv:
+    @pytest.mark.parametrize("value", ["1", "true", "yes", "TRUE", "Yes", " true ", "YES"])
+    def test_affirmative_values(self, monkeypatch, value):
+        monkeypatch.setenv("PARKOUR_TEST_GATE", value)
+        assert _parse_truthy_env("PARKOUR_TEST_GATE") is True
+
+    @pytest.mark.parametrize("value", ["0", "false", "no", "off", "", "  ", "2"])
+    def test_negative_values(self, monkeypatch, value):
+        monkeypatch.setenv("PARKOUR_TEST_GATE", value)
+        assert _parse_truthy_env("PARKOUR_TEST_GATE") is False
+
+    def test_unset_is_false(self, monkeypatch):
+        monkeypatch.delenv("PARKOUR_TEST_GATE", raising=False)
+        assert _parse_truthy_env("PARKOUR_TEST_GATE") is False
+
+    def test_uppercase_true_is_truthy(self, monkeypatch):
+        # Regression: the pre-helper MCP_ALLOW_PRIVATE_IPS gate omitted
+        # .lower(), so "True"/"YES" silently failed to enable the bypass.
+        monkeypatch.setenv("PARKOUR_TEST_GATE", "True")
+        assert _parse_truthy_env("PARKOUR_TEST_GATE") is True
+
+
+class TestLoadCredential:
+    def test_env_var_wins(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("PARKOUR_TEST_KEY", "from-env")
+        cfg = tmp_path / "key"
+        cfg.write_text("from-file")
+        assert load_credential("PARKOUR_TEST_KEY", cfg) == "from-env"
+
+    def test_file_fallback(self, monkeypatch, tmp_path):
+        monkeypatch.delenv("PARKOUR_TEST_KEY", raising=False)
+        cfg = tmp_path / "key"
+        cfg.write_text("  from-file\n")
+        assert load_credential("PARKOUR_TEST_KEY", cfg) == "from-file"
+
+    def test_missing_both_returns_empty(self, monkeypatch, tmp_path):
+        monkeypatch.delenv("PARKOUR_TEST_KEY", raising=False)
+        assert load_credential("PARKOUR_TEST_KEY", tmp_path / "absent") == ""
+
+    def test_unsubstituted_template_env_falls_through_to_file(self, monkeypatch, tmp_path):
+        # clean_env rejects the mcpb ${...} sentinel; the file should win.
+        monkeypatch.setenv("PARKOUR_TEST_KEY", "${user_config.PARKOUR_TEST_KEY}")
+        cfg = tmp_path / "key"
+        cfg.write_text("from-file")
+        assert load_credential("PARKOUR_TEST_KEY", cfg) == "from-file"
 
 
 class TestIsPrivateIp:

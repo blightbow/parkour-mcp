@@ -80,6 +80,40 @@ def clean_env(name: str) -> str:
     return val
 
 
+# Base directory for filesystem-config fallbacks (API keys, opt-in gates).
+_CONFIG_DIR = Path.home() / ".config" / "parkour"
+
+
+def _parse_truthy_env(name: str) -> bool:
+    """True if env var *name* holds an affirmative value (``1`` / ``true`` / ``yes``).
+
+    Case-insensitive and whitespace-tolerant.  Centralizes the opt-in idiom so
+    every feature gate accepts the same affirmative set: a gate that rolls its
+    own check can (and did) silently reject ``True`` / ``YES`` by forgetting to
+    lowercase before comparing.
+    """
+    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes")
+
+
+def load_credential(env_var: str, config_path: Path) -> str:
+    """Load a credential from an env var, falling back to a config file.
+
+    Reads *env_var* through `clean_env` (which rejects unsubstituted ``${...}``
+    templates), then falls back to the contents of *config_path*.  Returns an
+    empty string when neither source supplies a value, so callers can treat
+    ``""`` as "run unauthenticated".
+
+    Callers pass their own path constant rather than a bare filename so the
+    constant stays a module-level test seam (tests monkeypatch it to redirect
+    the filesystem fallback).
+    """
+    if key := clean_env(env_var):
+        return key
+    if config_path.exists():
+        return config_path.read_text().strip()
+    return ""
+
+
 # Honest UA for structured API endpoints (MediaWiki, etc.) that expect
 # machine clients to identify themselves.  Follows RFC 9110 §10.1.5 and
 # Wikimedia User-Agent policy.
@@ -204,7 +238,7 @@ async def _depsdev_get(path: str) -> dict | str:
 _logger = logging.getLogger(__name__)
 
 # Set MCP_ALLOW_PRIVATE_IPS=1 to allow fetching from private/internal networks.
-_ALLOW_PRIVATE_IPS = os.environ.get("MCP_ALLOW_PRIVATE_IPS", "").strip() in ("1", "true", "yes")
+_ALLOW_PRIVATE_IPS = _parse_truthy_env("MCP_ALLOW_PRIVATE_IPS")
 
 
 def _is_private_ip(addr: str) -> bool:
@@ -302,7 +336,7 @@ def init_tool_names(profile: str) -> None:
 # Semantic Scholar opt-in gate
 # ---------------------------------------------------------------------------
 
-_S2_TOS_CONFIG_PATH = Path.home() / ".config" / "parkour" / "s2_accept_tos"
+_S2_TOS_CONFIG_PATH = _CONFIG_DIR / "s2_accept_tos"
 
 
 def s2_enabled() -> bool:
@@ -312,11 +346,11 @@ def s2_enabled() -> bool:
     1. ``S2_ACCEPT_TOS`` environment variable (any truthy value: 1/true/yes)
     2. Presence of ``~/.config/parkour/s2_accept_tos`` file
 
-    The gate is intentionally separate from ``S2_API_KEY`` — having a key does
+    The gate is intentionally separate from ``S2_API_KEY``: having a key does
     not imply awareness of the license terms, and S2 functions without one
     (at reduced rate limits).
     """
-    if os.environ.get("S2_ACCEPT_TOS", "").strip().lower() in ("1", "true", "yes"):
+    if _parse_truthy_env("S2_ACCEPT_TOS"):
         return True
     return _S2_TOS_CONFIG_PATH.is_file()
 
