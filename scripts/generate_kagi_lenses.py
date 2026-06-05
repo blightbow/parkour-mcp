@@ -26,8 +26,9 @@ from __future__ import annotations
 
 import re
 import sys
-import urllib.request
 from pathlib import Path
+
+import httpx
 
 UPSTREAM_URL = (
     "https://raw.githubusercontent.com/kagisearch/kagi-docs/"
@@ -45,12 +46,14 @@ _GATE_PROSE = "need to be activated"
 
 
 def _fetch_lenses_md() -> str:
-    request = urllib.request.Request(
+    resp = httpx.get(
         UPSTREAM_URL,
         headers={"User-Agent": "parkour-mcp/generate_kagi_lenses"},
+        timeout=30,
+        follow_redirects=True,
     )
-    with urllib.request.urlopen(request, timeout=30) as resp:
-        return resp.read().decode("utf-8")
+    resp.raise_for_status()
+    return resp.text
 
 
 def _slug_for(name: str) -> str:

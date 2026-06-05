@@ -172,7 +172,7 @@ class TestStripVersion:
 class TestParseArxivEntry:
     def _get_entry(self, xml_str: str):
         """Parse XML and return the first <entry> element."""
-        import xml.etree.ElementTree as ET
+        import defusedxml.ElementTree as ET
         root = ET.fromstring(xml_str)
         ns = "http://www.w3.org/2005/Atom"
         return root.find(f"{{{ns}}}entry")
@@ -281,7 +281,7 @@ class TestArxivRequest:
 
 class TestFormatArxivPaper:
     def test_full_paper(self):
-        import xml.etree.ElementTree as ET
+        import defusedxml.ElementTree as ET
         root = ET.fromstring(ARXIV_SINGLE_ENTRY_XML)
         entry = root.find(f"{{{_arxiv_module._ATOM_NS}}}entry")
         assert entry is not None
@@ -310,7 +310,7 @@ class TestFormatArxivPaper:
 
     def test_publisher_doi_shown_separately(self):
         """When publisher DOI is distinct from arXiv DOI, both are shown."""
-        import xml.etree.ElementTree as ET
+        import defusedxml.ElementTree as ET
         root = ET.fromstring(ARXIV_SINGLE_ENTRY_XML)
         entry = root.find(f"{{{_arxiv_module._ATOM_NS}}}entry")
         assert entry is not None

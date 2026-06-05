@@ -25,6 +25,7 @@ import argparse
 import asyncio
 import gzip
 import json
+import logging
 import platform
 import time
 from datetime import datetime, UTC
@@ -282,7 +283,9 @@ def _install_capture_hook(sink: list[bytes]) -> None:
             if body and not sink:
                 sink.append(body)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug(
+                "benchmark response-body capture failed", exc_info=True
+            )
         return resp
 
     httpx.AsyncClient.send = _wrapped  # ty: ignore[invalid-assignment]

@@ -25,8 +25,9 @@ from __future__ import annotations
 
 import re
 import sys
-import urllib.request
 from pathlib import Path
+
+import httpx
 
 UPSTREAM_URL = (
     "https://raw.githubusercontent.com/kagisearch/kagi-docs/"
@@ -41,12 +42,14 @@ EXCLUDED_CODES = {"int"}
 
 def _fetch_bangs_md() -> str:
     """Download the upstream bangs.md verbatim."""
-    request = urllib.request.Request(
+    resp = httpx.get(
         UPSTREAM_URL,
         headers={"User-Agent": "parkour-mcp/generate_kagi_regions"},
+        timeout=30,
+        follow_redirects=True,
     )
-    with urllib.request.urlopen(request, timeout=30) as resp:
-        return resp.read().decode("utf-8")
+    resp.raise_for_status()
+    return resp.text
 
 
 def _parse_regional_bangs(markdown: str) -> dict[str, str]:

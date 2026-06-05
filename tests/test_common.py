@@ -72,7 +72,7 @@ class TestIsPrivateIp:
         "172.16.0.1",      # RFC 1918
         "192.168.1.1",     # RFC 1918
         "169.254.169.254", # link-local (cloud metadata)
-        "0.0.0.0",         # unspecified
+        "0.0.0.0",  # noqa: S104 - unspecified addr; test input asserting it's flagged
         "::1",             # IPv6 loopback
         "fe80::1",         # IPv6 link-local
         "fc00::1",         # IPv6 unique local
@@ -152,7 +152,7 @@ class TestCheckUrlSsrf:
 
     def test_allows_when_env_override_set(self):
         """MCP_ALLOW_PRIVATE_IPS=1 should bypass all checks."""
-        with patch("parkour_mcp.common._ALLOW_PRIVATE_IPS", True):
+        with patch("parkour_mcp.common._ALLOW_PRIVATE_IPS", new=True):
             assert check_url_ssrf("http://127.0.0.1/admin") is None
             assert check_url_ssrf("http://192.168.1.1/") is None
             assert check_url_ssrf("http://[::1]/") is None

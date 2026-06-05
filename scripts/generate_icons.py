@@ -24,9 +24,10 @@ subsequent runs reuse the cache.
 from __future__ import annotations
 
 import sys
-import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
+
+import httpx
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 FONTS_DIR = REPO_ROOT / "scripts" / "fonts"
@@ -106,7 +107,9 @@ def ensure_fonts() -> None:
             continue
         print(f"  downloading {filename} ...")
         try:
-            urllib.request.urlretrieve(url, path)
+            resp = httpx.get(url, timeout=30, follow_redirects=True)
+            resp.raise_for_status()
+            path.write_bytes(resp.content)
         except Exception as exc:
             sys.exit(f"ERROR: failed to download {url}: {exc}")
         # Sanity check — a redirect page is a few hundred bytes of HTML.
