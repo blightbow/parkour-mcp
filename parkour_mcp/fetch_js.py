@@ -10,7 +10,7 @@ paths, so this module handles only what genuinely needs a browser.
 import logging
 import os
 from pathlib import Path
-from typing import Optional, Union
+from urllib.parse import urlparse
 
 import httpx
 from bs4 import BeautifulSoup
@@ -118,7 +118,7 @@ async def _get_unique_selector(element) -> str:
     return tag
 
 
-async def _get_label_for_element(page, element) -> Optional[str]:
+async def _get_label_for_element(page, element) -> str | None:
     """Find associated label for form element."""
     elem_id = await element.get_attribute("id")
     if elem_id:
@@ -212,7 +212,7 @@ async def _extract_interactive_elements(page, max_elements: int = 25) -> tuple[l
                     "href": href
                 })
         except Exception:
-            pass
+            logger.debug("TOC link extraction failed for an element on %s", page.url, exc_info=True)
 
     # Extract navigation links (for tab/menu navigation, excluding TOC anchors)
     nav_links = await page.query_selector_all("nav a, [role=navigation] a, .nav a, .tabs a, .menu a")
@@ -234,7 +234,7 @@ async def _extract_interactive_elements(page, max_elements: int = 25) -> tuple[l
                     "href": href
                 })
         except Exception:
-            pass
+            logger.debug("nav link extraction failed for an element on %s", page.url, exc_info=True)
 
     return elements[:max_elements], len(elements)
 
@@ -242,14 +242,14 @@ async def _extract_interactive_elements(page, max_elements: int = 25) -> tuple[l
 async def _render_js(
     url: str,
     source_url: str,
-    fragment_warning: Optional[str],
-    section_names: Optional[list[str]],
-    search: Optional[str],
-    slices: Optional[Union[int, list[int]]],
+    fragment_warning: str | None,
+    section_names: list[str] | None,
+    search: str | None,
+    slices: int | list[int] | None,
     slices_list: list[int],
     *,
     max_tokens: int,
-    actions: Optional[list],
+    actions: list | None,
     max_elements: int,
     premature: bool = False,
 ) -> str:
@@ -275,7 +275,7 @@ async def _render_js(
 
                 # Discourse detection — avoid launching Playwright
                 try:
-                    from .discourse import _detect_discourse_headers
+                    from .discourse import _detect_discourse_headers  # noqa: PLC0415  # intra-package, breaks cycle
                     if _detect_discourse_headers(head_resp.headers):
                         result = await _discourse_fast_path(url, head_resp.headers, max_tokens)
                         if result is not None:
@@ -288,7 +288,7 @@ async def _render_js(
                                 )
                             return result
                 except Exception:
-                    pass
+                    logger.debug("Discourse pre-check failed for %s; continuing", url, exc_info=True)
 
                 ct = head_resp.headers.get("content-type", "")
                 content_kind = _classify_content_type(ct)
@@ -329,7 +329,8 @@ async def _render_js(
                     })
                     return fm + "\n\n" + _fence_content(text, title=title)
         except Exception:
-            pass  # HEAD failed or ambiguous — fall through to Playwright
+            # HEAD failed or ambiguous — fall through to Playwright
+            logger.debug("content-type pre-check failed for %s; falling through to Playwright", url, exc_info=True)
 
     # --- Browser path ---
     detected_app = None  # Track if we detected a live app framework
@@ -360,12 +361,11 @@ async def _render_js(
 
             # Block cross-origin navigations after initial load to prevent
             # JS redirects from steering the browser to internal services.
-            from urllib.parse import urlparse as _urlparse
-            _initial_host = _urlparse(url).hostname
+            _initial_host = urlparse(url).hostname
 
             async def _block_cross_origin_nav(route):
                 if (route.request.is_navigation_request()
-                        and _urlparse(route.request.url).hostname != _initial_host):
+                        and urlparse(route.request.url).hostname != _initial_host):
                     logger.debug(
                         "Blocked cross-origin navigation: %s -> %s",
                         _initial_host, route.request.url,
@@ -391,7 +391,8 @@ async def _render_js(
                 try:
                     await page.wait_for_load_state("networkidle", timeout=5000)
                 except Exception:
-                    pass  # Proceed with content extraction anyway
+                    # Proceed with content extraction anyway
+                    logger.debug("networkidle wait timed out for %s; extracting anyway", url, exc_info=True)
 
             # Execute actions if provided
             if actions:
@@ -413,7 +414,8 @@ async def _render_js(
                     try:
                         await page.wait_for_load_state("networkidle", timeout=2000)
                     except Exception:
-                        pass  # Proceed anyway
+                        # Proceed anyway
+                        logger.debug("post-action networkidle wait timed out for %s; continuing", url, exc_info=True)
 
             # Extract title
             title = await page.title() or "Untitled"
@@ -453,6 +455,7 @@ async def _render_js(
                             break
                     except Exception:
                         # Cross-origin or other access issue - try next frame
+                        logger.debug("iframe content access failed for %s; trying next frame", url, exc_info=True)
                         continue
 
             # Extract interactive elements for ReAct chaining (max_elements=0 omits)

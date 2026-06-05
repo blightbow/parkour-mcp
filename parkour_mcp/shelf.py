@@ -20,7 +20,7 @@ import logging
 import re
 import time
 from dataclasses import dataclass, field, fields, asdict
-from typing import Annotated, Optional
+from typing import Annotated
 
 from pydantic import Field as PydanticField
 
@@ -40,21 +40,21 @@ class CitationRecord:
     doi: str                                    # primary key (prefer journal DOI over preprint)
     title: str
     authors: list[str] = field(default_factory=list)   # ["Last, First", ...]
-    year: Optional[int] = None
-    venue: Optional[str] = None
+    year: int | None = None
+    venue: str | None = None
     alt_dois: list[str] = field(default_factory=list)  # alternate DOIs (preprint ↔ journal)
-    source_tool: Optional[str] = None           # "arxiv", "semantic_scholar", "doi"
-    bibtex: Optional[str] = None
-    orcids: Optional[dict[str, str]] = None     # {"Author Name": "0000-..."}
-    added: Optional[str] = None                 # ISO 8601 timestamp
-    score: Optional[int] = None                 # LLM-assigned
+    source_tool: str | None = None           # "arxiv", "semantic_scholar", "doi"
+    bibtex: str | None = None
+    orcids: dict[str, str] | None = None     # {"Author Name": "0000-..."}
+    added: str | None = None                 # ISO 8601 timestamp
+    score: int | None = None                 # LLM-assigned
     confirmed: bool = False                     # LLM-managed
-    notes: Optional[str] = None                 # LLM-managed freetext
+    notes: str | None = None                 # LLM-managed freetext
     # Populated when CrossRef reports an updated-by entry of type=retraction
     # (see parkour_mcp.doi.fetch_crossref_metadata).  Presence of this
     # field classifies the record as retracted and routes it to the separate
     # retracted bucket on the shelf — never mixed with citable entries.
-    retraction: Optional[dict] = None           # {notice_doi, date, source, label}
+    retraction: dict | None = None           # {notice_doi, date, source, label}
 
 
 @dataclass
@@ -68,8 +68,8 @@ class ShelfTrackResult:
     tracking.
     """
 
-    status_line: Optional[str] = None
-    shelf_note: Optional[str] = None
+    status_line: str | None = None
+    shelf_note: str | None = None
 
 
 def _doi_priority(doi: str) -> int:
@@ -138,7 +138,7 @@ def record_to_bibtex(record: CitationRecord) -> str:
     return f"@misc{{{key},\n{fields_str}\n}}"
 
 
-def _extract_arxiv_id(record: CitationRecord) -> Optional[str]:
+def _extract_arxiv_id(record: CitationRecord) -> str | None:
     """Extract arXiv paper ID from a record's DOI or alt_dois."""
     _PREFIX = "10.48550/arXiv."
     if record.doi.startswith(_PREFIX):
@@ -189,7 +189,7 @@ class ResearchShelf:
     @staticmethod
     def _find_in_store(
         record: CitationRecord, store: dict[str, CitationRecord],
-    ) -> Optional[str]:
+    ) -> str | None:
         """Find an existing record in ``store`` sharing a DOI with ``record``.
 
         Checks:
@@ -249,7 +249,7 @@ class ResearchShelf:
         active_match = self._find_in_store(record, self._records)
         retracted_match = self._find_in_store(record, self._retracted)
 
-        shelf_note: Optional[str] = None
+        shelf_note: str | None = None
 
         if is_retracted_input:
             # Case A: flagged retracted.  Route to retracted store.
@@ -280,29 +280,28 @@ class ResearchShelf:
                     "tracked in retracted shelf bucket "
                     "(not added to active citations)"
                 )
+        # Case B: not flagged retracted by this fetch.  If any known
+        # DOI links to the retracted store, treat as retracted
+        # (sticky — retraction status is never unset by re-inspection).
+        elif retracted_match:
+            existing = self._retracted[retracted_match]
+            self._merge_into_existing(record, existing)
+            if retracted_match != record.doi and retracted_match in self._retracted:
+                del self._retracted[retracted_match]
+            self._retracted[record.doi] = record
+            # No note — the retraction was previously surfaced; this
+            # inspection is just adding alt DOIs to an existing entry.
+        elif active_match:
+            existing = self._records[active_match]
+            self._merge_into_existing(record, existing)
+            if active_match != record.doi and active_match in self._records:
+                del self._records[active_match]
+            self._records[record.doi] = record
         else:
-            # Case B: not flagged retracted by this fetch.  If any known
-            # DOI links to the retracted store, treat as retracted
-            # (sticky — retraction status is never unset by re-inspection).
-            if retracted_match:
-                existing = self._retracted[retracted_match]
-                self._merge_into_existing(record, existing)
-                if retracted_match != record.doi and retracted_match in self._retracted:
-                    del self._retracted[retracted_match]
-                self._retracted[record.doi] = record
-                # No note — the retraction was previously surfaced; this
-                # inspection is just adding alt DOIs to an existing entry.
-            elif active_match:
-                existing = self._records[active_match]
-                self._merge_into_existing(record, existing)
-                if active_match != record.doi and active_match in self._records:
-                    del self._records[active_match]
-                self._records[record.doi] = record
-            else:
-                record.added = record.added or time.strftime(
-                    "%Y-%m-%dT%H:%M:%SZ", time.gmtime(),
-                )
-                self._records[record.doi] = record
+            record.added = record.added or time.strftime(
+                "%Y-%m-%dT%H:%M:%SZ", time.gmtime(),
+            )
+            self._records[record.doi] = record
 
         return ShelfTrackResult(
             status_line=self._status_line_unlocked(),
@@ -323,7 +322,7 @@ class ResearchShelf:
         async with self._lock:
             return self._track_unlocked(record)
 
-    def _resolve_doi(self, doi: str) -> tuple[Optional[str], Optional[str]]:
+    def _resolve_doi(self, doi: str) -> tuple[str | None, str | None]:
         """Resolve a DOI to its primary key plus bucket ("active"/"retracted").
 
         Checks alt_dois as fallback.  Returns (None, None) if the DOI is
@@ -509,7 +508,7 @@ class ResearchShelf:
             self._retracted.clear()
             return count
 
-    def _status_line_unlocked(self) -> Optional[str]:
+    def _status_line_unlocked(self) -> str | None:
         """Internal status-line computation; caller must hold the lock."""
         active = len(self._records)
         retracted = len(self._retracted)
@@ -522,7 +521,7 @@ class ResearchShelf:
             bits.append(f"{retracted} retracted")
         return f"{bits[0]} ({', '.join(bits[1:])}) — use {tool_name('research_shelf')} to review"
 
-    async def status_line(self) -> Optional[str]:
+    async def status_line(self) -> str | None:
         """Compact status for frontmatter. Returns None if shelf is empty."""
         async with self._lock:
             return self._status_line_unlocked()
@@ -532,7 +531,7 @@ class ResearchShelf:
 # Singleton
 # ---------------------------------------------------------------------------
 
-_shelf: Optional[ResearchShelf] = None
+_shelf: ResearchShelf | None = None
 
 
 def _get_shelf() -> ResearchShelf:
@@ -633,9 +632,8 @@ def _retraction_note_string(record: CitationRecord) -> str:
         parts.append(f"by {notice_doi}")
     if date := ret.get("date"):
         parts.append(f"on {date}")
-    if source := ret.get("source"):
-        if source != "unknown":
-            parts.append(f"(source: {source})")
+    if (source := ret.get("source")) and source != "unknown":
+        parts.append(f"(source: {source})")
     return " ".join(parts)
 
 
@@ -747,7 +745,7 @@ async def research_shelf(
             )
         return _build_frontmatter(fm_entries) + "\n\n" + body
 
-    elif action == "confirm":
+    if action == "confirm":
         doi = query.strip()
         if not doi:
             return "Error: DOI is required for confirm action."
@@ -755,7 +753,7 @@ async def research_shelf(
             return f"Confirmed: {doi}"
         return f"Error: DOI not found on shelf: {doi}"
 
-    elif action == "remove":
+    if action == "remove":
         dois = [d.strip() for d in query.split(",") if d.strip()]
         if not dois:
             return "Error: At least one DOI is required for remove action."
@@ -764,7 +762,7 @@ async def research_shelf(
             return f"Removed {len(removed)} paper(s): {', '.join(removed)}"
         return "No matching DOIs found on shelf."
 
-    elif action == "score":
+    if action == "score":
         parts = query.strip().split(None, 1)
         if len(parts) != 2:
             return "Error: score action requires 'DOI VALUE' (e.g. '10.1234/foo 8')."
@@ -777,7 +775,7 @@ async def research_shelf(
             return f"Score set to {value} for {doi}"
         return f"Error: DOI not found on shelf: {doi}"
 
-    elif action == "note":
+    if action == "note":
         parts = query.strip().split(None, 1)
         if len(parts) < 2:
             return "Error: note action requires 'DOI TEXT'."
@@ -786,7 +784,7 @@ async def research_shelf(
             return f"Note set for {doi}"
         return f"Error: DOI not found on shelf: {doi}"
 
-    elif action == "export":
+    if action == "export":
         tokens = query.strip().lower().split()
         if not tokens:
             return "Error: export action requires a format (bibtex, ris, or json)."
@@ -795,10 +793,10 @@ async def research_shelf(
         if fmt == "bibtex":
             result = await shelf.export_bibtex(include_retracted=include_retracted)
             return result if result else "Shelf is empty."
-        elif fmt == "ris":
+        if fmt == "ris":
             result = await shelf.export_ris(include_retracted=include_retracted)
             return result if result else "Shelf is empty."
-        elif fmt == "json":
+        if fmt == "json":
             body = await shelf.export_json()
             fm = _build_frontmatter(FMEntries({
                 "action": "export",
@@ -810,10 +808,9 @@ async def research_shelf(
                 ),
             }))
             return fm + "\n\n" + body
-        else:
-            return f"Error: Unknown export format '{fmt}'. Use bibtex, ris, or json."
+        return f"Error: Unknown export format '{fmt}'. Use bibtex, ris, or json."
 
-    elif action == "import":
+    if action == "import":
         if not query.strip():
             return "Error: JSON data is required for import action."
         try:

@@ -30,8 +30,8 @@ import secrets
 import string
 import time
 import uuid
-from datetime import datetime, timezone
-from typing import Optional, Union
+from datetime import datetime, UTC
+from typing import Optional
 from urllib.parse import urlparse, urlunparse, urlencode, parse_qs
 
 from curl_cffi.requests import AsyncSession
@@ -73,8 +73,8 @@ _ANDROID_OAUTH_CLIENT_ID = "ohXpoqrZYub1kg"
 _WEB_OAUTH_CLIENT_ID = "3XfBJWliHvqACnXrfIYlLw"
 
 _OAUTH_API_HOST = "oauth.reddit.com"
-_MOBILE_TOKEN_URL = "https://www.reddit.com/auth/v2/oauth/access-token/loid"
-_WEB_TOKEN_URL = "https://www.reddit.com/api/v1/access_token"
+_MOBILE_TOKEN_URL = "https://www.reddit.com/auth/v2/oauth/access-token/loid"  # noqa: S105  # not a secret: token-mint endpoint URL
+_WEB_TOKEN_URL = "https://www.reddit.com/api/v1/access_token"  # noqa: S105  # not a secret: token-mint endpoint URL
 _INSTALLED_CLIENT_GRANT = "https://oauth.reddit.com/grants/installed_client"
 
 # Refresh this many seconds before stated expiry so a content fetch never
@@ -102,12 +102,12 @@ _DEVICE_ID_ALPHABET = string.ascii_letters + string.digits
 # like the page/wiki caches. Guarded by _oauth_lock so concurrent first
 # fetches mint only once.
 _oauth_lock = asyncio.Lock()
-_oauth_token: Optional[str] = None
+_oauth_token: str | None = None
 # Device UA plus the x-reddit-loid / x-reddit-session identifiers Reddit
 # issued, replayed on every content request so it looks like one device.
 _oauth_token_headers: dict[str, str] = {}
 _oauth_expires_at: float = 0.0
-_oauth_backend: Optional[str] = None  # "mobile" | "web"
+_oauth_backend: str | None = None  # "mobile" | "web"
 _refresh_task: Optional["asyncio.Task"] = None
 
 
@@ -131,7 +131,7 @@ def _android_device_headers() -> dict[str, str]:
     }
 
 
-async def _mint_mobile_token() -> Optional[tuple[str, float, dict[str, str]]]:
+async def _mint_mobile_token() -> tuple[str, float, dict[str, str]] | None:
     """Mint a userless token via the logged-out Android-app grant.
 
     Mirrors redlib ``MobileSpoofAuth``: HTTP Basic with the Android client id
@@ -172,7 +172,7 @@ async def _mint_mobile_token() -> Optional[tuple[str, float, dict[str, str]]]:
         return None
 
 
-async def _mint_web_token() -> Optional[tuple[str, float, dict[str, str]]]:
+async def _mint_web_token() -> tuple[str, float, dict[str, str]] | None:
     """Fallback mint via the generic-web installed_client grant.
 
     Mirrors redlib ``GenericWebAuth``: Basic auth with the web client id and a
@@ -262,7 +262,7 @@ async def _token_daemon() -> None:
             await asyncio.sleep(30.0)
 
 
-async def _ensure_token() -> Optional[str]:
+async def _ensure_token() -> str | None:
     """Return a valid bearer token, minting/refreshing under lock if needed.
 
     Starts the refresh daemon after the first successful mint so later
@@ -302,7 +302,7 @@ _MAX_COMMENT_DEPTH = 6
 # JSON fetch
 # ---------------------------------------------------------------------------
 
-async def _resolve_redd_it(url: str) -> Optional[str]:
+async def _resolve_redd_it(url: str) -> str | None:
     """Follow a redd.it short link redirect to get the canonical URL.
 
     Attaches the bearer token and device headers when available (redlib
@@ -329,7 +329,7 @@ async def _resolve_redd_it(url: str) -> Optional[str]:
         return None
 
 
-def _check_reddit_json_error(data: Union[list, dict]) -> Union[list, dict, str]:
+def _check_reddit_json_error(data: list | dict) -> list | dict | str:
     """Map Reddit's in-band JSON error envelopes to error strings.
 
     Mirrors redlib client.rs ``json()``: a suspended user, the quarantined /
@@ -358,7 +358,7 @@ def _check_reddit_json_error(data: Union[list, dict]) -> Union[list, dict, str]:
     return data
 
 
-async def _fetch_reddit_json(url: str) -> Union[list, dict, str]:
+async def _fetch_reddit_json(url: str) -> list | dict | str:
     """Fetch a Reddit URL's JSON via the authenticated oauth.reddit.com API.
 
     Rewrites the host to oauth.reddit.com, appends ``.json`` and
@@ -388,7 +388,7 @@ async def _fetch_reddit_json(url: str) -> Union[list, dict, str]:
 
 async def _reddit_api_get(
     json_url: str, *, retry_on_401: bool,
-) -> Union[list, dict, str]:
+) -> list | dict | str:
     """GET an oauth.reddit.com JSON URL with the current bearer token."""
     headers = {
         "Authorization": f"Bearer {_oauth_token}",
@@ -452,10 +452,9 @@ async def _fetch_reddit_content(url: str) -> tuple[str, str]:
     try:
         if page_type == RedditPageType.COMMENT_THREAD and isinstance(data, list):
             return _format_comment_thread(data)
-        elif page_type == RedditPageType.USER:
+        if page_type == RedditPageType.USER:
             return _format_listing(data, kind="user")
-        else:
-            return _format_listing(data, kind="subreddit")
+        return _format_listing(data, kind="subreddit")
     except Exception as exc:
         logger.debug("Reddit formatting error: %s", exc)
         return "Reddit", f"Error: Failed to parse Reddit response — {type(exc).__name__}"
@@ -467,7 +466,7 @@ async def _fetch_reddit_content(url: str) -> tuple[str, str]:
 
 def _format_timestamp(utc: float) -> str:
     """Convert Unix timestamp to human-readable UTC date string."""
-    dt = datetime.fromtimestamp(utc, tz=timezone.utc)
+    dt = datetime.fromtimestamp(utc, tz=UTC)
     return dt.strftime("%Y-%m-%d %H:%M UTC")
 
 
@@ -696,17 +695,14 @@ def _walk_comment_tree(
 # ---------------------------------------------------------------------------
 
 def _format_listing(
-    data: Union[list, dict], *, kind: str = "subreddit",
+    data: list | dict, *, kind: str = "subreddit",
 ) -> tuple[str, str]:
     """Format a subreddit or user listing as markdown.
 
     Returns ``(title, markdown)``.
     """
     # Listings come as either a single dict or a one-element list
-    if isinstance(data, list):
-        listing = data[0]
-    else:
-        listing = data
+    listing = data[0] if isinstance(data, list) else data
 
     children = listing.get("data", {}).get("children", [])
 

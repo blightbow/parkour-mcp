@@ -23,6 +23,7 @@ dependencies = [
     "htmd-py>=0.1.2",
     "yt-dlp>=2026.3.17",
     "youtube-transcript-api>=1.2.4",
+    "defusedxml>=0.7.1",
 ]
 classifiers = [
     "Programming Language :: Python :: 3",
@@ -103,11 +104,78 @@ venv = ".venv"
 # time; vulture only parses the file, never imports it.
 exclude = [".vulture_whitelist.py"]
 
+[tool.ruff.lint]
+# Trial friction ruleset (branch: chore/ruff-ruleset-trial). Goal: rules that
+# make an agentic coder reconsider its approach when pytest-ruff rejects.
+# Cosmetic/autofixable groups (C4, RET, SIM, UP) are included but meant to be
+# auto-applied, not deliberated. TC is dropped — it relocates imports into
+# `if TYPE_CHECKING:`, breaking pydantic runtime annotations on tool
+# signatures. TID is omitted — it is a no-op here (0 parent-relative imports;
+# the repo's sibling imports are PEP 8-blessed and untouched by TID252's
+# default). ANN401 is not listed because the ANN group is not selected.
+extend-select = [
+    "BLE",      # blind-except: don't swallow Exception naked
+    "TRY",      # tryceratops: error-handling anti-patterns
+    "PLC0415",  # import-outside-top-level (the motivating rule)
+    "C4",       # comprehensions
+    "FBT",      # boolean traps
+    "RET",      # return practices
+    "SIM",      # simplifications
+    "UP",       # pyupgrade
+    "T20",      # print/pprint
+    "G",        # logging format
+    "LOG",      # logging misuse
+    "PLR",      # pylint refactor/complexity
+    "S",        # bandit security
+]
+ignore = [
+    "FBT001",   # bool positional hint — MCP tool params surface bools deliberately
+    "FBT002",   # bool positional default — same
+    "PLR0913",  # too-many-arguments — pydantic/schema-driven arity
+    "PLR2004",  # magic value — HTTP status codes / timeouts are domain constants
+    "S101",     # assert — type-narrowing/invariants in src, the point in tests
+    "TRY003",   # long exception messages — usually good signal here
+    # --- exception-handling policy (measured on this codebase) ---
+    # S110 (try-except-pass) and SIM105 stay ACTIVE: a broad `except` must not
+    # SILENTLY swallow. Canonical fix for an S110 hit — never bare-`pass`:
+    #     except Exception:
+    #         logger.debug("<what failed> for %s", x, exc_info=True)
+    # That records why a best-effort path fell through (e.g. a fast-path
+    # detector that errored) without escalating an expected fall-through to a
+    # louder level. BLE001 is disabled: its exemption accepts only re-raise or
+    # *error*-level logging, but our severity for expected best-effort
+    # fall-through (detection/enrichment across ~11 IO modules) is debug — and
+    # escalating to error would flood monitoring with non-events. The pattern is
+    # too widespread for per-file scoping to be meaningful, so we enforce
+    # "don't swallow silently" (S110/SIM105) and accept intentional broad
+    # catches that debug-log.
+    "BLE001",
+    # --- complexity: dropped after the trial (84 hits across 17 files on
+    # established large dispatchers; file-level grandfather disables them where
+    # they matter, and decompose-to-satisfy is shotgun surgery) ---
+    "PLR0911",
+    "PLR0912",
+    "PLR0915",
+]
+
 [tool.ruff.lint.per-file-ignores]
 # Vulture whitelist: bare name references are the format vulture requires
 # to count a symbol as "used". Those references are undefined at parse
 # time by design — ruff's F821 would otherwise flag every entry.
 ".vulture_whitelist.py" = ["F821"]
+# Tests: asserts are the point; fixture/signature args go unused; magic values
+# in assertions are intentional; respx-style patches use lazy imports. Tests
+# also parse trusted XML fixtures (S314), exercise the SSRF/bind-all path
+# (S104), shell out to run semgrep (S603/S607), and use positional bools /
+# list-tuples in fixtures (FBT003/C409) — all test idioms, not prod concerns.
+"tests/**/*.py" = [
+    "S101", "S105", "S106", "ARG", "PLR2004", "PLC0415",
+    "S314", "S104", "S603", "S607", "FBT003", "C409",
+]
+# Scripts: CLI/build tooling, not the production request loop. They print by
+# design (T201), may swallow (S110), lazy-import build deps (PLC0415), and
+# urlopen known documentation URLs at build time (S310).
+"scripts/**/*.py" = ["T201", "PLR2004", "S110", "PLC0415", "S310"]
 
 [dependency-groups]
 dev = [

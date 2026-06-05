@@ -2,18 +2,20 @@
 
 import logging
 import re
-from typing import Optional, Union
+from pathlib import Path
 from urllib.parse import urlparse
 
 import httpx
 
 from .common import (
+    _FETCH_HEADERS,
     _MAX_RESPONSE_BYTES,
     _MAX_SECTIONS_RESPONSE_BYTES,
     ResponseTooLarge,
     _classify_content_type,
     check_url_ssrf,
     guarded_fetch,
+    s2_enabled,
     tool_name,
 )
 from .markdown import (
@@ -61,11 +63,11 @@ _JS_SHELL_SEEN: set[str] = set()
 async def web_fetch_direct(
     url: str,
     max_tokens: int = 5000,
-    section: Optional[Union[str, list[str]]] = None,
-    search: Optional[str] = None,
-    slices: Optional[Union[int, list[int]]] = None,
+    section: str | list[str] | None = None,
+    search: str | None = None,
+    slices: int | list[int] | None = None,
     requires_js: bool = False,
-    actions: Optional[list] = None,
+    actions: list | None = None,
     max_elements: int = 25,
 ) -> str:
     """Fetch content from a URL, by static HTTP or a headless browser.
@@ -108,7 +110,7 @@ async def web_fetch_direct(
 
     # Detect GitHub line anchors (#L45, #L45-L100) before they become
     # section requests — these are line ranges, not heading names.
-    line_range: Optional[tuple[int, int]] = None
+    line_range: tuple[int, int] | None = None
     if fragment and not section_names:
         lm = _LINE_ANCHOR_RE.match(fragment)
         if lm:
@@ -161,9 +163,8 @@ async def web_fetch_direct(
             if search is not None:
                 return _search_slices(url, search, max_tokens, fm_base) or \
                     "Error: Page cache unavailable."
-            else:
-                return _get_slices(url, slices_list, max_tokens, fm_base) or \
-                    "Error: Page cache unavailable."
+            return _get_slices(url, slices_list, max_tokens, fm_base) or \
+                "Error: Page cache unavailable."
         # Cache miss — fall through to fetch, which populates the cache
 
     # --- arXiv fast path (before S2 — arXiv URLs get arXiv-native metadata) ---
@@ -178,23 +179,26 @@ async def web_fetch_direct(
             if result is not None:
                 return result
     except Exception:
-        pass
+        # S110 standard: a best-effort fast path must not swallow silently.
+        # Debug-log why we fell through (kept at debug — an expected
+        # fall-through to the next detector / generic HTTP is not an error).
+        # Apply this same `logger.debug(..., exc_info=True)` pattern to the
+        # other fall-through guards; BLE001 is intentionally disabled for it.
+        logger.debug("arXiv fast path failed for %s; falling through", url, exc_info=True)
 
     # --- Semantic Scholar fast path (gated on S2 opt-in) ---
     try:
-        from .common import s2_enabled
-        if s2_enabled():
-            if _detect_s2_url(url):
-                if want_slicing:
-                    return (
-                        "Error: search/slices not supported for Semantic Scholar URLs. "
-                        "Use the SemanticScholar tool's snippets action instead."
-                    )
-                result = await _s2_fast_path(url)
-                if result is not None:
-                    return result
+        if s2_enabled() and _detect_s2_url(url):
+            if want_slicing:
+                return (
+                    "Error: search/slices not supported for Semantic Scholar URLs. "
+                    "Use the SemanticScholar tool's snippets action instead."
+                )
+            result = await _s2_fast_path(url)
+            if result is not None:
+                return result
     except Exception:
-        pass
+        logger.debug("Semantic Scholar fast path failed for %s; falling through", url, exc_info=True)
 
     # --- IETF fast path (before DOI — catches rfc-editor.org and datatracker URLs) ---
     try:
@@ -217,7 +221,7 @@ async def web_fetch_direct(
             if result is not None:
                 return result
     except Exception:
-        pass
+        logger.debug("IETF fast path failed for %s; falling through", url, exc_info=True)
 
     # --- DOI fast path (after arXiv/S2/IETF, before MediaWiki) ---
     try:
@@ -228,7 +232,7 @@ async def web_fetch_direct(
             if result is not None:
                 return result
     except Exception:
-        pass
+        logger.debug("DOI fast path failed for %s; falling through", url, exc_info=True)
 
     # --- Reddit fast path (after DOI, before MediaWiki) ---
     try:
@@ -240,7 +244,7 @@ async def web_fetch_direct(
             # (if the caller didn't set their own section=/search=/slices=)
             # promote COMMENTID to section= so the output still lands
             # on the comment the URL pointed to.
-            permalink_note: Optional[str] = None
+            permalink_note: str | None = None
             permalink = _extract_comment_permalink(url)
             if permalink:
                 url, permalink_comment_id = permalink
@@ -279,11 +283,11 @@ async def web_fetch_direct(
                         )
                 return result
     except Exception:
-        pass
+        logger.debug("Reddit fast path failed for %s; falling through", url, exc_info=True)
 
     # --- GitHub fast path (after Reddit, before MediaWiki) ---
     try:
-        from .github import _detect_github_url
+        from .github import _detect_github_url  # noqa: PLC0415  # intra-package, breaks cycle
         if _detect_github_url(url):
             result = await _github_fast_path(url, max_tokens, line_range=line_range)
             if result is not None:
@@ -308,7 +312,7 @@ async def web_fetch_direct(
                         )
                 return result
     except Exception:
-        pass
+        logger.debug("GitHub fast path failed for %s; falling through", url, exc_info=True)
 
     # --- MediaWiki fast path (before HTTP fetch) ---
     try:
@@ -324,7 +328,8 @@ async def web_fetch_direct(
                                          fallback=result)
             return result
     except Exception:
-        pass  # Fall through to HTTP fetch
+        # Fall through to HTTP fetch
+        logger.debug("MediaWiki fast path failed for %s; falling through", url, exc_info=True)
 
     # --- requires_js / actions: hand off to the headless-browser renderer ---
     # Runs only after the API-backed fast paths miss — they are renderer-
@@ -339,7 +344,7 @@ async def web_fetch_direct(
             and url not in _page_cache
             and url not in _JS_SHELL_SEEN
         )
-        from .fetch_js import _render_js
+        from .fetch_js import _render_js  # noqa: PLC0415  # intra-package, breaks cycle
         return await _render_js(
             url, source_url, fragment_warning, section_names,
             search, slices, slices_list,
@@ -373,7 +378,7 @@ async def web_fetch_direct(
 
     # --- Discourse post-fetch detection (header-based) ---
     try:
-        from .discourse import _detect_discourse_headers
+        from .discourse import _detect_discourse_headers  # noqa: PLC0415  # intra-package, breaks cycle
         if _detect_discourse_headers(response.headers):
             result = await _discourse_fast_path(url, response.headers, max_tokens)
             if result is not None:
@@ -398,7 +403,7 @@ async def web_fetch_direct(
                         )
                 return result
     except Exception:
-        pass
+        logger.debug("Discourse fast path failed for %s; falling through", url, exc_info=True)
 
     # Check content type
     content_type = response.headers.get("content-type", "")
@@ -442,12 +447,11 @@ async def web_fetch_direct(
     if not markdown_content:
         if _detect_js_dependent(response.text):
             _JS_SHELL_SEEN.add(url)
-            fm = _build_frontmatter({
+            return _build_frontmatter({
                 "source": source_url,
                 "warning": fragment_warning,
                 "hint": "this page requires JavaScript to render content; retry with requires_js=true",
             })
-            return fm
         return f"Error: No content extracted from {url}"
 
     fm_entries = FMEntries({"source": source_url, "warning": fragment_warning})
@@ -457,7 +461,7 @@ async def web_fetch_direct(
     try:
         arxiv_id = _detect_arxiv_html_url(url)
         if arxiv_id:
-            from .shelf import _track_on_shelf, CitationRecord
+            from .shelf import CitationRecord, _track_on_shelf  # noqa: PLC0415  # intra-package, breaks cycle
             arxiv_doi = f"10.48550/arXiv.{_strip_version(arxiv_id)}"
             _shelf_result = await _track_on_shelf(CitationRecord(
                 doi=arxiv_doi,
@@ -466,7 +470,7 @@ async def web_fetch_direct(
             ))
             fm_entries["shelf"] = _shelf_result.status_line
     except Exception:
-        pass
+        logger.debug("arXiv shelf tracking failed for %s; continuing", url, exc_info=True)
 
     # Cold blind full-page fetch: the agent pulled a whole page it has
     # never structurally inspected.  Surface the scout-with-sections
@@ -489,20 +493,18 @@ async def web_fetch_direct(
 
 
 async def _github_sections(
-    match, original_url: str, section_names: Optional[list[str]],
-) -> Optional[str]:
+    match, original_url: str, section_names: list[str] | None,
+) -> str | None:
     """Build section listing for GitHub URLs.
 
     Returns a formatted section list, or None if the URL kind
     isn't supported for section listing.
     """
-    from .github import (
+    from .github import (  # noqa: PLC0415  # intra-package, breaks cycle
         extract_code_definitions, format_code_sections,
         _build_issue_markdown, _build_pr_markdown,
         _get_github_token, _blob_presplit, _split_github_comments,
     )
-    from .common import _FETCH_HEADERS
-    from pathlib import Path
 
     # --- Blob: code definition tree via tree-sitter ---
     if match.kind == "blob" and match.ref and match.path:
@@ -552,7 +554,7 @@ async def _github_sections(
 
         defs = extract_code_definitions(source_text, ext)
         if not defs:
-            fm = _build_frontmatter({
+            return _build_frontmatter({
                 "source": original_url,
                 "api": "GitHub (raw)",
                 "note": (
@@ -560,7 +562,6 @@ async def _github_sections(
                 ),
                 "hint": f"Use {tool_name('web_fetch_direct')} to view the file content directly",
             })
-            return fm
 
         section_body = format_code_sections(defs)
         fm = _build_frontmatter({
@@ -664,29 +665,27 @@ async def _github_sections(
 
     # --- Repo: redirect to GitHub tool ---
     if match.kind == "repo":
-        fm = _build_frontmatter({
+        return _build_frontmatter({
             "source": original_url,
             "api": "GitHub",
             "note": "Section listing is not applicable for repository pages.",
             "see_also": f"Use GitHub tool with action='repo' query='{match.owner}/{match.repo}' "
                         "for repo metadata and README, or action='tree' for directory listing",
         })
-        return fm
 
     # --- Tree: redirect to GitHub tool ---
     if match.kind == "tree":
         query = f"{match.owner}/{match.repo}/{match.path or ''}"
-        fm = _build_frontmatter({
+        return _build_frontmatter({
             "source": original_url,
             "api": "GitHub",
             "note": "Section listing is not applicable for directory pages.",
             "see_also": f"Use GitHub tool with action='tree' query='{query}' "
                         "for directory listing",
         })
-        return fm
 
     # --- Gist, discussion, or unknown: redirect ---
-    fm = _build_frontmatter({
+    return _build_frontmatter({
         "source": original_url,
         "api": "GitHub",
         "see_also": (
@@ -695,7 +694,6 @@ async def _github_sections(
             "'file' for a blob, 'issue' or 'pull_request' for threads."
         ),
     })
-    return fm
 
 
 async def web_fetch_sections(url: str, slice: int = 0) -> str:
@@ -730,7 +728,7 @@ async def web_fetch_sections(url: str, slice: int = 0) -> str:
     # --- arXiv fast path (sections not applicable for API data) ---
     arxiv_id = _detect_arxiv_url(url)
     if arxiv_id:
-        fm = _build_frontmatter({
+        return _build_frontmatter({
             "title": "arXiv paper",
             "source": original_url,
             "api": "arXiv",
@@ -738,26 +736,22 @@ async def web_fetch_sections(url: str, slice: int = 0) -> str:
                     f"Use {tool_name('web_fetch_direct')} with https://arxiv.org/html/{arxiv_id} "
                     "for full paper text with section-aware browsing.",
         })
-        return fm
 
     # --- Semantic Scholar fast path (sections not applicable for API data) ---
-    from .common import s2_enabled as _s2_on
-    if _s2_on():
-        if _detect_s2_url(url):
-            fm = _build_frontmatter({
-                "title": "Semantic Scholar paper",
-                "source": original_url,
-                "api": "Semantic Scholar",
-                "note": "Section listing is not applicable for API-sourced paper data. "
-                        f"Use {tool_name('web_fetch_direct')} or {tool_name('semantic_scholar')} tool for full content.",
-            })
-            return fm
+    if s2_enabled() and _detect_s2_url(url):
+        return _build_frontmatter({
+            "title": "Semantic Scholar paper",
+            "source": original_url,
+            "api": "Semantic Scholar",
+            "note": "Section listing is not applicable for API-sourced paper data. "
+                    f"Use {tool_name('web_fetch_direct')} or {tool_name('semantic_scholar')} tool for full content.",
+        })
 
     # --- IETF fast path (sections: redirect to HTML for section browsing) ---
     ietf_match = _detect_ietf_url(url)
     if ietf_match and ietf_match.get("type") == "rfc":
         n = ietf_match["number"]
-        fm = _build_frontmatter({
+        return _build_frontmatter({
             "source": original_url,
             "api": "IETF (RFC Editor)",
             "note": f"Section listing is not available from the RFC Editor metadata endpoint. "
@@ -765,10 +759,9 @@ async def web_fetch_sections(url: str, slice: int = 0) -> str:
                     f"https://www.rfc-editor.org/rfc/rfc{n}.html "
                     "to browse the rendered body by section.",
         })
-        return fm
 
     # --- Reddit fast path (comment tree as sections) ---
-    from .reddit import (
+    from .reddit import (  # noqa: PLC0415  # intra-package, breaks cycle
         _fetch_reddit_json,
         _resolve_redd_it, _build_comment_section_tree, _format_comment_thread,
         _split_by_comments,
@@ -805,19 +798,19 @@ async def web_fetch_sections(url: str, slice: int = 0) -> str:
                     })
                     return fm + "\n\n" + _fence_content(section_body)
 
+        except Exception:
+            logger.debug("Reddit sections fast path failed for %s; falling through", url, exc_info=True)
+        else:
             # Non-thread Reddit pages: no meaningful section tree
-            fm = _build_frontmatter({
+            return _build_frontmatter({
                 "source": original_url,
                 "api": "Reddit (oauth.reddit.com)",
                 "note": "Section listing is only available for comment threads. "
                         f"Use {tool_name('web_fetch_direct')} with search= for keyword search.",
             })
-            return fm
-        except Exception:
-            pass
 
     # --- GitHub fast path ---
-    from .github import _detect_github_url
+    from .github import _detect_github_url  # noqa: PLC0415  # intra-package, breaks cycle
     gh_match = _detect_github_url(url)
     if gh_match is not None:
         result = await _github_sections(gh_match, original_url, section_names)
@@ -834,7 +827,7 @@ async def web_fetch_sections(url: str, slice: int = 0) -> str:
                 cache_url=original_url, renderer="wiki",
             )
     except Exception:
-        pass
+        logger.debug("MediaWiki sections fast path failed for %s; falling through", url, exc_info=True)
 
     # --- HTTP fetch ---
     # Section extraction only emits a heading tree, not page content, so the
@@ -855,7 +848,7 @@ async def web_fetch_sections(url: str, slice: int = 0) -> str:
 
     # --- Discourse post-fetch detection (section tree) ---
     try:
-        from .discourse import (
+        from .discourse import (  # noqa: PLC0415  # intra-package, breaks cycle
             _detect_discourse_headers, _extract_topic_id,
             _build_post_section_tree, _format_topic, _split_by_posts,
             _base_url_from, _fetch_topic, _fetch_remaining_posts,
@@ -900,7 +893,7 @@ async def web_fetch_sections(url: str, slice: int = 0) -> str:
                     })
                     return fm + "\n\n" + _fence_content(section_body)
     except Exception:
-        pass
+        logger.debug("Discourse sections fast path failed for %s; falling through", url, exc_info=True)
 
     content_type = response.headers.get("content-type", "")
     if _classify_content_type(content_type) != "html":
@@ -911,11 +904,10 @@ async def web_fetch_sections(url: str, slice: int = 0) -> str:
     if not markdown_content:
         if _detect_js_dependent(response.text):
             _JS_SHELL_SEEN.add(original_url)
-            fm = _build_frontmatter({
+            return _build_frontmatter({
                 "source": original_url,
                 "hint": "this page requires JavaScript to render content; retry with requires_js=true",
             })
-            return fm
         return f"Error: No content extracted from {url}"
 
     return _sections_response(
@@ -928,9 +920,9 @@ def _sections_response(
     title: str,
     url: str,
     markdown_content: str,
-    section_names: Optional[list[str]],
-    cache_url: Optional[str] = None,
-    renderer: Optional[str] = None,
+    section_names: list[str] | None,
+    cache_url: str | None = None,
+    renderer: str | None = None,
     slice_index: int = 0,
 ) -> str:
     """Build a sections-only response from markdown content.

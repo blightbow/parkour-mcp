@@ -25,7 +25,6 @@ Fetch-ready URL *rewriting* tied to a specific endpoint stays with its handler
 
 import re
 from enum import Enum
-from typing import Optional
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 # ---------------------------------------------------------------------------
@@ -40,7 +39,7 @@ ARXIV_URL_RE = re.compile(
 )
 
 
-def _detect_arxiv_url(url: str) -> Optional[str]:
+def _detect_arxiv_url(url: str) -> str | None:
     """Extract a bare arXiv ID from an arXiv URL, or None.
 
     Matches /abs/ and /pdf/ paths. Does NOT match /html/ — those should
@@ -57,7 +56,7 @@ _ARXIV_HTML_RE = re.compile(
 )
 
 
-def _detect_arxiv_html_url(url: str) -> Optional[str]:
+def _detect_arxiv_html_url(url: str) -> str | None:
     """Extract arXiv ID from an /html/ URL, or None."""
     m = _ARXIV_HTML_RE.search(url)
     return m.group(1) if m else None
@@ -89,7 +88,7 @@ DOI_URL_RE = re.compile(
 )
 
 
-def _detect_doi_url(url: str) -> Optional[str]:
+def _detect_doi_url(url: str) -> str | None:
     """Extract a bare DOI from a doi.org URL, or None."""
     m = DOI_URL_RE.search(url)
     return m.group(1) if m else None
@@ -105,7 +104,7 @@ S2_URL_RE = re.compile(
 )
 
 
-def _detect_s2_url(url: str) -> Optional[str]:
+def _detect_s2_url(url: str) -> str | None:
     """Extract a 40-char hex paper ID from a Semantic Scholar URL, or None."""
     m = S2_URL_RE.search(url)
     return m.group(1) if m else None
@@ -132,7 +131,7 @@ _DATATRACKER_RE = re.compile(
 )
 
 
-def _detect_ietf_url(url: str) -> Optional[dict]:
+def _detect_ietf_url(url: str) -> dict | None:
     """Detect an IETF RFC or Internet-Draft URL.
 
     Returns ``{"type": "rfc", "number": int}`` for RFC URLs,
@@ -180,7 +179,7 @@ def is_reddit_url(url: str) -> bool:
     return bool(_REDD_IT_RE.match(url) or _REDDIT_URL_RE.match(url))
 
 
-def _detect_reddit_url(url: str) -> Optional[str]:
+def _detect_reddit_url(url: str) -> str | None:
     """Return normalised old.reddit.com URL if *url* is a Reddit link, else None.
 
     Rewrites the host to old.reddit.com, preserves ``sort`` query param,
@@ -240,7 +239,7 @@ _PERMALINK_RE = re.compile(
 )
 
 
-def _extract_comment_permalink(url: str) -> Optional[tuple[str, str]]:
+def _extract_comment_permalink(url: str) -> tuple[str, str] | None:
     """Decompose a comment-permalink URL into (stripped_url, comment_id).
 
     Returns ``None`` for whole-post URLs, subreddit listings, user

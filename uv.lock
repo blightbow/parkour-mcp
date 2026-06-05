@@ -1014,6 +1014,7 @@ source = { editable = "." }
 dependencies = [
     { name = "beautifulsoup4" },
     { name = "curl-cffi" },
+    { name = "defusedxml" },
     { name = "htmd-py" },
     { name = "httpx", extra = ["http2"] },
     { name = "kagiapi" },
@@ -1061,6 +1062,7 @@ dev = [
 requires-dist = [
     { name = "beautifulsoup4" },
     { name = "curl-cffi", specifier = ">=0.15.0" },
+    { name = "defusedxml", specifier = ">=0.7.1" },
     { name = "htmd-py", specifier = ">=0.1.2" },
     { name = "httpx", extras = ["http2"] },
     { name = "kagiapi" },

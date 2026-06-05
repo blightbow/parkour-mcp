@@ -10,7 +10,7 @@ No authentication required.
 
 import asyncio
 import logging
-from typing import Annotated, Optional
+from typing import Annotated
 from urllib.parse import quote
 
 from pydantic import Field
@@ -64,7 +64,7 @@ _MAX_VERSIONS = 20
 # ---------------------------------------------------------------------------
 
 
-def _resolve_system(name: str) -> Optional[str]:
+def _resolve_system(name: str) -> str | None:
     """Map a friendly ecosystem name to the deps.dev system enum.
 
     Returns the uppercase system string (e.g. ``"PYPI"``) or None.
@@ -72,7 +72,7 @@ def _resolve_system(name: str) -> Optional[str]:
     return _SYSTEM_ALIASES.get(name.lower())
 
 
-def _parse_query(query: str) -> tuple[Optional[str], str, Optional[str]]:
+def _parse_query(query: str) -> tuple[str | None, str, str | None]:
     """Parse ``ecosystem/name[@version]`` into ``(system, name, version)``.
 
     Returns ``(None, "", None)`` if the format is invalid.
@@ -112,7 +112,7 @@ def _encode_name(name: str) -> str:
 
 def _format_package(
     pkg_data: dict,
-    ver_data: Optional[dict],
+    ver_data: dict | None,
     system: str,
     name: str,
 ) -> str:
@@ -268,7 +268,7 @@ def _format_version(ver_data: dict, system: str, name: str) -> str:
 
 def _format_dependencies(
     deps_data: dict,
-    reqs_data: Optional[dict],
+    reqs_data: dict | None,
     system: str,
     name: str,
     version: str,
@@ -608,8 +608,7 @@ async def _action_dependencies(system: str, name: str, version: str) -> str:
 
     if deps is None:
         # Both failed — return the error from deps
-        err = deps_result if isinstance(deps_result, str) else "Error: Failed to fetch dependency graph."
-        return err
+        return deps_result if isinstance(deps_result, str) else "Error: Failed to fetch dependency graph."
 
     # Count direct/transitive for frontmatter
     nodes = deps.get("nodes") or []

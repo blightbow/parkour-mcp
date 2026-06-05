@@ -11,7 +11,7 @@ in a source module's transport stack (httpx, curl_cffi, tree-sitter, yt-dlp).
 import ast
 from pathlib import Path
 
-import parkour_mcp.detection as detection
+from parkour_mcp import detection
 
 _DETECTION_SRC = Path(detection.__file__)
 

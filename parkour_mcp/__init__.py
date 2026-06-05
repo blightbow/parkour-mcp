@@ -652,7 +652,7 @@ def _resolve_catalog(s2_on: bool) -> list[tuple[str, Callable[..., Any]]]:
     """
     catalog: list[tuple[str, Callable[..., Any]]] = list(_ALWAYS_ON_TOOLS)
     if s2_on:
-        from .semantic_scholar import semantic_scholar
+        from .semantic_scholar import semantic_scholar  # noqa: PLC0415  # lazy intra-package tool import: only loaded when S2 opt-in is set
         catalog.append(("semantic_scholar", semantic_scholar))
     return catalog
 
@@ -704,7 +704,7 @@ def main():
         records = await shelf.list_all()
         if not records:
             return "Research shelf is empty."
-        from .shelf import _format_shelf_list
+        from .shelf import _format_shelf_list  # noqa: PLC0415  # lazy intra-package import inside resource handler
         return _format_shelf_list(records)
 
     # MCP resource: enumerated valid region codes for kagi_search.region.
@@ -718,7 +718,7 @@ def main():
     )
     async def kagi_regions_resource() -> str:
         """Valid region codes for the kagi_search region parameter."""
-        from .kagi import kagi_regions_markdown
+        from .kagi import kagi_regions_markdown  # noqa: PLC0415  # lazy intra-package import inside resource handler
         return kagi_regions_markdown()
 
     # MCP resource: built-in lens catalog for kagi_search.lens_id.
@@ -730,7 +730,7 @@ def main():
     )
     async def kagi_lenses_resource() -> str:
         """Built-in Kagi lens catalog for the kagi_search lens_id parameter."""
-        from .kagi import kagi_lenses_markdown
+        from .kagi import kagi_lenses_markdown  # noqa: PLC0415  # lazy intra-package import inside resource handler
         return kagi_lenses_markdown()
 
     mcp.run(transport="stdio")

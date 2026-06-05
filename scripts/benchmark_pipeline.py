@@ -27,9 +27,8 @@ import gzip
 import json
 import platform
 import time
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from pathlib import Path
-from typing import Optional
 
 import httpx
 import tantivy
@@ -136,8 +135,8 @@ def _build_tantivy(slices: list[str]) -> tantivy.Index:
 
 async def bench_generic_http(
     client: httpx.AsyncClient, tier: str, url: str,
-    capture_path: Optional[Path] = None,
-) -> Optional[dict]:
+    capture_path: Path | None = None,
+) -> dict | None:
     """Measure each phase of the generic-HTTP path against a real URL.
 
     Returns a timing dict, or None on HTTP failure.  Writes the raw HTML to
@@ -203,8 +202,8 @@ async def bench_generic_http(
 
 async def bench_fast_path(
     name: str, url: str,
-    capture_path: Optional[Path] = None,
-) -> Optional[dict]:
+    capture_path: Path | None = None,
+) -> dict | None:
     """Measure a single fast path end-to-end via ``web_fetch_direct``.
 
     Captures the raw upstream response body (gzipped) if *capture_path* is
@@ -303,7 +302,7 @@ def _remove_capture_hook() -> None:
 async def run(args: argparse.Namespace) -> dict:
     """Run all benchmarks and return the results dict."""
     results: dict = {
-        "captured_at": datetime.now(timezone.utc).isoformat(),
+        "captured_at": datetime.now(UTC).isoformat(),
         "hardware": f"{platform.system()} {platform.machine()}",
         "python": platform.python_version(),
         "generic_http": {},

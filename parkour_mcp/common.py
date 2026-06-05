@@ -9,7 +9,6 @@ import socket
 import time
 from importlib.metadata import version as _pkg_version
 from pathlib import Path
-from typing import Optional
 from urllib.parse import urlparse
 
 import httpx
@@ -151,7 +150,7 @@ _LANGUAGE_MAP: dict[str, str] = {
 }
 
 
-def _classify_content_type(content_type: str) -> Optional[str]:
+def _classify_content_type(content_type: str) -> str | None:
     """Coarsely classify an HTTP Content-Type.
 
     Returns ``"html"``, ``"json"``, ``"xml"``, ``"plain text"``, or None
@@ -270,11 +269,12 @@ def check_url_ssrf(url: str) -> str | None:
     # Fast check: if hostname is already an IP literal
     try:
         ip = ipaddress.ip_address(hostname)
+    except ValueError:
+        pass  # hostname is a DNS name, resolve it
+    else:
         if _is_private_ip(str(ip)):
             return f"Error: Blocked request to private/reserved address ({hostname})."
         return None
-    except ValueError:
-        pass  # hostname is a DNS name, resolve it
 
     # Resolve hostname and check all addresses
     try:
@@ -402,9 +402,9 @@ class ResponseTooLarge(Exception):
 async def guarded_fetch(
     url: str,
     *,
-    headers: Optional[dict[str, str]] = None,
+    headers: dict[str, str] | None = None,
     timeout: float = 30.0,
-    max_bytes: Optional[int] = _MAX_RESPONSE_BYTES,
+    max_bytes: int | None = _MAX_RESPONSE_BYTES,
     deadline: float = _FETCH_DEADLINE_SECONDS,
     follow_redirects: bool = True,
 ) -> httpx.Response:
@@ -455,36 +455,35 @@ async def guarded_fetch(
             follow_redirects=follow_redirects,
             timeout=timeout,
             http2=http2,
-        ) as client:
-            async with client.stream("GET", url, headers=headers) as resp:
-                # Layer 1: Content-Length gate
-                if max_bytes is not None:
-                    cl = resp.headers.get("content-length")
-                    if cl is not None:
-                        try:
-                            if int(cl) > max_bytes:
-                                raise ResponseTooLarge(
-                                    f"Content-Length {cl} exceeds "
-                                    f"{max_bytes:,} byte limit"
-                                )
-                        except ValueError:
-                            pass  # malformed header — fall through to streaming
+        ) as client, client.stream("GET", url, headers=headers) as resp:
+            # Layer 1: Content-Length gate
+            if max_bytes is not None:
+                cl = resp.headers.get("content-length")
+                if cl is not None:
+                    try:
+                        if int(cl) > max_bytes:
+                            raise ResponseTooLarge(
+                                f"Content-Length {cl} exceeds "
+                                f"{max_bytes:,} byte limit"
+                            )
+                    except ValueError:
+                        pass  # malformed header — fall through to streaming
 
-                # Layer 2: streaming size cap
-                chunks: list[bytes] = []
-                total = 0
-                async for chunk in resp.aiter_bytes(chunk_size=65_536):
-                    total += len(chunk)
-                    if max_bytes is not None and total > max_bytes:
-                        raise ResponseTooLarge(
-                            f"Response body exceeded {max_bytes:,} "
-                            f"byte limit at {total:,} bytes"
-                        )
-                    chunks.append(chunk)
+            # Layer 2: streaming size cap
+            chunks: list[bytes] = []
+            total = 0
+            async for chunk in resp.aiter_bytes(chunk_size=65_536):
+                total += len(chunk)
+                if max_bytes is not None and total > max_bytes:
+                    raise ResponseTooLarge(
+                        f"Response body exceeded {max_bytes:,} "
+                        f"byte limit at {total:,} bytes"
+                    )
+                chunks.append(chunk)
 
-                # Populate _content so .text / .json() work after the
-                # stream context exits — same attr httpx uses internally.
-                resp._content = b"".join(chunks)
+            # Populate _content so .text / .json() work after the
+            # stream context exits — same attr httpx uses internally.
+            resp._content = b"".join(chunks)
         # The response object (headers, status_code, _content) survives the
         # context-manager exit; only the transport is closed.
         return resp

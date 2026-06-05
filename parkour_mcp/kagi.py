@@ -7,9 +7,10 @@ endpoint lands on v1; the v0 helpers (`get_client`, `_extract_balance`,
 load-bearing for that second tool and retire when the migration completes.
 """
 
+import json
 import logging
 from pathlib import Path
-from typing import Annotated, Any, Literal, Optional
+from typing import Annotated, Any, Literal
 
 import httpx
 from kagiapi import KagiClient
@@ -232,7 +233,7 @@ _LOW_BALANCE_THRESHOLD = 1.00  # dollars
 _summarize_locked: bool = False
 
 
-def _extract_balance(response: dict) -> Optional[float]:
+def _extract_balance(response: dict) -> float | None:
     """Extract api_balance from a v0 Kagi response."""
     meta = response.get("meta", {})
     balance = meta.get("api_balance")
@@ -244,7 +245,7 @@ def _extract_balance(response: dict) -> Optional[float]:
     return None
 
 
-def _check_balance(response: Any, is_summarize: bool = False) -> Optional[str]:
+def _check_balance(response: Any, is_summarize: bool = False) -> str | None:
     """Check balance on a v0 response, update lockout state, return warning or None.
 
     Non-summarize calls clear the lockout if balance has recovered.
@@ -260,10 +261,9 @@ def _check_balance(response: Any, is_summarize: bool = False) -> Optional[str]:
             f"Kagi API balance low: ${balance:.2f} remaining. "
             f"Add funds at https://kagi.com/settings?p=billing"
         )
-    else:
-        if not is_summarize:
-            _summarize_locked = False
-        return None
+    if not is_summarize:
+        _summarize_locked = False
+    return None
 
 
 def _handle_v0_error(e: Exception) -> str:
@@ -280,7 +280,6 @@ def _handle_v0_error(e: Exception) -> str:
         response_text = getattr(response, "text", None)
         if response_text:
             try:
-                import json
                 body = json.loads(response_text)
                 errors = body.get("error") or []
                 if errors and isinstance(errors, list):
@@ -297,7 +296,7 @@ def _handle_v0_error(e: Exception) -> str:
     return f"Error: {e}"
 
 
-def get_client() -> Optional[KagiClient]:
+def get_client() -> KagiClient | None:
     """Create a Kagi v0 client. Used only by summarize until /summarize migrates."""
     api_key = get_api_key()
     if not api_key:
@@ -424,7 +423,7 @@ async def search(
         ge=1, le=1024,
     )] = 5,
     *,
-    workflow: Annotated[Optional[_WorkflowType], Field(
+    workflow: Annotated[_WorkflowType | None, Field(
         description=(
             "Result category. Omit for 'search' (web results with "
             "related-query suggestions); omitting is equivalent to "
@@ -439,7 +438,7 @@ async def search(
             "silently ignored."
         ),
     )] = None,
-    lens_id: Annotated[Optional[str], Field(
+    lens_id: Annotated[str | None, Field(
         description=(
             "Kagi Lens to apply. A lens is a stored search profile "
             "that scopes the query (sites, keywords, file type, "
@@ -468,7 +467,7 @@ async def search(
             "— pass null unless the user has handed you one."
         ),
     )] = None,
-    page: Annotated[Optional[int], Field(
+    page: Annotated[int | None, Field(
         description=(
             "Page number, 1-indexed (1..10). Page size is 'limit'; max "
             "practical reach is page × limit. The underlying ranking "
@@ -484,7 +483,7 @@ async def search(
         ),
         ge=1, le=10,
     )] = None,
-    region: Annotated[Optional[str], Field(
+    region: Annotated[str | None, Field(
         description=(
             "Lowercase Kagi region code (case-sensitive — 'us', not "
             "'US'). Codes include lowercase ISO 3166-1 alpha-2 forms "
@@ -497,7 +496,7 @@ async def search(
             "localization. Overrides lens_id's region."
         ),
     )] = None,
-    after: Annotated[Optional[str], Field(
+    after: Annotated[str | None, Field(
         description=(
             "ISO 8601 date 'YYYY-MM-DD' (e.g. '2025-01-01'). Dates "
             "must be strict ISO 8601 — other forms either return HTTP "
@@ -509,7 +508,7 @@ async def search(
             "excluded. Overrides any date floor carried by 'lens_id'."
         ),
     )] = None,
-    before: Annotated[Optional[str], Field(
+    before: Annotated[str | None, Field(
         description=(
             "ISO 8601 date 'YYYY-MM-DD' (e.g. '2025-12-31'). Dates "
             "must be strict ISO 8601 — other forms either return HTTP "
@@ -719,8 +718,8 @@ async def search(
 # ---------------------------------------------------------------------------
 
 async def summarize(
-    url: Optional[str] = None,
-    text: Optional[str] = None,
+    url: str | None = None,
+    text: str | None = None,
     summary_type: Literal["summary", "takeaway"] = "summary"
 ) -> str:
     """Summarize content from a URL or text using Kagi's Universal Summarizer.

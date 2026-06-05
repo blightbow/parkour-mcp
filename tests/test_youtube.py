@@ -1478,7 +1478,6 @@ class TestTranscriptAction:
         # is exercised separately in TestYtDlpTranscriptFallback.
         async def _no_fallback(video_id, languages):
             del video_id, languages
-            return None
         monkeypatch.setattr(
             _yt_module, "_yt_dlp_transcript_fallback", _no_fallback,
         )
@@ -3107,7 +3106,6 @@ class TestFallbackInDispatcher:
 
         async def fake_fallback(video_id, languages):
             del video_id, languages
-            return None
         monkeypatch.setattr(
             _yt_module, "_yt_dlp_transcript_fallback", fake_fallback,
         )
@@ -3133,7 +3131,6 @@ class TestFallbackInDispatcher:
         async def fake_fallback(video_id, languages):
             del video_id, languages
             fallback_called["yes"] = True
-            return None
         monkeypatch.setattr(
             _yt_module, "_yt_dlp_transcript_fallback", fake_fallback,
         )

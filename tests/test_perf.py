@@ -25,7 +25,7 @@ import json
 import os
 import time
 from pathlib import Path
-from typing import Callable
+from collections.abc import Callable
 
 import pytest
 import tantivy
@@ -88,8 +88,7 @@ def _time_ms(callable_fn: Callable[[], object], best_of: int = 1) -> float:
         t0 = time.perf_counter()
         callable_fn()
         elapsed = (time.perf_counter() - t0) * 1000
-        if elapsed < best:
-            best = elapsed
+        best = min(best, elapsed)
     return best
 
 

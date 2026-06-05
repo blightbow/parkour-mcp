@@ -4,7 +4,7 @@ import logging
 import html as html_mod
 import re
 import urllib.parse
-from typing import Annotated, Optional, Union
+from typing import Annotated
 
 import httpx
 from pydantic import Field
@@ -52,7 +52,7 @@ _WIKI_LANG_CODE_RE = re.compile(r"^[a-z]{2,3}(-[a-z]+)?$")
 _URL_SCHEME_RE = re.compile(r"^https?://", re.IGNORECASE)
 
 
-async def _detect_mediawiki(url: str) -> Optional[dict]:
+async def _detect_mediawiki(url: str) -> dict | None:
     """Detect if a URL points to a MediaWiki page and return API metadata.
 
     Gate: only probes if '/wiki/' is in the URL path.
@@ -114,6 +114,9 @@ async def _detect_mediawiki(url: str) -> Optional[dict]:
                 }
 
             except Exception:
+                logger.debug(
+                    "MediaWiki siteinfo probe failed for %s", api_base, exc_info=True
+                )
                 continue
 
     return None
@@ -123,14 +126,13 @@ def _clean_display_title(raw: str) -> str:
     """Clean a MediaWiki displaytitle: strip HTML tags, decode entities, normalize whitespace."""
     text = re.sub(r'<[^>]+>', '', raw)
     text = html_mod.unescape(text)
-    text = _normalize_whitespace(text).strip()
-    return text
+    return _normalize_whitespace(text).strip()
 
 
 async def _fetch_mediawiki_page(
     api_base: str,
     page_title: str,
-) -> Optional[dict]:
+) -> dict | None:
     """Fetch a full MediaWiki page via the API.
 
     Always fetches the complete page; section filtering is handled downstream.
@@ -159,7 +161,7 @@ async def _fetch_mediawiki_page(
         }
 
 
-def _resolve_citeref_target(soup, target_id: str) -> Optional[dict]:
+def _resolve_citeref_target(soup, target_id: str) -> dict | None:
     """Resolve a #CITEREF target id to its bibliography entry.
 
     Looks up the element with the given id, walks to its parent (the
@@ -197,7 +199,7 @@ def _extract_citations(html: str) -> list[dict]:
     the #CITEREF link to the full bibliography entry and includes it as
     "source" with its own url/title if available.
     """
-    from bs4 import BeautifulSoup
+    from bs4 import BeautifulSoup  # noqa: PLC0415  # heavy parser dep, kept lazy
 
     soup = BeautifulSoup(html, "html.parser")
 
@@ -273,7 +275,7 @@ def _extract_inline_citations(html: str) -> list[dict]:
     shortcuts embedded directly in prose (``Franzén (2005)``), which the
     markdown pass preserves verbatim as ``[Franzén (2005)](#CITEREFFranzén2005)``.
     """
-    from bs4 import BeautifulSoup
+    from bs4 import BeautifulSoup  # noqa: PLC0415  # heavy parser dep, kept lazy
 
     soup = BeautifulSoup(html, "html.parser")
 
@@ -380,7 +382,7 @@ def _mediawiki_html_to_markdown(html: str) -> str:
 
     Removes TOC, scripts, and styles; cleans headings before conversion.
     """
-    from bs4 import BeautifulSoup
+    from bs4 import BeautifulSoup  # noqa: PLC0415  # heavy parser dep, kept lazy
 
     soup = BeautifulSoup(html, "html.parser")
 
@@ -441,8 +443,7 @@ def _mediawiki_html_to_markdown(html: str) -> str:
 
     markdown = md(str(soup), heading_style="ATX")
     # Collapse triple+ newlines
-    markdown = re.sub(r'\n{3,}', '\n\n', markdown).strip()
-    return markdown
+    return re.sub(r'\n{3,}', '\n\n', markdown).strip()
 
 
 # ---------------------------------------------------------------------------
@@ -519,8 +520,7 @@ async def _resolve_wiki_base(wiki: str) -> tuple[str, str]:
     # callers that pass a bare hostname like ``"en.wikipedia.org"`` or
     # ``"commons.wikimedia.org"`` instead of a language code.
     if (
-        host == "wikipedia.org"
-        or host == "wikimedia.org"
+        host in {"wikipedia.org", "wikimedia.org"}
         or host.endswith(".wikipedia.org")
         or host.endswith(".wikimedia.org")
     ):
@@ -641,9 +641,9 @@ def _format_mediawiki_search(
 async def _handle_page(
     title: str,
     wiki: str,
-    section: Optional[list[str]],
-    search: Optional[str],
-    slices: Optional[Union[int, list[int]]],
+    section: list[str] | None,
+    search: str | None,
+    slices: int | list[int] | None,
     max_tokens: int,
 ) -> str:
     """Fetch a MediaWiki page by title (or URL) and return formatted content.
@@ -654,7 +654,7 @@ async def _handle_page(
     work the handler does itself.
     """
     # Function-scope import to avoid fetch_direct ↔ mediawiki cycle.
-    from .fetch_direct import web_fetch_direct
+    from .fetch_direct import web_fetch_direct  # noqa: PLC0415  # lazy to break fetch_direct ↔ mediawiki cycle
 
     if _URL_SCHEME_RE.match(title):
         url = title
@@ -719,8 +719,8 @@ async def _handle_search(
 async def _handle_references(
     title: str,
     wiki: str,
-    footnotes: Optional[list[int]],
-    citations: Optional[list[str]],
+    footnotes: list[int] | None,
+    citations: list[str] | None,
     max_tokens: int,  # noqa: ARG001 — reserved for future truncation gating
 ) -> str:
     """Resolve footnotes and/or inline citations for a MediaWiki page.
@@ -731,7 +731,7 @@ async def _handle_references(
     markers (downstream code may key off either).
     """
     # Function-scope import to avoid _pipeline ↔ mediawiki cycle.
-    from ._pipeline import _cached_mediawiki_fetch
+    from ._pipeline import _cached_mediawiki_fetch  # noqa: PLC0415  # lazy to break _pipeline ↔ mediawiki cycle
 
     if footnotes is None and citations is None:
         return (
@@ -834,7 +834,7 @@ async def mediawiki(
             "author-date citations on a specific article."
         ),
     )],
-    title: Annotated[Optional[str], Field(
+    title: Annotated[str | None, Field(
         description=(
             "Page identifier — article title "
             "(e.g. \"Gödel's incompleteness theorems\") or full URL. "
@@ -842,7 +842,7 @@ async def mediawiki(
             "When a full URL is supplied, the wiki= parameter is ignored."
         ),
     )] = None,
-    query: Annotated[Optional[str], Field(
+    query: Annotated[str | None, Field(
         description=(
             "Search terms — required for the 'search' action. "
             "Supports MediaWiki's native search operators."
@@ -858,33 +858,33 @@ async def mediawiki(
             "Wikipedia). Ignored when title= is a full URL."
         ),
     )] = "en",
-    section: Annotated[Optional[Union[str, list[str]]], Field(
+    section: Annotated[str | list[str] | None, Field(
         description=(
             "Section name or list of section names to extract "
             "(page action only). Matches heading text."
         ),
     )] = None,
-    search: Annotated[Optional[str], Field(
+    search: Annotated[str | None, Field(
         description=(
             "Within-page BM25 keyword search for the 'page' action — "
             "distinct from action='search' which does full-text wiki "
             "search across all articles."
         ),
     )] = None,
-    slices: Annotated[Optional[Union[int, list[int]]], Field(
+    slices: Annotated[int | list[int] | None, Field(
         description=(
             "Slice index or list of indices to retrieve from a cached "
             "page (page action only)."
         ),
     )] = None,
-    footnotes: Annotated[Optional[Union[int, list[int]]], Field(
+    footnotes: Annotated[int | list[int] | None, Field(
         description=(
             "Numbered footnote(s) to retrieve for the 'references' "
             "action. Accepts an int or list of ints matching the [^N] "
             "markers in rendered page content."
         ),
     )] = None,
-    citations: Annotated[Optional[Union[str, list[str]]], Field(
+    citations: Annotated[str | list[str] | None, Field(
         description=(
             "Inline author-date CITEREF key(s) to resolve for the "
             "'references' action. Accepts '#CITEREFFoo2005', "
@@ -911,7 +911,7 @@ async def mediawiki(
     action = action.strip().lower()
 
     # Normalize the polymorphic section parameter to a list (or None).
-    section_names: Optional[list[str]] = None
+    section_names: list[str] | None = None
     if section is not None:
         section_names = [section] if isinstance(section, str) else list(section)
 
@@ -960,10 +960,10 @@ async def mediawiki(
                 "Example: action='references' title=\"Gödel's incompleteness theorems\" "
                 "footnotes=[1,2]"
             )
-        fn_list: Optional[list[int]] = None
+        fn_list: list[int] | None = None
         if footnotes is not None:
             fn_list = [footnotes] if isinstance(footnotes, int) else list(footnotes)
-        cit_list: Optional[list[str]] = None
+        cit_list: list[str] | None = None
         if citations is not None:
             cit_list = [citations] if isinstance(citations, str) else list(citations)
         return await _handle_references(
