@@ -11,29 +11,23 @@ from pydantic import Field
 import httpx
 
 from .common import _API_HEADERS, _API_USER_AGENT, RateLimiter, s2_enabled, tool_name
-from .markdown import FMEntries, _append_frontmatter_entry, _build_frontmatter, _fence_content
+from .detection import _detect_ietf_url
+from .markdown import (
+    FMEntries,
+    _append_frontmatter_entry,
+    _build_frontmatter,
+    _fence_content,
+    _TRUST_ADVISORY,
+)
 
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# URL detection
+# Identifier-string classification
 # ---------------------------------------------------------------------------
-# Matches rfc-editor.org/rfc/rfc{N} only when the URL targets the canonical
-# metadata endpoint: bare path (with optional trailing slash) or `.json` suffix.
-# Body-text suffixes (.html/.txt/.xml/.pdf) intentionally fall through to the
-# generic HTTP+markdown pipeline so callers can use section= and search=
-# against the rendered text.  Does NOT match /info/ pages (used for subseries
-# resolution).
-_RFC_EDITOR_RE = re.compile(
-    r'https?://www\.rfc-editor\.org/rfc/rfc(\d+)(?:\.json)?(?=[/?#]|$)',
-    re.IGNORECASE,
-)
-
-# Matches datatracker.ietf.org/doc/{rfc{N}|draft-*}
-_DATATRACKER_RE = re.compile(
-    r'https?://datatracker\.ietf\.org/doc/(rfc(\d+)|draft-[\w.-]+)/?',
-    re.IGNORECASE,
-)
+# URL detection (_RFC_EDITOR_RE, _DATATRACKER_RE, _detect_ietf_url) lives in
+# detection.py.  The classifiers below match identifier *strings* (a DOI, a
+# subseries label) rather than URLs, and stay with the handlers that use them.
 
 # Matches RFC DOIs: 10.17487/RFC{N}
 _RFC_DOI_RE = re.compile(r'^10\.17487/RFC(\d+)$', re.IGNORECASE)
@@ -42,27 +36,6 @@ _RFC_DOI_RE = re.compile(r'^10\.17487/RFC(\d+)$', re.IGNORECASE)
 _SUBSERIES_ID_RE = re.compile(
     r'^(STD|BCP|FYI)\s*0*(\d+)$', re.IGNORECASE,
 )
-
-
-def _detect_ietf_url(url: str) -> Optional[dict]:
-    """Detect an IETF RFC or Internet-Draft URL.
-
-    Returns ``{"type": "rfc", "number": int}`` for RFC URLs,
-    ``{"type": "draft", "name": str}`` for I-D URLs, or None.
-    """
-    m = _RFC_EDITOR_RE.search(url)
-    if m:
-        return {"type": "rfc", "number": int(m.group(1))}
-
-    m = _DATATRACKER_RE.search(url)
-    if m:
-        if m.group(2):
-            # rfc{N}
-            return {"type": "rfc", "number": int(m.group(2))}
-        # draft-*
-        return {"type": "draft", "name": m.group(1)}
-
-    return None
 
 
 # ---------------------------------------------------------------------------
@@ -284,6 +257,7 @@ async def _resolve_subseries(ref: str) -> Optional[str]:
     fm = _build_frontmatter({
         "source": info_url,
         "api": "IETF (BibXML)",
+        "trust": _TRUST_ADVISORY,
         "subseries": f"{series_type} {series_num}",
         "member_count": len(rfc_numbers),
         "see_also": "Use IETF tool with rfc action for details on any member RFC",
@@ -463,6 +437,7 @@ async def _fetch_rfc_paper(number: int) -> str:
         "title": title,
         "source": f"https://www.rfc-editor.org/rfc/rfc{number}",
         "api": "IETF (RFC Editor)",
+        "trust": _TRUST_ADVISORY,
         "status": status,
         "doi": rfc_doi,
         "shelf": shelf_result.status_line,
@@ -584,6 +559,7 @@ async def _fetch_draft(name: str) -> str:
         "title": title,
         "source": f"https://datatracker.ietf.org/doc/{name}/",
         "api": "IETF (Datatracker)",
+        "trust": _TRUST_ADVISORY,
         "state": state,
         "see_also": (
             f"Use {tool_name('web_fetch_direct')} with https://www.ietf.org/archive/id/{name}-{rev}.html "

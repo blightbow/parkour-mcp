@@ -11,15 +11,14 @@ _arxiv_module = sys.modules["parkour_mcp.arxiv"]
 
 from parkour_mcp.arxiv import (  # noqa: E402
     ARXIV_API_URL,
-    _detect_arxiv_url,
     _fetch_arxiv_paper,
     _format_arxiv_list,
     _format_arxiv_paper,
     _parse_arxiv_entry,
-    _strip_version,
     _arxiv_request,
     arxiv,
 )
+from parkour_mcp.detection import _detect_arxiv_url, _strip_version  # noqa: E402
 from parkour_mcp._pipeline import _arxiv_fast_path  # noqa: E402
 
 

@@ -9,6 +9,7 @@ import respx
 from parkour_mcp.github import (
     _blob_presplit,
     _detect_github_url,
+    _fm_base,
     _github_request,
     _parse_citation_cff,
     _parse_owner_repo,
@@ -21,8 +22,16 @@ from parkour_mcp.github import (
     format_code_sections,
     github,
 )
+from parkour_mcp.markdown import _TRUST_ADVISORY
 from parkour_mcp._pipeline import _page_cache
 from parkour_mcp.shelf import _get_shelf, _reset_shelf
+
+
+def test_fm_base_seeds_trust():
+    """Every GitHub tool action fences untrusted repo content and builds its
+    frontmatter from _fm_base, so the trust advisory must originate there."""
+    entries = _fm_base("https://github.com/owner/repo")
+    assert entries["trust"] == _TRUST_ADVISORY
 
 
 def _contents_api_file(text: str, name: str = "config.yml") -> dict:
@@ -284,6 +293,7 @@ class TestSearchIssues:
         assert "Test Issue" in result
         assert "owner/repo#42" in result
         assert "bug" in result
+        assert "trust:" in result  # fenced search snippets must declare untrust
 
     @pytest.mark.asyncio
     @respx.mock

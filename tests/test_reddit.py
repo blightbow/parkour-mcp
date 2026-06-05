@@ -7,9 +7,6 @@ from curl_cffi.requests import exceptions as cc_exc
 
 import parkour_mcp.reddit as reddit_mod
 from parkour_mcp.reddit import (
-    _detect_reddit_url,
-    _classify_reddit_url,
-    _extract_comment_permalink,
     _fetch_reddit_content,
     _format_comment_thread,
     _format_listing,
@@ -20,7 +17,12 @@ from parkour_mcp.reddit import (
     _split_by_comments,
     _check_reddit_json_error,
     _MAX_COMMENT_DEPTH,
+)
+from parkour_mcp.detection import (
     RedditPageType,
+    _classify_reddit_url,
+    _detect_reddit_url,
+    _extract_comment_permalink,
 )
 from parkour_mcp._pipeline import _reddit_fast_path, _page_cache
 

@@ -33,6 +33,18 @@ from ._pipeline import (
     _dispatch_slicing,
 )
 from .mediawiki import _mediawiki_html_to_markdown
+from .detection import (
+    RedditPageType,
+    _classify_reddit_url,
+    _detect_arxiv_html_url,
+    _detect_arxiv_url,
+    _detect_doi_url,
+    _detect_ietf_url,
+    _detect_reddit_url,
+    _detect_s2_url,
+    _extract_comment_permalink,
+    _strip_version,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -156,7 +168,6 @@ async def web_fetch_direct(
 
     # --- arXiv fast path (before S2 — arXiv URLs get arXiv-native metadata) ---
     try:
-        from .arxiv import _detect_arxiv_url
         if _detect_arxiv_url(url):
             if want_slicing:
                 return (
@@ -173,7 +184,6 @@ async def web_fetch_direct(
     try:
         from .common import s2_enabled
         if s2_enabled():
-            from .semantic_scholar import _detect_s2_url
             if _detect_s2_url(url):
                 if want_slicing:
                     return (
@@ -188,7 +198,6 @@ async def web_fetch_direct(
 
     # --- IETF fast path (before DOI — catches rfc-editor.org and datatracker URLs) ---
     try:
-        from .ietf import _detect_ietf_url
         ietf_match = _detect_ietf_url(url)
         if ietf_match:
             if want_slicing:
@@ -212,7 +221,6 @@ async def web_fetch_direct(
 
     # --- DOI fast path (after arXiv/S2/IETF, before MediaWiki) ---
     try:
-        from .doi import _detect_doi_url
         if _detect_doi_url(url):
             if want_slicing:
                 return "Error: search/slices not supported for DOI resolver URLs."
@@ -224,7 +232,6 @@ async def web_fetch_direct(
 
     # --- Reddit fast path (after DOI, before MediaWiki) ---
     try:
-        from .reddit import _detect_reddit_url, _extract_comment_permalink
         if _detect_reddit_url(url):
             # Comment-permalink normalization: /r/SUB/comments/POSTID/slug/COMMENTID/
             # silently returns only the linked comment's subtree from
@@ -448,7 +455,6 @@ async def web_fetch_direct(
     # arXiv /html/ auto-tracking: if this is a full paper fetch, track it
     # on the shelf so it shows up alongside papers found via ArXiv/S2 tools.
     try:
-        from .arxiv import _detect_arxiv_html_url, _strip_version
         arxiv_id = _detect_arxiv_html_url(url)
         if arxiv_id:
             from .shelf import _track_on_shelf, CitationRecord
@@ -722,7 +728,6 @@ async def web_fetch_sections(url: str, slice: int = 0) -> str:
         return ssrf_error
 
     # --- arXiv fast path (sections not applicable for API data) ---
-    from .arxiv import _detect_arxiv_url
     arxiv_id = _detect_arxiv_url(url)
     if arxiv_id:
         fm = _build_frontmatter({
@@ -738,7 +743,6 @@ async def web_fetch_sections(url: str, slice: int = 0) -> str:
     # --- Semantic Scholar fast path (sections not applicable for API data) ---
     from .common import s2_enabled as _s2_on
     if _s2_on():
-        from .semantic_scholar import _detect_s2_url
         if _detect_s2_url(url):
             fm = _build_frontmatter({
                 "title": "Semantic Scholar paper",
@@ -750,7 +754,6 @@ async def web_fetch_sections(url: str, slice: int = 0) -> str:
             return fm
 
     # --- IETF fast path (sections: redirect to HTML for section browsing) ---
-    from .ietf import _detect_ietf_url
     ietf_match = _detect_ietf_url(url)
     if ietf_match and ietf_match.get("type") == "rfc":
         n = ietf_match["number"]
@@ -766,9 +769,9 @@ async def web_fetch_sections(url: str, slice: int = 0) -> str:
 
     # --- Reddit fast path (comment tree as sections) ---
     from .reddit import (
-        _detect_reddit_url, _classify_reddit_url, _fetch_reddit_json,
+        _fetch_reddit_json,
         _resolve_redd_it, _build_comment_section_tree, _format_comment_thread,
-        _split_by_comments, RedditPageType,
+        _split_by_comments,
     )
     reddit_url = _detect_reddit_url(url)
     if reddit_url:

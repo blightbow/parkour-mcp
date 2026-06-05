@@ -79,15 +79,9 @@ def _get_github_token() -> str:
     global _github_token_cache
     if _github_token_cache is not None:
         return _github_token_cache
-    from .common import clean_env
-    if key := clean_env("GITHUB_TOKEN"):
-        _github_token_cache = key
-        return key
-    if GITHUB_CONFIG_PATH.exists():
-        _github_token_cache = GITHUB_CONFIG_PATH.read_text().strip()
-        return _github_token_cache
-    _github_token_cache = ""
-    return ""
+    from .common import load_credential
+    _github_token_cache = load_credential("GITHUB_TOKEN", GITHUB_CONFIG_PATH)
+    return _github_token_cache
 
 
 def _github_headers(accept: str = "application/vnd.github.v3+json") -> dict:
@@ -937,8 +931,12 @@ def _fm_base(source: str, api: str = "GitHub") -> FMEntries:
     Returns ``FMEntries`` so multi-contributor keys downstream compose
     cleanly — any caller that later appends a ``hint`` or ``warning``
     stacks on top of the rate-limit warning we seed here.
+
+    Seeds ``trust`` because every GitHub tool action fences untrusted
+    repository content (code, READMEs, issue/PR bodies, search snippets);
+    centralizing it here is the single source of that invariant.
     """
-    entries = FMEntries({"source": source, "api": api})
+    entries = FMEntries({"source": source, "api": api, "trust": _TRUST_ADVISORY})
     entries.append("warning", _rate_limit_warning())
     return entries
 
@@ -1798,7 +1796,6 @@ async def _action_issue_templates(query: str) -> str:
     chooser_url = f"https://github.com/{owner}/{repo}/issues/new/choose"
     fm_entries = _fm_base(chooser_url)
     fm_entries.append("note", _build_issue_template_note(probe, owner, repo))
-    fm_entries["trust"] = _TRUST_ADVISORY
 
     body = _format_issue_submission_section(probe) or ""
     fm = _build_frontmatter(fm_entries)
@@ -1962,7 +1959,6 @@ async def _action_issue(
 
     fm_entries = _fm_base(f"https://github.com/{owner}/{repo}/issues/{number}")
     fm_entries.update(extra_fm)
-    fm_entries["trust"] = _TRUST_ADVISORY
 
     content, trunc_hint = _apply_semantic_truncation(raw_md, 5000)
     if trunc_hint:
@@ -2131,7 +2127,6 @@ async def _action_pull_request(
 
     fm_entries = _fm_base(f"https://github.com/{owner}/{repo}/pull/{number}")
     fm_entries.update(extra_fm)
-    fm_entries["trust"] = _TRUST_ADVISORY
 
     content, trunc_hint = _apply_semantic_truncation(raw_md, 5000)
     if trunc_hint:

@@ -364,6 +364,60 @@ class TestSearchV1:
         assert "API key not found" in result
 
 
+# --- Reddit datacenter-block steering hint ---
+
+class TestRedditHint:
+    """The results hint steers callers to the fetch tools' Reddit fast path
+    whenever Reddit is in play, framed around the datacenter-IP 403."""
+
+    @staticmethod
+    def _mock(items):
+        respx.post("https://kagi.com/api/v1/search").mock(
+            return_value=httpx.Response(
+                200,
+                json={"meta": {"trace": "t", "ms": 1, "node": "x"},
+                      "data": {"search": items}},
+            )
+        )
+
+    _NON_REDDIT = [{"url": "https://example.com/a", "title": "A", "snippet": "s"}]
+    _REDDIT = [{
+        "url": "https://www.reddit.com/r/python/comments/abc/title/",
+        "title": "A thread", "snippet": "s",
+    }]
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_reddit_in_query_emits_block_hint(self, _kagi_key):
+        # Query names Reddit even though no result URL is on a Reddit host.
+        self._mock(self._NON_REDDIT)
+        result = await search("best mechanical keyboard reddit")
+        assert "403 to datacenter IPs" in result
+        assert "WebFetchSections" in result
+        assert "WebFetchIncisive" in result
+        # The plain drill-in hint is replaced, not added alongside.
+        assert "Drill into a result URL" not in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_reddit_in_results_emits_block_hint(self, _kagi_key):
+        # Query is Reddit-free; a result URL lands on a Reddit host.
+        self._mock(self._REDDIT)
+        result = await search("mechanical keyboard recommendations")
+        assert "403 to datacenter IPs" in result
+        assert "WebFetchSections" in result
+        assert "WebFetchIncisive" in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_non_reddit_results_use_generic_hint(self, _kagi_key):
+        # Neither the query nor any result URL involves Reddit.
+        self._mock(self._NON_REDDIT)
+        result = await search("mechanical keyboard recommendations")
+        assert "Drill into a result URL" in result
+        assert "403 to datacenter IPs" not in result
+
+
 # --- Per-profile description portability for resource pointers ---
 
 class TestSearchDescriptionPerProfile:

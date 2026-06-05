@@ -699,6 +699,7 @@ async def _handle_search(
     body = _format_mediawiki_search(results, total, offset, query, host)
     fm_entries = FMEntries({
         "api": f"MediaWiki ({host})",
+        "trust": _TRUST_ADVISORY,
         "action": "search",
         "query": query,
         "total_results": total,

@@ -34,23 +34,15 @@ _doi_limiter = RateLimiter(0.2)
 
 
 # ---------------------------------------------------------------------------
-# URL detection
+# DOI-string classification
 # ---------------------------------------------------------------------------
-DOI_URL_RE = re.compile(
-    r'https?://(?:dx\.)?doi\.org/(10\.\S+)',
-    re.IGNORECASE,
-)
-
+# URL detection (DOI_URL_RE, _detect_doi_url) lives in detection.py.
+# ARXIV_DOI_RE classifies a DOI *string* (not a URL) for arXiv delegation and
+# stays with the DOI handler that uses it.
 ARXIV_DOI_RE = re.compile(
     r'^10\.48550/arXiv\.(.+)$',
     re.IGNORECASE,
 )
-
-
-def _detect_doi_url(url: str) -> Optional[str]:
-    """Extract a bare DOI from a doi.org URL, or None."""
-    m = DOI_URL_RE.search(url)
-    return m.group(1) if m else None
 
 
 # ---------------------------------------------------------------------------

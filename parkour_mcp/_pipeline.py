@@ -33,9 +33,16 @@ from .mediawiki import (
     _mediawiki_html_to_markdown,
     _INLINE_CITEREF_MD_RE,
 )
-from .arxiv import _detect_arxiv_url, _fetch_arxiv_paper
-from .doi import _detect_doi_url, _fetch_doi_paper
-from .reddit import _detect_reddit_url, _fetch_reddit_content, _split_by_comments
+from .arxiv import _fetch_arxiv_paper
+from .detection import (
+    _detect_arxiv_url,
+    _detect_doi_url,
+    _detect_ietf_url,
+    _detect_reddit_url,
+    _detect_s2_url,
+)
+from .doi import _fetch_doi_paper
+from .reddit import _fetch_reddit_content, _split_by_comments
 from .common import ResponseTooLarge, guarded_fetch, tool_name
 
 logger = logging.getLogger(__name__)
@@ -799,7 +806,7 @@ async def _s2_fast_path(url: str) -> Optional[str]:
     if not s2_enabled():
         return None
 
-    from .semantic_scholar import _detect_s2_url, _fetch_s2_paper
+    from .semantic_scholar import _fetch_s2_paper
 
     paper_id = _detect_s2_url(url)
     if not paper_id:
@@ -819,7 +826,7 @@ async def _ietf_fast_path(url: str) -> Optional[str]:
     Once matched, always returns a string (even errors) to prevent
     fallback to generic HTTP fetch.
     """
-    from .ietf import _detect_ietf_url, _fetch_rfc_paper, _fetch_draft
+    from .ietf import _fetch_rfc_paper, _fetch_draft
 
     match = _detect_ietf_url(url)
     if not match:
@@ -1033,7 +1040,7 @@ async def _github_fast_path(
         total_lines = len(all_lines)
 
         source = f"https://github.com/{match.owner}/{match.repo}/blob/{match.ref}/{match.path}"
-        fm_entries = FMEntries({"source": source, "api": "GitHub (raw)"})
+        fm_entries = FMEntries({"source": source, "api": "GitHub (raw)", "trust": _TRUST_ADVISORY})
         if lang:
             fm_entries["language"] = lang
 

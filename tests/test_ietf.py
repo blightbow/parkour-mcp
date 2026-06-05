@@ -4,7 +4,6 @@ import pytest
 import respx
 
 from parkour_mcp.ietf import (
-    _detect_ietf_url,
     _fetch_rfc_metadata,
     _fetch_rfc_paper,
     _format_rfc_paper,
@@ -15,6 +14,7 @@ from parkour_mcp.ietf import (
     _RFC_DOI_RE,
     ietf,
 )
+from parkour_mcp.detection import _detect_ietf_url
 from parkour_mcp._pipeline import _ietf_fast_path
 from parkour_mcp.shelf import _reset_shelf, _get_shelf
 
@@ -257,6 +257,7 @@ class TestFetchRfcPaper:
         assert "IETF (RFC Editor)" in result
         assert "10.17487/RFC9110" in result
         assert "STD 97" in result  # subseries label
+        assert "trust:" in result  # fenced RFC body must declare its untrust
 
         # Verify shelf tracking
         shelf = _get_shelf()

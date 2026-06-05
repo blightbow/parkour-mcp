@@ -2,7 +2,6 @@
 
 import asyncio
 import logging
-import re
 from pathlib import Path
 from typing import Annotated, Optional
 
@@ -11,6 +10,7 @@ from pydantic import Field
 import httpx
 
 from .common import _API_HEADERS, RateLimiter, tool_name
+from .detection import _detect_s2_url
 from .markdown import _build_frontmatter
 
 logger = logging.getLogger(__name__)
@@ -25,11 +25,7 @@ _s2_limiter = RateLimiter(1.0)
 S2_BASE_URL = "https://api.semanticscholar.org/graph/v1"
 S2_CONFIG_PATH = Path.home() / ".config" / "parkour" / "s2_api_key"
 
-# Matches semanticscholar.org/paper/ URLs, captures 40-char hex paper ID
-S2_URL_RE = re.compile(
-    r'https?://(?:www\.)?semanticscholar\.org/paper/(?:[^/]+/)?([0-9a-f]{40})',
-    re.IGNORECASE,
-)
+# URL detection (S2_URL_RE, _detect_s2_url) lives in detection.py.
 
 _NO_KEY_MSG = (
     "Rate limited (HTTP 429). Unauthenticated requests share a global pool.\n"
@@ -62,12 +58,8 @@ _AUTHOR_PAPER_FIELDS = (
 
 def _get_s2_api_key() -> str:
     """Load Semantic Scholar API key from env or config file. Returns '' if missing."""
-    from .common import clean_env
-    if key := clean_env("S2_API_KEY"):
-        return key
-    if S2_CONFIG_PATH.exists():
-        return S2_CONFIG_PATH.read_text().strip()
-    return ""
+    from .common import load_credential
+    return load_credential("S2_API_KEY", S2_CONFIG_PATH)
 
 
 def _s2_headers() -> dict:
@@ -121,12 +113,6 @@ async def _s2_request(path: str, params: Optional[dict] = None) -> dict | str:
 
     # Unreachable, but satisfies type checker
     return "Error: Semantic Scholar API request failed."
-
-
-def _detect_s2_url(url: str) -> Optional[str]:
-    """Extract a 40-char hex paper ID from a Semantic Scholar URL, or None."""
-    m = S2_URL_RE.search(url)
-    return m.group(1) if m else None
 
 
 def _format_paper_detail(data: dict) -> str:

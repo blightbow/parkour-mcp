@@ -15,7 +15,8 @@ import httpx
 from kagiapi import KagiClient
 from pydantic import Field
 
-from .common import _API_USER_AGENT, clean_env, tool_name
+from .common import _API_USER_AGENT, load_credential, tool_name
+from .detection import is_reddit_url
 from .markdown import (
     FMEntries,
     _append_frontmatter_entry,
@@ -374,12 +375,8 @@ def _handle_v1_error(e: Exception) -> str:
 # ---------------------------------------------------------------------------
 
 def get_api_key() -> str:
-    """Load API key from config file or environment."""
-    if key := clean_env("KAGI_API_KEY"):
-        return key
-    if CONFIG_PATH.exists():
-        return CONFIG_PATH.read_text().strip()
-    return ""
+    """Load API key from env var or config file."""
+    return load_credential("KAGI_API_KEY", CONFIG_PATH)
 
 
 # ---------------------------------------------------------------------------
@@ -664,11 +661,30 @@ async def search(
         )
 
     if results:
-        _append_frontmatter_entry(
-            fm_entries, "hint",
-            f"Drill into a result URL with {tool_name('web_fetch_sections')} "
-            f"to scout layout, or {tool_name('web_fetch_direct')} for body content.",
+        # Reddit 403s datacenter IPs on a direct fetch, but the fetch tools
+        # carry a fast path that reaches it anyway.  Steer the caller there
+        # whenever Reddit is in play — either the query named it, or a result
+        # URL lands on a Reddit host the fast path can serve.
+        reddit_in_play = "reddit" in query.lower() or any(
+            is_reddit_url(item.get("url") or "")
+            for item in primary_items
+            if isinstance(item, dict)
         )
+        if reddit_in_play:
+            _append_frontmatter_entry(
+                fm_entries, "hint",
+                "Reddit serves 403 to datacenter IPs, so fetching these links "
+                f"directly fails; reach Reddit threads and listings with "
+                f"{tool_name('web_fetch_sections')} to scout layout, or "
+                f"{tool_name('web_fetch_direct')} for body content — both "
+                "retrieve Reddit content despite the block.",
+            )
+        else:
+            _append_frontmatter_entry(
+                fm_entries, "hint",
+                f"Drill into a result URL with {tool_name('web_fetch_sections')} "
+                f"to scout layout, or {tool_name('web_fetch_direct')} for body content.",
+            )
     else:
         active_filters: list[str] = []
         if lens_id is not None:

@@ -649,6 +649,7 @@ class TestWebFetchDirectRawGitHub:
         )
         assert "api: GitHub (raw)" in result
         assert "1 | import os" in result
+        assert "trust:" in result  # fenced source code must declare untrust
 
     @pytest.mark.asyncio
     @respx.mock

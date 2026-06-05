@@ -10,7 +10,6 @@ from parkour_mcp.doi import (
     _build_alert_message,
     _build_correction_note,
     _classify_update_type,
-    _detect_doi_url,
     _detect_ra,
     _extract_licenses,
     _extract_relations,
@@ -25,6 +24,7 @@ from parkour_mcp.doi import (
     fetch_formatted_citation,
     _format_csl_json_as_markdown,
 )
+from parkour_mcp.detection import _detect_doi_url
 from parkour_mcp._pipeline import _doi_fast_path
 from parkour_mcp.shelf import _reset_shelf
 

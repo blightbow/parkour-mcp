@@ -4,10 +4,13 @@ import httpx
 import pytest
 import respx
 
+import sys
+
 from parkour_mcp.mediawiki import (
     _clean_display_title,
     _detect_mediawiki,
     _fetch_mediawiki_page,
+    _handle_search,
     _mediawiki_html_to_markdown,
     _extract_citations,
     _format_citations,
@@ -21,6 +24,28 @@ from .conftest import (
     MEDIAWIKI_QUERY_MISSING_PAGE,
     MEDIAWIKI_PARSE_FULL_RESPONSE,
 )
+
+
+@pytest.mark.asyncio
+async def test_search_response_declares_trust(monkeypatch):
+    """The search action fences result snippets (untrusted wiki content), so
+    its frontmatter must declare trust like every other fenced response."""
+    async def _fake_base(wiki):
+        return ("en.wikipedia.org", "https://en.wikipedia.org/w/api.php")
+
+    async def _fake_search(api_base, query, limit, offset, namespace):
+        return ([{"title": "Python", "snippet": "a snippet", "wordcount": 12}], 1)
+
+    # The package namespace rebinds `parkour_mcp.mediawiki` to the tool
+    # function, shadowing the submodule, so reach the module via sys.modules
+    # (same pattern as test_arxiv / test_semantic_scholar).
+    mediawiki_mod = sys.modules["parkour_mcp.mediawiki"]
+    monkeypatch.setattr(mediawiki_mod, "_resolve_wiki_base", _fake_base)
+    monkeypatch.setattr(mediawiki_mod, "_search_mediawiki", _fake_search)
+
+    result = await _handle_search("python", "en.wikipedia.org", 5, 0, 0)
+    assert "trust:" in result
+    assert "MediaWiki (en.wikipedia.org)" in result
 
 
 # --- _detect_mediawiki ---

@@ -299,6 +299,16 @@ rejecting the request outright.  This avoids wasting a round-trip.
 
 ## Required Fields by Tool
 
+**Trust invariant.** Every response whose body is fenced (i.e. carries
+untrusted external content through `_fence_content`) MUST set `trust:
+_TRUST_ADVISORY` in its frontmatter. This holds uniformly across the fetch
+tools, the fast paths, and the dedicated source tools (GitHub, Packages,
+IETF, MediaWiki search, etc.). The per-action tables below may omit the
+`trust` row for brevity; assume it is present on any content-bearing
+response. Responses that are pure metadata or error strings (no fence) do
+not carry `trust`. The GitHub tool seeds it once in `github.py#_fm_base`;
+other modules set it on the `fm_entries` they hand to `_build_frontmatter`.
+
 ### Fetch tools (`web_fetch_direct`, `web_fetch_sections`, GitHub fast path)
 
 Always present:
@@ -351,6 +361,8 @@ Conditional:
 | Field              | When |
 |--------------------|------|
 | `balance_warning`  | Kagi API balance below $1.00 |
+| `warning`          | lens_id / region / date-filter caveats for the chosen workflow |
+| `hint`             | Drill-in guidance on results, widen-query guidance on empty results, or Reddit datacenter-block steering. The Reddit variant fires when the query contains `reddit` or any result URL is on a Reddit host the fetch fast path serves; it points at the fetch tools because Reddit 403s datacenter IPs on a direct fetch. |
 
 ### arXiv tool
 

@@ -16,7 +16,7 @@ from urllib.parse import quote
 from pydantic import Field
 
 from .common import _depsdev_get, tool_name
-from .markdown import _build_frontmatter, _fence_content
+from .markdown import _build_frontmatter, _fence_content, _TRUST_ADVISORY
 from .scorecard import format_score as _format_scorecard
 
 logger = logging.getLogger(__name__)
@@ -523,6 +523,7 @@ async def _action_package(system: str, name: str) -> str:
     fm = _build_frontmatter({
         "source": f"https://deps.dev/{label.lower()}/{quote(name, safe='')}",
         "api": "deps.dev",
+        "trust": _TRUST_ADVISORY,
         "ecosystem": label,
         "default_version": default_version or None,
         "versions": f"{len(versions)} total",
@@ -567,6 +568,7 @@ async def _action_version(system: str, name: str, version: str) -> str:
     fm = _build_frontmatter({
         "source": f"https://deps.dev/{label.lower()}/{quote(name, safe='')}/{version}",
         "api": "deps.dev",
+        "trust": _TRUST_ADVISORY,
         "ecosystem": label,
         "advisories": len(advisories),
         "note": (
@@ -618,6 +620,7 @@ async def _action_dependencies(system: str, name: str, version: str) -> str:
 
     fm = _build_frontmatter({
         "api": "deps.dev",
+        "trust": _TRUST_ADVISORY,
         "ecosystem": label,
         "action": "dependencies",
         "package": f"{name}@{version}",
@@ -662,6 +665,7 @@ async def _action_project(query: str) -> str:
     fm = _build_frontmatter({
         "source": source_url,
         "api": "deps.dev",
+        "trust": _TRUST_ADVISORY,
         "action": "project",
         "openssf_scorecard": openssf_value,
         "hint": f"Use {tool_name('github')} tool for repo README, issues, and code search",
@@ -684,6 +688,7 @@ async def _action_advisory(query: str) -> str:
 
     fm = _build_frontmatter({
         "api": "deps.dev",
+        "trust": _TRUST_ADVISORY,
         "action": "advisory",
         "source": osv_url or None,
         "hint": "Use version action to check which package versions are affected",

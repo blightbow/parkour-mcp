@@ -31,7 +31,6 @@ import string
 import time
 import uuid
 from datetime import datetime, timezone
-from enum import Enum
 from typing import Optional, Union
 from urllib.parse import urlparse, urlunparse, urlencode, parse_qs
 
@@ -39,6 +38,7 @@ from curl_cffi.requests import AsyncSession
 from curl_cffi.requests import exceptions as cc_exc
 
 from .common import RateLimiter
+from .detection import RedditPageType, _classify_reddit_url, _detect_reddit_url
 
 logger = logging.getLogger(__name__)
 
@@ -285,125 +285,17 @@ async def _force_refresh_token() -> None:
         await _authenticate()
 
 # ---------------------------------------------------------------------------
-# URL detection
+# Detection (imported from detection.py)
 # ---------------------------------------------------------------------------
+# URL detection, page-type classification, and the old.reddit.com
+# normalisation live in detection.py (pure, stdlib-only).  This module imports
+# back the helpers its fetch flow uses directly (_detect_reddit_url,
+# _classify_reddit_url, RedditPageType) at the top of the file; is_reddit_url
+# and _extract_comment_permalink are consumed only by other modules.
 
-_REDDIT_URL_RE = re.compile(
-    r"https?://(?:(?:www|old|new|np)\.)?reddit\.com/",
-    re.IGNORECASE,
-)
-
-_REDD_IT_RE = re.compile(
-    r"https?://redd\.it/(\w+)",
-    re.IGNORECASE,
-)
-
+# Maximum comment-tree depth rendered in a thread (a fetch/format concern, not
+# detection, so it stays here).
 _MAX_COMMENT_DEPTH = 6
-
-
-def _detect_reddit_url(url: str) -> Optional[str]:
-    """Return normalised old.reddit.com URL if *url* is a Reddit link, else None.
-
-    Rewrites the host to old.reddit.com, preserves ``sort`` query param,
-    strips everything else.  Does NOT append ``.json`` — the fetch function
-    does that.  For ``redd.it`` short links the original URL is returned
-    (redirect resolved during fetch).
-    """
-    # Short links
-    if _REDD_IT_RE.match(url):
-        return url
-
-    if not _REDDIT_URL_RE.match(url):
-        return None
-
-    parsed = urlparse(url)
-
-    # Rewrite host
-    netloc = "old.reddit.com"
-
-    # Ensure trailing slash on path
-    path = parsed.path
-    if not path.endswith("/"):
-        path += "/"
-
-    # Preserve only ?sort=
-    qs = parse_qs(parsed.query)
-    keep: dict[str, list[str]] = {}
-    if "sort" in qs:
-        keep["sort"] = qs["sort"]
-    query = urlencode(keep, doseq=True)
-
-    return urlunparse(("https", netloc, path, "", query, ""))
-
-
-# ---------------------------------------------------------------------------
-# Page type classification
-# ---------------------------------------------------------------------------
-
-class RedditPageType(Enum):
-    COMMENT_THREAD = "comment_thread"
-    SUBREDDIT = "subreddit"
-    USER = "user"
-    SHORT_LINK = "short_link"
-
-
-# Matches a comment thread with or without the /r/SUB/ prefix: redd.it short
-# links redirect to the subreddit-less /comments/{id} canonical form, which
-# Reddit (and oauth.reddit.com) resolve to the full thread.
-_COMMENT_RE = re.compile(r"/(?:r/[^/]+/)?comments/\w+", re.IGNORECASE)
-_USER_RE = re.compile(r"/(?:u|user)/[^/]+", re.IGNORECASE)
-
-# Comment permalink: /r/SUB/comments/POSTID/slug/COMMENTID/ — points at
-# a specific comment within a post.  Reddit's .json endpoint serves a
-# context-scoped subtree for these URLs (the comment + its replies, not
-# the full thread), which silently truncates most of the conversation.
-# Canonical Reddit permalinks always include the slug; we require it to
-# disambiguate from a slug-less whole-post URL /r/SUB/comments/POSTID/.
-_PERMALINK_RE = re.compile(
-    r"^/r/([^/]+)/comments/(\w+)/([^/]+)/(\w+)/?$",
-    re.IGNORECASE,
-)
-
-
-def _extract_comment_permalink(url: str) -> Optional[tuple[str, str]]:
-    """Decompose a comment-permalink URL into (stripped_url, comment_id).
-
-    Returns ``None`` for whole-post URLs, subreddit listings, user
-    pages, or any other URL shape — callers treat ``None`` as "not a
-    permalink, handle normally."
-
-    ``stripped_url`` points at the containing post (with any comment-ID
-    suffix removed); ``comment_id`` is the identifier of the targeted
-    comment.  Callers can use it as a ``section=`` filter on the
-    full-thread fetch: the Reddit renderer emits ``### {id}`` /
-    ``#### {id}`` headings for each comment, so the section filter
-    resolves naturally against the cached markdown.
-    """
-    parsed = urlparse(url)
-    m = _PERMALINK_RE.match(parsed.path)
-    if not m:
-        return None
-    sub, post, slug, comment_id = m.groups()
-    stripped_path = f"/r/{sub}/comments/{post}/{slug}/"
-    stripped = urlunparse((
-        parsed.scheme, parsed.netloc, stripped_path,
-        "", parsed.query, "",
-    ))
-    return stripped, comment_id
-
-def _classify_reddit_url(url: str) -> RedditPageType:
-    """Classify a Reddit URL by page type."""
-    if _REDD_IT_RE.match(url):
-        return RedditPageType.SHORT_LINK
-
-    parsed = urlparse(url)
-    path = parsed.path
-
-    if _COMMENT_RE.search(path):
-        return RedditPageType.COMMENT_THREAD
-    if _USER_RE.search(path):
-        return RedditPageType.USER
-    return RedditPageType.SUBREDDIT
 
 
 # ---------------------------------------------------------------------------

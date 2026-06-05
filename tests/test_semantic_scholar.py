@@ -12,13 +12,13 @@ _s2_module = sys.modules["parkour_mcp.semantic_scholar"]
 
 from parkour_mcp.semantic_scholar import (  # noqa: E402
     S2_BASE_URL,
-    _detect_s2_url,
     _fetch_s2_paper,
     _format_paper_detail,
     _get_s2_api_key,
     _s2_request,
     semantic_scholar,
 )
+from parkour_mcp.detection import _detect_s2_url  # noqa: E402
 from parkour_mcp._pipeline import _s2_fast_path  # noqa: E402
 
 from .conftest import (  # noqa: E402

@@ -2,7 +2,6 @@
 
 import asyncio
 import logging
-import re
 import xml.etree.ElementTree as ET
 from typing import Annotated, Optional
 
@@ -11,61 +10,13 @@ from pydantic import Field
 import httpx
 
 from .common import _API_USER_AGENT, RateLimiter, tool_name
+from .detection import _detect_arxiv_url, _strip_version
 from .markdown import FMEntries, _build_frontmatter
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# URL detection
-# ---------------------------------------------------------------------------
-# Matches arxiv.org/{abs,pdf}/<id> and export.arxiv.org variants.
-# Excludes /html/ — arXiv's HTML endpoint serves full rendered papers;
-# intercepting it would discard full text in favor of metadata-only.
-ARXIV_URL_RE = re.compile(
-    r'https?://(?:export\.)?arxiv\.org/(?:abs|pdf)/(\d{4}\.\d{4,5}(?:v\d+)?)',
-    re.IGNORECASE,
-)
-
-
-def _detect_arxiv_url(url: str) -> Optional[str]:
-    """Extract a bare arXiv ID from an arXiv URL, or None.
-
-    Matches /abs/ and /pdf/ paths. Does NOT match /html/ — those should
-    fall through to HTTP fetch for full paper text with BM25 slicing.
-    """
-    m = ARXIV_URL_RE.search(url)
-    return m.group(1) if m else None
-
-
-# Matches /html/ paths (full paper text — not intercepted by the fast path)
-_ARXIV_HTML_RE = re.compile(
-    r'https?://(?:export\.)?arxiv\.org/html/(\d{4}\.\d{4,5}(?:v\d+)?)',
-    re.IGNORECASE,
-)
-
-
-def _detect_arxiv_html_url(url: str) -> Optional[str]:
-    """Extract arXiv ID from an /html/ URL, or None."""
-    m = _ARXIV_HTML_RE.search(url)
-    return m.group(1) if m else None
-
-
-_VERSION_SUFFIX_RE = re.compile(r'v\d+$')
-
-
-def _strip_version(arxiv_id: str) -> str:
-    """Strip the version suffix from an arXiv ID for DOI synthesis.
-
-    DataCite registers one DOI per paper, always versionless:
-    ``10.48550/arXiv.2501.16496`` (not ``v1``).  The Atom API always
-    returns versioned IDs (e.g. ``2501.16496v1``), so this helper is
-    needed whenever constructing DOIs from API-returned IDs.
-
-    The versioned ID should still be used for arXiv URLs (abs, pdf, html)
-    and display — arXiv recommends citing with the specific version.
-    """
-    return _VERSION_SUFFIX_RE.sub('', arxiv_id)
-
+# URL/identifier detection (ARXIV_URL_RE, _detect_arxiv_html_url, etc.) lives
+# in detection.py; this module imports back only the helpers it uses directly.
 
 # ---------------------------------------------------------------------------
 # Rate limiter — 3 seconds between requests per arXiv API terms of use.

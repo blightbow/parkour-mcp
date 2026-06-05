@@ -549,6 +549,7 @@ class TestPackagesPackage:
         assert "deps.dev" in result
         assert "requests" in result
         assert "untrusted content" in result  # fenced
+        assert "trust:" in result  # fenced body must declare its untrust
 
     @pytest.mark.asyncio
     async def test_unknown_ecosystem(self):
