@@ -238,6 +238,29 @@ class TestDetectRedditUrl:
         assert "q=python" in result
         assert "category" not in result
 
+    def test_search_defaults_to_nsfw_included(self):
+        # The userless token filters NSFW out of search by default; the rest
+        # of the toolkit does not editorialize on adult content, so search
+        # defaults to include_over_18=1 for consistency.
+        result = _detect_reddit_url("https://www.reddit.com/search/?q=python")
+        assert result is not None
+        assert "include_over_18=1" in result
+
+    def test_search_honors_explicit_sfw(self):
+        # A caller who explicitly asks for SFW (include_over_18=0) keeps it.
+        result = _detect_reddit_url(
+            "https://www.reddit.com/search/?q=python&include_over_18=0"
+        )
+        assert result is not None
+        assert "include_over_18=0" in result
+        assert "include_over_18=1" not in result
+
+    def test_non_search_does_not_inject_nsfw(self):
+        # The NSFW default is search-only; a listing fetch must not gain it.
+        result = _detect_reddit_url("https://www.reddit.com/r/Python/")
+        assert result is not None
+        assert "include_over_18" not in result
+
 
 # ---------------------------------------------------------------------------
 # Comment-permalink extraction
@@ -728,7 +751,7 @@ class TestRedditFastPath:
         # End-to-end: a /search/ URL must reach oauth.reddit.com/search/.json
         # with q preserved and raw_json appended, then format with permalinks.
         fake_async_session.mock_get(
-            "https://oauth.reddit.com/search/.json?q=skiprika&sort=top&raw_json=1",
+            "https://oauth.reddit.com/search/.json?q=skiprika&sort=top&include_over_18=1&raw_json=1",
             json_data=_make_search_json(),
         )
         result = await _reddit_fast_path(

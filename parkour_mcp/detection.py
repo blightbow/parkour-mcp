@@ -171,16 +171,18 @@ _REDD_IT_RE = re.compile(
 _SEARCH_RE = re.compile(r"/search/?$", re.IGNORECASE)
 
 # Query params preserved on a Reddit search URL. q is the payload; the rest
-# tune or paginate the search. A curated allowlist (not blind passthrough)
-# because a stray param can break the endpoint: `category=<anything>` 500s it.
-# Reddit's full documented set is: after, before, category, count,
-# include_facets, limit, q, restrict_sr, show, sort, sr_detail, t, type. We
-# drop `category` (500-prone) and `sr_detail`/`include_facets` (response
-# shaping we do not render). Everything outside this set (tracking junk like
-# utm_/ref/share_id) is dropped so it never reaches the API.
+# tune or paginate the search. include_over_18 is the NSFW lever (the userless
+# token filters adult content out of search by default; =1 includes it). A
+# curated allowlist (not blind passthrough) because a stray param can break the
+# endpoint: `category=<anything>` 500s it. Reddit's full documented set is:
+# after, before, category, count, include_facets, limit, q, restrict_sr, show,
+# sort, sr_detail, t, type. We drop `category` (500-prone) and
+# `sr_detail`/`include_facets` (response shaping we do not render). Everything
+# outside this set (tracking junk like utm_/ref/share_id) is dropped so it
+# never reaches the API.
 _SEARCH_QUERY_KEYS = (
     "q", "sort", "t", "restrict_sr", "type",
-    "after", "before", "limit", "count", "show",
+    "after", "before", "limit", "count", "show", "include_over_18",
 )
 
 
@@ -237,6 +239,12 @@ def _detect_reddit_url(url: str) -> str | None:
         for k in _SEARCH_QUERY_KEYS:
             if k in qs:
                 keep[k] = qs[k]
+        # Default to NOT filtering NSFW, to match the rest of the toolkit
+        # (Kagi, the generic fetch) which never editorialize on adult
+        # content. Search is the only Reddit path that filters NSFW by
+        # default; direct subreddit/thread fetches already surface it. An
+        # explicit ?include_over_18=0 from the caller is honored.
+        keep.setdefault("include_over_18", ["1"])
     elif "sort" in qs:
         keep["sort"] = qs["sort"]
     query = urlencode(keep, doseq=True)

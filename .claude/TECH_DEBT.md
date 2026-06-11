@@ -29,6 +29,7 @@ The Reddit fast path was rebuilt on `oauth.reddit.com` userless tokens after Red
 - **Location**: `parkour_mcp/reddit.py#_fetch_reddit_json` (no quarantine opt-in cookie).
 - **Deviation**: redlib sends a `_options` cookie opting into quarantined/gated content. We do not, so quarantined subreddits map to a `_check_reddit_json_error` error string rather than rendering.
 - **Why**: rendering quarantined content silently is a surprising default for a research sidecar; surfacing the quarantine status as an explicit error is the more PoLA-aligned behavior. Add the opt-in cookie behind a flag if a real use case needs quarantined threads.
+- **NSFW is treated oppositely, on purpose**: quarantine is Reddit's explicit *warning* state for rule-breaking communities, so gating it behind an error is the unsurprising default. Ordinary 18+ (NSFW) content is not that — it is everywhere on Reddit, and the rest of the toolkit (Kagi, the generic fetch) never filters adult content. So NSFW is *included* by default; search defaults to `include_over_18=1` (`detection.py#_detect_reddit_url`) and direct subreddit/thread fetches already surface it untouched. The astonishing thing would be Reddit search silently returning a SFW subset when a Kagi search beside it does not. A caller can still pass `include_over_18=0` for SFW search.
 
 ## Pyright warnings (opted not to fix)
 

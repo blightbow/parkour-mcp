@@ -710,7 +710,9 @@ Reddit URLs are intercepted and fetched through `oauth.reddit.com` using a *user
 
 Comment threads are rendered with each comment as a markdown heading keyed by its Reddit comment ID. This makes the existing section machinery work naturally: `web_fetch_sections` returns the comment tree with author and content length metadata, and `web_fetch_incisive` with `section=` extracts specific comments by ID. BM25 search and slicing are fully supported for navigating long threads.
 
-Reddit **search** URLs are also supported. Both global (`reddit.com/search/?q=...`) and subreddit-scoped (`reddit.com/r/SUB/search/?q=...&restrict_sr=1`) searches return a result listing, and each hit carries its source subreddit and a fetchable permalink so the natural follow-up — opening a specific thread — is one `web_fetch_incisive` call away. Search-relevant query params (`q`, `sort`, `t`, `restrict_sr`, `limit`, …) are preserved; tracking params are dropped. A caller-appended `.json` suffix is normalized away rather than doubled.
+Reddit **search** URLs are also supported. Both global (`reddit.com/search/?q=...`) and subreddit-scoped (`reddit.com/r/SUB/search/?q=...&restrict_sr=1`) searches return a result listing, and each hit carries its source subreddit and a fetchable permalink so the natural follow-up — opening a specific thread — is one `web_fetch_incisive` call away. `type=sr` and `type=user` searches return subreddit and account matches (with subscriber counts / karma and links) instead of posts. Search-relevant query params (`q`, `sort`, `t`, `restrict_sr`, `limit`, …) are preserved; tracking params are dropped, and a caller-appended `.json` suffix is normalized away rather than doubled.
+
+NSFW results are **included by default**, matching the rest of the toolkit (Kagi, the generic fetch) which never filter adult content — so a search-then-explore pivot behaves consistently. The userless token would otherwise filter NSFW out of search (only search, not direct subreddit/thread fetches); pass `include_over_18=0` on the search URL to restrict to SFW.
 
 **Comment tree discovery** — `web_fetch_sections` returns the thread structure:
 
