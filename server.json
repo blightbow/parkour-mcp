@@ -6,7 +6,7 @@
     "url": "https://github.com/blightbow/parkour-mcp",
     "source": "github"
   },
-  "version": "2.0.0rc2",
+  "version": "2.0.0rc3",
   "packages": [
     {
       "registryType": "mcpb",
