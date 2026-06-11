@@ -165,6 +165,24 @@ _REDD_IT_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Matches a search endpoint, global (/search/) or subreddit-scoped
+# (/r/SUB/search/). Anchored to the end so it does not match a post whose
+# slug merely contains the word "search".
+_SEARCH_RE = re.compile(r"/search/?$", re.IGNORECASE)
+
+# Query params preserved on a Reddit search URL. q is the payload; the rest
+# tune or paginate the search. A curated allowlist (not blind passthrough)
+# because a stray param can break the endpoint: `category=<anything>` 500s it.
+# Reddit's full documented set is: after, before, category, count,
+# include_facets, limit, q, restrict_sr, show, sort, sr_detail, t, type. We
+# drop `category` (500-prone) and `sr_detail`/`include_facets` (response
+# shaping we do not render). Everything outside this set (tracking junk like
+# utm_/ref/share_id) is dropped so it never reaches the API.
+_SEARCH_QUERY_KEYS = (
+    "q", "sort", "t", "restrict_sr", "type",
+    "after", "before", "limit", "count", "show",
+)
+
 
 def is_reddit_url(url: str) -> bool:
     """True if *url* is a link the Reddit fast path can serve.
@@ -182,10 +200,13 @@ def is_reddit_url(url: str) -> bool:
 def _detect_reddit_url(url: str) -> str | None:
     """Return normalised old.reddit.com URL if *url* is a Reddit link, else None.
 
-    Rewrites the host to old.reddit.com, preserves ``sort`` query param,
-    strips everything else.  Does NOT append ``.json`` — the fetch function
-    does that.  For ``redd.it`` short links the original URL is returned
-    (redirect resolved during fetch).
+    Rewrites the host to old.reddit.com and strips a caller-appended ``.json``
+    suffix (the fetch function appends its own; a doubled ``.json`` makes
+    Reddit answer 400).  For listings and permalinks only ``sort`` is
+    preserved; for ``/search`` URLs the search-relevant params (``q`` and
+    friends) are preserved, since ``q`` is the payload, not tracking noise.
+    Does NOT append ``.json`` — the fetch function does that.  For ``redd.it``
+    short links the original URL is returned (redirect resolved during fetch).
     """
     # Short links
     if _REDD_IT_RE.match(url):
@@ -199,15 +220,24 @@ def _detect_reddit_url(url: str) -> str | None:
     # Rewrite host
     netloc = "old.reddit.com"
 
-    # Ensure trailing slash on path
+    # Strip a caller-appended `.json` so the fetcher does not double it,
+    # then ensure a trailing slash.
     path = parsed.path
+    if path.endswith(".json"):
+        path = path[: -len(".json")]
     if not path.endswith("/"):
         path += "/"
 
-    # Preserve only ?sort=
+    # Preserve query params: search URLs carry their payload in the query
+    # (q is mandatory), so keep the search-relevant set; everything else
+    # keeps only ?sort=.
     qs = parse_qs(parsed.query)
     keep: dict[str, list[str]] = {}
-    if "sort" in qs:
+    if _SEARCH_RE.search(path):
+        for k in _SEARCH_QUERY_KEYS:
+            if k in qs:
+                keep[k] = qs[k]
+    elif "sort" in qs:
         keep["sort"] = qs["sort"]
     query = urlencode(keep, doseq=True)
 
@@ -219,6 +249,7 @@ class RedditPageType(Enum):
     SUBREDDIT = "subreddit"
     USER = "user"
     SHORT_LINK = "short_link"
+    SEARCH = "search"
 
 
 # Matches a comment thread with or without the /r/SUB/ prefix: redd.it short
@@ -276,6 +307,8 @@ def _classify_reddit_url(url: str) -> RedditPageType:
 
     if _COMMENT_RE.search(path):
         return RedditPageType.COMMENT_THREAD
+    if _SEARCH_RE.search(path):
+        return RedditPageType.SEARCH
     if _USER_RE.search(path):
         return RedditPageType.USER
     return RedditPageType.SUBREDDIT

@@ -454,6 +454,9 @@ async def _fetch_reddit_content(url: str) -> tuple[str, str]:
             return _format_comment_thread(data)
         if page_type == RedditPageType.USER:
             return _format_listing(data, kind="user")
+        if page_type == RedditPageType.SEARCH:
+            query = parse_qs(urlparse(url).query).get("q", [""])[0]
+            return _format_listing(data, kind="search", query=query)
         return _format_listing(data, kind="subreddit")
     except Exception as exc:
         logger.debug("Reddit formatting error: %s", exc)
@@ -695,11 +698,13 @@ def _walk_comment_tree(
 # ---------------------------------------------------------------------------
 
 def _format_listing(
-    data: list | dict, *, kind: str = "subreddit",
+    data: list | dict, *, kind: str = "subreddit", query: str | None = None,
 ) -> tuple[str, str]:
-    """Format a subreddit or user listing as markdown.
+    """Format a subreddit, user, or search listing as markdown.
 
-    Returns ``(title, markdown)``.
+    Returns ``(title, markdown)``.  For ``kind="search"`` each result line
+    carries its subreddit and a fetchable permalink, since search results
+    span communities and the natural next step is to open a specific thread.
     """
     # Listings come as either a single dict or a one-element list
     listing = data[0] if isinstance(data, list) else data
@@ -711,6 +716,8 @@ def _format_listing(
         first = children[0].get("data", {})
         user = first.get("author", "unknown")
         title = f"u/{user}"
+    elif kind == "search":
+        title = f"Search: {query}" if query else "Reddit search"
     elif children:
         first = children[0].get("data", {})
         sub = first.get("subreddit", "unknown")
@@ -732,10 +739,20 @@ def _format_listing(
             author = cdata.get("author", "[deleted]")
             flair = cdata.get("link_flair_text")
             flair_str = f" [{flair}]" if flair else ""
-            parts.append(
-                f"{i}. **{ptitle}**{flair_str} "
-                f"({score} pts, {num_comments} comments) — u/{author}"
-            )
+            if kind == "search":
+                sub = cdata.get("subreddit", "")
+                permalink = cdata.get("permalink", "")
+                link = f"https://www.reddit.com{permalink}" if permalink else ""
+                parts.append(
+                    f"{i}. **{ptitle}**{flair_str} "
+                    f"({score} pts, {num_comments} comments) — r/{sub} — u/{author}\n"
+                    f"   {link}"
+                )
+            else:
+                parts.append(
+                    f"{i}. **{ptitle}**{flair_str} "
+                    f"({score} pts, {num_comments} comments) — u/{author}"
+                )
         elif ckind == "t1":
             # Comment (user pages mix posts and comments)
             body_preview = (cdata.get("body", "") or "")[:120]
@@ -745,6 +762,30 @@ def _format_listing(
             subreddit = cdata.get("subreddit", "")
             parts.append(
                 f"{i}. r/{subreddit} ({score} pts): {body_preview}"
+            )
+        elif ckind == "t5":
+            # Subreddit hit (search with type=sr). Without this branch the
+            # results render empty despite Reddit returning matches.
+            name = cdata.get("display_name_prefixed") or f"r/{cdata.get('display_name', '')}"
+            subs = cdata.get("subscribers") or 0
+            desc = (cdata.get("public_description") or "").strip().replace("\n", " ")
+            if len(desc) > 120:
+                desc = desc[:120] + "…"
+            line = f"{i}. **{name}** ({subs:,} subscribers)"
+            if desc:
+                line += f" — {desc}"
+            sr_url = cdata.get("url", "")
+            if sr_url:
+                line += f"\n   https://www.reddit.com{sr_url}"
+            parts.append(line)
+        elif ckind == "t2":
+            # User-account hit (search with type=user).
+            uname = cdata.get("name", "[unknown]")
+            link_karma = cdata.get("link_karma", 0) or 0
+            comment_karma = cdata.get("comment_karma", 0) or 0
+            parts.append(
+                f"{i}. **u/{uname}** ({link_karma:,} link / {comment_karma:,} comment karma)\n"
+                f"   https://www.reddit.com/user/{uname}/"
             )
 
     if not children:

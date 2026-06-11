@@ -105,6 +105,26 @@ def _make_listing_json(posts: list[dict] | None = None, after: str | None = None
     return [{"data": {"children": posts, "after": after}}]
 
 
+def _make_search_json(posts: list[dict] | None = None, after: str | None = None) -> dict:
+    """A search Listing: a single dict (not a one-element list) of t3 hits."""
+    if posts is None:
+        posts = [
+            {
+                "kind": "t3",
+                "data": {
+                    "title": "That's why Sigrika is Skiprika",
+                    "subreddit": "WutheringWaves",
+                    "permalink": "/r/WutheringWaves/comments/1swswbn/thats_why_sigrika_is_skiprika/",
+                    "score": 412,
+                    "num_comments": 68,
+                    "author": "Over_Story843",
+                    "link_flair_text": "Meme",
+                },
+            },
+        ]
+    return {"kind": "Listing", "data": {"children": posts, "after": after}}
+
+
 THREAD_JSON = _make_thread_json()
 
 LISTING_JSON = _make_listing_json()
@@ -170,6 +190,53 @@ class TestDetectRedditUrl:
         result = _detect_reddit_url("https://www.reddit.com/u/spez/")
         assert result is not None
         assert "old.reddit.com" in result
+
+    def test_search_preserves_query(self):
+        # q is the payload — it must survive normalization, unlike other
+        # listing params which are stripped to sort-only.
+        result = _detect_reddit_url(
+            "https://www.reddit.com/search/?q=hello+world&sort=top&t=year"
+        )
+        assert result is not None
+        assert "q=hello" in result and "sort=top" in result and "t=year" in result
+
+    def test_search_strips_appended_json(self):
+        # A caller-appended .json must not survive, or the fetcher doubles it
+        # into /search.json/.json (HTTP 400).
+        result = _detect_reddit_url("https://www.reddit.com/search.json?q=hi&limit=5")
+        assert result is not None
+        assert ".json" not in result
+        assert result.startswith("https://old.reddit.com/search/?")
+        assert "q=hi" in result and "limit=5" in result
+
+    def test_subreddit_search_preserves_restrict_sr(self):
+        result = _detect_reddit_url(
+            "https://www.reddit.com/r/Python/search/?q=async&restrict_sr=1"
+        )
+        assert result is not None
+        assert "/r/Python/search/" in result
+        assert "q=async" in result and "restrict_sr=1" in result
+
+    def test_search_drops_tracking_params(self):
+        result = _detect_reddit_url(
+            "https://www.reddit.com/search/?q=async&utm_source=share&ref=foo"
+        )
+        assert result is not None
+        assert "q=async" in result
+        assert "utm_source" not in result and "ref=foo" not in result
+
+    def test_search_preserves_show(self):
+        result = _detect_reddit_url("https://www.reddit.com/search/?q=python&show=all")
+        assert result is not None
+        assert "show=all" in result
+
+    def test_search_drops_category(self):
+        # category=<anything> 500s the Reddit search endpoint; it must not be
+        # forwarded even though it is a documented param.
+        result = _detect_reddit_url("https://www.reddit.com/search/?q=python&category=foo")
+        assert result is not None
+        assert "q=python" in result
+        assert "category" not in result
 
 
 # ---------------------------------------------------------------------------
@@ -239,6 +306,14 @@ class TestClassifyRedditUrl:
     def test_subreddit(self):
         url = "https://old.reddit.com/r/Python/"
         assert _classify_reddit_url(url) == RedditPageType.SUBREDDIT
+
+    def test_global_search(self):
+        url = "https://old.reddit.com/search/?q=async"
+        assert _classify_reddit_url(url) == RedditPageType.SEARCH
+
+    def test_subreddit_scoped_search(self):
+        url = "https://old.reddit.com/r/Python/search/?q=async&restrict_sr=1"
+        assert _classify_reddit_url(url) == RedditPageType.SEARCH
 
     def test_user_u(self):
         url = "https://old.reddit.com/u/spez/"
@@ -399,6 +474,58 @@ class TestFormatListing:
         title, md = _format_listing(data, kind="user")
         assert title == "u/test_user"
         assert "r/Python" in md
+
+
+class TestFormatSearchListing:
+    def test_title_from_query(self):
+        title, md = _format_listing(_make_search_json(), kind="search", query="skiprika")
+        assert title == "Search: skiprika"
+        assert "# Search: skiprika" in md
+
+    def test_results_carry_subreddit_and_permalink(self):
+        # Search spans communities, so each hit names its sub and a fetchable
+        # permalink — the actionable next step the bug report asked for.
+        _, md = _format_listing(_make_search_json(), kind="search", query="skiprika")
+        assert "r/WutheringWaves" in md
+        assert (
+            "https://www.reddit.com/r/WutheringWaves/comments/1swswbn/thats_why_sigrika_is_skiprika/"
+            in md
+        )
+
+    def test_empty_results(self):
+        empty = {"kind": "Listing", "data": {"children": [], "after": None}}
+        title, md = _format_listing(empty, kind="search", query="nomatch")
+        assert title == "Search: nomatch"
+        assert "*No posts found.*" in md
+
+    def test_subreddit_type_results(self):
+        # type=sr returns t5 (subreddit) kinds — these must render, not vanish.
+        data = {"kind": "Listing", "data": {"children": [
+            {"kind": "t5", "data": {
+                "display_name_prefixed": "r/Python",
+                "subscribers": 1300000,
+                "public_description": "news about Python",
+                "url": "/r/Python/",
+            }},
+        ], "after": None}}
+        _, md = _format_listing(data, kind="search", query="python")
+        assert "r/Python" in md
+        assert "1,300,000 subscribers" in md
+        assert "https://www.reddit.com/r/Python/" in md
+        assert "*No posts found.*" not in md  # the bug: matches rendered empty
+
+    def test_user_type_results(self):
+        # type=user returns t2 (account) kinds.
+        data = {"kind": "Listing", "data": {"children": [
+            {"kind": "t2", "data": {
+                "name": "spez", "link_karma": 150000, "comment_karma": 800000,
+            }},
+        ], "after": None}}
+        _, md = _format_listing(data, kind="search", query="spez")
+        assert "u/spez" in md
+        assert "150,000 link" in md
+        assert "https://www.reddit.com/user/spez/" in md
+        assert "*No posts found.*" not in md
 
 
 # ---------------------------------------------------------------------------
@@ -595,6 +722,23 @@ class TestRedditFastPath:
     async def test_non_reddit_url_returns_none(self):
         result = await _reddit_fast_path("https://example.com/page")
         assert result is None
+
+    @pytest.mark.asyncio
+    async def test_search_url_returns_results(self, fake_async_session):
+        # End-to-end: a /search/ URL must reach oauth.reddit.com/search/.json
+        # with q preserved and raw_json appended, then format with permalinks.
+        fake_async_session.mock_get(
+            "https://oauth.reddit.com/search/.json?q=skiprika&sort=top&raw_json=1",
+            json_data=_make_search_json(),
+        )
+        result = await _reddit_fast_path(
+            "https://www.reddit.com/search/?q=skiprika&sort=top"
+        )
+        assert result is not None
+        assert "Search: skiprika" in result
+        assert "r/WutheringWaves" in result
+        assert "/comments/1swswbn/thats_why_sigrika_is_skiprika/" in result
+        assert "api: Reddit (oauth.reddit.com)" in result
 
     @pytest.mark.asyncio
     async def test_error_returns_string_not_none(self, fake_async_session):
