@@ -1,15 +1,21 @@
 #!/usr/bin/env bash
-# Pre-push hook: block version tag pushes unless both the mocked and live
-# test suites pass.
+# Pre-push hook: gate version tag pushes on the test suites.
 #
 # The mocked suite (default `pytest` run) covers pytest-ruff lint across
 # parkour_mcp/, tests/, and scripts/, plus the offline unit suite.  It's
 # the exact step CI runs on tag push — skipping it locally let a ruff E402
-# regression in scripts/regenerate_readme_examples.py escape to v1.1.1.
+# regression in scripts/regenerate_readme_examples.py escape to v1.1.1.  It
+# is a HARD gate: always blocks on failure, never bypassable here.
 #
 # Live tests hit real endpoints, so they can't run unattended in CI without
 # credentials.  Running them at tag-push time is our stand-in: format drift
 # that would otherwise escape to a release gets caught at the last moment.
+# But they also flake on third-party outages (an external wiki bot-wall + 500
+# reddened a release gate once), so a live failure is bypassable via a
+# one-time, git-ignored `.live-test-bypass` dotfile at the repo root: touch it
+# and re-push, and the hook consumes it and allows the push.  This is surgical
+# — unlike `git push --no-verify`, it does NOT skip the mocked gate above — and
+# self-consuming, so it can never be left armed by accident.
 #
 # Only engages when a refs/tags/v* ref is being pushed.  Regular branch pushes
 # are unaffected and pay no latency cost.
@@ -64,11 +70,28 @@ if uv run --directory "$repo_root" pytest -m live --tb=short; then
     exit 0
 fi
 
+# Live tests failed.  A one-time, git-ignored bypass dotfile waves through a
+# confirmed external outage without the blunt `git push --no-verify` (which
+# would also skip the mocked gate above).  Consumed on use so it cannot be
+# left armed.
+bypass_file="$repo_root/.live-test-bypass"
+if [[ -f "$bypass_file" ]]; then
+    rm -f "$bypass_file"
+    echo
+    echo "pre-push: LIVE TESTS FAILED, but a one-time bypass was present"
+    echo "pre-push: ($bypass_file) — consuming it and allowing the push."
+    echo "pre-push: (Confirm the failure was an external outage, not a regression.)"
+    exit 0
+fi
+
 echo
 echo "pre-push: LIVE TESTS FAILED — refusing to push version tag"
 echo "pre-push:"
-echo "pre-push: If the failure is caused by an external endpoint outage"
-echo "pre-push: (not a format regression in our code), you can bypass with:"
-echo "pre-push:     git push --no-verify"
-echo "pre-push: Verify the failure is upstream before using that escape hatch."
+echo "pre-push: If this is a confirmed external endpoint outage (not a"
+echo "pre-push: regression in our code), arm a one-time bypass and re-push:"
+echo "pre-push:     touch '$bypass_file'"
+echo "pre-push:     git push origin ${tag_names[0]:-<tag>}"
+echo "pre-push: The hook consumes the file, so the bypass applies once. The"
+echo "pre-push: mocked suite is never bypassed this way. (git push --no-verify"
+echo "pre-push: still works but also skips the mocked gate, so prefer the file.)"
 exit 1

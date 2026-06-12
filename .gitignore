@@ -28,3 +28,7 @@ scripts/fonts/
 
 # Local API key files (per-session disposable keys, never committed)
 api.key
+
+# One-time live-test bypass for the pre-push hook (armed by `touch`, consumed
+# by the hook on use; never committed)
+.live-test-bypass

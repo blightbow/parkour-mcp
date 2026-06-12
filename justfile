@@ -59,25 +59,40 @@ lint-deep:
 install-hooks:
     git config core.hooksPath scripts/git-hooks
     chmod +x scripts/git-hooks/*
-    @echo "Git hooks installed. pre-push will run live tests on version tag pushes."
+    @echo "Git hooks installed. pre-push runs mocked + live tests on version tag"
+    @echo "pushes; a confirmed external live failure can be waved through once by"
+    @echo "creating a .live-test-bypass file (the hook consumes it on use)."
 
-# Usage: just tag v1.2.3 — runs version-drift check + mocked + live suites,
-# then creates annotated tag (no push). Mocked suite runs first because it's
-# fast and includes pytest-ruff, which catches format/lint regressions that
-# CI's `uv run pytest` would also fail on. Skipping this step let a ruff E402
-# regression escape to the v1.1.1 release tag. The sync check catches
-# drift between pyproject.toml, manifest.json, and server.json before the
-# tag escapes, since the CI workflow's tag-vs-pyproject check only sees
-# the one file.
+# Usage: just tag v1.2.3 — runs version-drift check + mocked suite, then
+# creates the annotated tag (no push). The mocked suite includes pytest-ruff,
+# which catches format/lint regressions that CI's `uv run pytest` would also
+# fail on; skipping it once let a ruff E402 regression escape to the v1.1.1
+# tag. The sync check catches drift between pyproject.toml, manifest.json, and
+# server.json before the tag escapes, since CI's tag-vs-pyproject check only
+# sees the one file.
+#
+# Live tests are deliberately NOT a gate here. They hit third-party endpoints
+# that flake and can falsely block a release (an external wiki bot-wall + 500
+# reddened this gate during the 2.0.0rc3 cut over nothing in our code). They
+# stay local-only and advisory: run them with `just test-live`. The pre-push
+# hook still runs them on tag push, with a one-time `.live-test-bypass` dotfile
+# to wave a confirmed external outage through (see scripts/git-hooks/pre-push).
+#
+# Tag after a version-drift check + mocked suite (live tests are advisory).
 tag version:
     @echo "Checking pyproject.toml / manifest.json / server.json sync..."
     uv run python3 scripts/sync_versions.py --check
     @echo "Running mocked test suite (incl. ruff lint) before creating tag {{version}}..."
     uv run pytest
-    @echo "Running live test suite before creating tag {{version}}..."
-    uv run pytest -m live
     git tag -a "{{version}}" -m "{{version}}"
-    @echo "Tag {{version}} created locally. Push with: git push origin {{version}}"
+    @echo "Tag {{version}} created locally (no push)."
+    @echo ""
+    @echo "REMINDER: live tests are not run by this gate (they flake on"
+    @echo "third-party outages). Run them before pushing and triage any"
+    @echo "failure as external-outage vs real regression:"
+    @echo "    just test-live"
+    @echo ""
+    @echo "Push with: git push origin {{version}}"
 
 # Preview the release: show the next version commitizen would cut and the
 # CHANGELOG entry git-cliff would assemble, without writing anything.

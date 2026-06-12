@@ -133,9 +133,19 @@ into the release commit. The release touches `pyproject.toml`,
 only — `CHANGELOG.md`. An RC does not modify `CHANGELOG.md`, so omit it.
 Confirm the staged set with `git status` before committing.
 
-`just tag` runs `sync_versions.py --check`, the mocked test suite (with
-ruff lint), and the live test suite before creating the annotated tag.
-Expect ~1-2 minutes for live tests.
+`just tag` runs `sync_versions.py --check` and the mocked test suite
+(with ruff lint) before creating the annotated tag — fast (~15-20s). It
+deliberately does NOT run live tests: they hit third-party endpoints that
+flake and can falsely block a release (an external wiki bot-wall reddened
+this gate during the 2.0.0rc3 cut). `just tag` prints a reminder to run
+`just test-live` manually instead. Run it and triage any failure as
+external-outage vs real regression before handing off to push.
+
+Live tests are still enforced at push by the `scripts/git-hooks/pre-push`
+hook (mocked is a hard gate there too). If a live failure is a confirmed
+external outage, the bypass is a one-time, git-ignored `.live-test-bypass`
+dotfile: `touch .live-test-bypass` then re-push, and the hook consumes it.
+Prefer that over `git push --no-verify`, which also skips the mocked gate.
 
 ## Step 6: Hand off
 
