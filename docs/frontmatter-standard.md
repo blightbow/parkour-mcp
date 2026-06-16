@@ -361,7 +361,7 @@ Conditional:
 | Field              | When |
 |--------------------|------|
 | `balance_warning`  | Kagi API balance below $1.00 |
-| `warning`          | lens_id / region / date-filter caveats for the chosen workflow |
+| `warning`          | lens_id / region / date-filter caveats for the chosen workflow, plus an ungrouped-top-level-OR caveat (Kagi binds OR looser than the implicit AND, so the query is flagged but never rewritten) |
 | `hint`             | Drill-in guidance on results, widen-query guidance on empty results, or Reddit datacenter-block steering. The Reddit variant fires when the query contains `reddit` or any result URL is on a Reddit host the fetch fast path serves; it points at the fetch tools because Reddit 403s datacenter IPs on a direct fetch. |
 
 ### arXiv tool

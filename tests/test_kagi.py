@@ -14,6 +14,7 @@ from parkour_mcp.kagi import (
     _extract_balance,
     _handle_v0_error,
     _handle_v1_error,
+    _has_ungrouped_or,
     search,
     summarize,
 )
@@ -245,6 +246,48 @@ class TestHandleV1Error:
         assert "ConnectError" in result
 
 
+# --- _has_ungrouped_or (query operator-precedence detector) ---
+
+class TestUngroupedOrDetection:
+    """The detector flags an uppercase OR at paren-depth 0 outside quotes —
+    the loose-binding footgun — and leaves grouped/quoted/lowercase forms
+    alone. It never rewrites the query; it only powers an advisory warning."""
+
+    @pytest.mark.parametrize("query", [
+        "a OR b",
+        "app pricing lifetime OR subscription",
+        '"one-time" OR subscription OR "removed lifetime"',
+        "site:reddit.com app pricing OR subscription",
+        "(a OR b) OR c",            # second OR is top-level → still a footgun
+        "foo OR",                   # trailing bare OR (malformed, still flagged)
+        "foo OR(b)",                # OR immediately abutting a group open
+    ])
+    def test_flags_ungrouped_or(self, query):
+        assert _has_ungrouped_or(query) is True
+
+    @pytest.mark.parametrize("query", [
+        "(a OR b)",
+        'app pricing lifetime ("one-time" OR subscription OR "removed lifetime") 2026',
+        '"a OR b"',                 # OR inside an exact phrase is not an operator
+        "a or b",                   # lowercase is a literal term to Kagi
+        "ORANGE juice recipe",      # OR as a substring prefix, not a token
+        "watercolOR painting",      # OR as a substring suffix, not a token
+        "foo bar baz",              # no OR at all
+        '"x (a OR b)" foo',         # grouped OR nested inside a quoted phrase
+    ])
+    def test_passes_clean_query(self, query):
+        assert _has_ungrouped_or(query) is False
+
+    def test_real_misfire_pair(self):
+        # The exact query that surfaced this (bare) vs. the grouped fix.
+        bare = ('Structured app pricing lifetime "one-time" OR subscription '
+                'OR "removed lifetime" 2026 -site:tiimoapp.com site:reddit.com')
+        grouped = ('Structured app pricing lifetime ("one-time" OR subscription '
+                   'OR "removed lifetime") 2026 -site:tiimoapp.com site:reddit.com')
+        assert _has_ungrouped_or(bare) is True
+        assert _has_ungrouped_or(grouped) is False
+
+
 # --- v1 search end-to-end (respx mocks) ---
 
 @pytest.fixture
@@ -416,6 +459,59 @@ class TestRedditHint:
         result = await search("mechanical keyboard recommendations")
         assert "Drill into a result URL" in result
         assert "403 to datacenter IPs" not in result
+
+
+# --- Ungrouped-OR warning (end-to-end through search) ---
+
+class TestUngroupedOrWarning:
+    """The query-construction warning fires whenever an ungrouped top-level OR
+    is present, independent of result count, and stays silent on grouped or
+    OR-free queries."""
+
+    @staticmethod
+    def _mock(items):
+        respx.post("https://kagi.com/api/v1/search").mock(
+            return_value=httpx.Response(
+                200,
+                json={"meta": {"trace": "t", "ms": 1, "node": "x"},
+                      "data": {"search": items}},
+            )
+        )
+
+    _RESULT = [{"url": "https://example.com/a", "title": "A", "snippet": "s"}]
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_ungrouped_or_emits_warning(self, _kagi_key):
+        self._mock(self._RESULT)
+        result = await search('app pricing "one-time" OR subscription')
+        assert "warning:" in result
+        assert "ungrouped top-level OR" in result
+        # Names the fix so the driver can self-correct.
+        assert "(a OR b)" in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_warning_fires_even_with_no_results(self, _kagi_key):
+        # The caveat is about query construction, not the result set — it must
+        # surface even when the misfire returns nothing.
+        self._mock([])
+        result = await search('app pricing "one-time" OR subscription')
+        assert "ungrouped top-level OR" in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_grouped_or_no_warning(self, _kagi_key):
+        self._mock(self._RESULT)
+        result = await search('app pricing ("one-time" OR subscription)')
+        assert "ungrouped top-level OR" not in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_lowercase_or_no_warning(self, _kagi_key):
+        self._mock(self._RESULT)
+        result = await search("app pricing one-time or subscription")
+        assert "ungrouped top-level OR" not in result
 
 
 # --- Per-profile description portability for resource pointers ---

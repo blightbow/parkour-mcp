@@ -382,6 +382,49 @@ def get_api_key() -> str:
 # v1 search
 # ---------------------------------------------------------------------------
 
+def _has_ungrouped_or(query: str) -> bool:
+    """Detect a boolean ``OR`` that sits at the top level, outside any group.
+
+    Kagi parses an uppercase ``OR`` as a boolean operator that binds looser
+    than the implicit AND between adjacent terms.  A bare ``a OR b`` therefore
+    fractures the *whole* query into alternatives, so a document matching only
+    the most common alternative qualifies on its own.  Grouping the
+    alternatives, ``(a OR b)``, keeps the surrounding terms mandatory.
+
+    Returns True when an ``OR`` token appears at parenthesis depth 0 and
+    outside any double-quoted phrase.  Lowercase ``or`` is a literal term to
+    Kagi (not an operator), so only uppercase ``OR`` is flagged; an ``OR``
+    inside a group or inside quotes is correctly scoped and not flagged.  The
+    scan never rewrites the query — operator precedence is the caller's to
+    fix, so this only powers an advisory ``warning`` (see
+    ``docs/frontmatter-standard.md`` Kagi table).
+    """
+    depth = 0
+    in_quote = False
+    i = 0
+    n = len(query)
+    while i < n:
+        c = query[i]
+        if c == '"':
+            in_quote = not in_quote
+        elif in_quote:
+            pass
+        elif c == "(":
+            depth += 1
+        elif c == ")":
+            depth = max(0, depth - 1)
+        elif (
+            depth == 0
+            and c == "O"
+            and query[i:i + 2] == "OR"
+            and (i == 0 or query[i - 1].isspace() or query[i - 1] == ")")
+            and (i + 2 == n or query[i + 2].isspace() or query[i + 2] == "(")
+        ):
+            return True
+        i += 1
+    return False
+
+
 def _format_result_line(item: dict) -> str:
     """Format a single v1 result item as ``[title](url) - snippet (time)``.
 
@@ -408,7 +451,9 @@ async def search(
             "type), intitle:term (match in page title), inurl:term "
             '(match in URL), "exact phrase" (exact match), '
             "+term / -term (require / exclude), (A AND B) / (A OR B) "
-            "(boolean grouping), * (wildcard word substitution)."
+            "(boolean grouping; OR binds looser than the implicit AND "
+            "between terms, so parenthesize OR alternatives or they "
+            "scope the whole query), * (wildcard word substitution)."
         ),
     )],
     limit: Annotated[int, Field(
@@ -657,6 +702,20 @@ async def search(
             "'images' results typically lack date metadata; after/"
             "before may not engage and the result set will be smaller "
             "or empty.",
+        )
+
+    # Query-construction caveat (independent of result count): a top-level OR
+    # binds looser than the implicit AND, silently widening scope.  We flag it,
+    # never rewrite it — the group boundary is the caller's intent to set.
+    if _has_ungrouped_or(query):
+        _append_frontmatter_entry(
+            fm_entries, "warning",
+            "Query contains an ungrouped top-level OR. Kagi binds OR looser "
+            "than the implicit AND between adjacent terms, so each "
+            "alternative scopes the whole query and a page matching just one "
+            "common alternative can qualify on its own. Parenthesize the "
+            "alternatives, e.g. (a OR b), so the surrounding terms stay "
+            "required.",
         )
 
     if results:
