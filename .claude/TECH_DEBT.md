@@ -35,23 +35,19 @@ The Reddit fast path was rebuilt on `oauth.reddit.com` userless tokens after Red
 
 ### `fetch_direct.py` — `_matched_meta` not accessed
 
-- **Location**: `_sections_response()`, line ~458
+- **Location**: `fetch_direct.py#_sections_response` (the `_matched_meta` destructured from `_filter_markdown_by_sections()`)
 - **Issue**: `_matched_meta` is destructured from the return of `_filter_markdown_by_sections()` but never used.
 - **Why deferred**: The variable captures section match metadata (ancestry paths, fragment matches) that may be useful in frontmatter enrichment later. Removing it would discard structured data we'll likely want when section responses gain richer diagnostics. Low-risk dead code in a display-only path.
 
 ## Performance bottlenecks to investigate
 
-### `html_to_markdown` on megapages — the dominant generic-HTTP latency
+### `html_to_markdown` on megapages — resolved by the htmd migration
 
-- **Location**: `parkour_mcp/markdown.py:82` (`html_to_markdown`) via `markdownify` + BeautifulSoup4
-- **Measured cost** (see `scripts/benchmark_baselines.json`):
-  - PEP 8 (48 KB markdown): ~88 ms
-  - ECMAScript spec (3 MB markdown): ~6,940 ms
-  - WHATWG HTML spec (6 MB markdown): **~17,200 ms**
+- **Status (2026-06)**: RESOLVED. `markdown.py#html_to_markdown` now converts via the Rust-backed `htmd` library (`htmd.convert_html`), replacing the markdownify + BeautifulSoup4 `TextOnlyConverter` that previously dominated generic-HTTP latency. `TextOnlyConverter` survives only on the MediaWiki path (`markdown.py#_mediawiki_html_to_markdown`).
+- **Effect**: the swap cut conversion cost by roughly 30x on small pages and 40x on megapage specs (the WHATWG HTML spec, formerly ~17,200 ms, is the worst case). `scripts/benchmark_baselines.json` now records the htmd baseline; the pre-migration markdownify figures (PEP 8 ~88 ms, ECMAScript ~6,940 ms, WHATWG ~17,200 ms) are kept here only as the historical reference the migration beat.
 - **Scope**: generic HTTP path only. Every fast path bypasses `html_to_markdown` entirely.
-- **Context**: An audit discovered `web_fetch_sections` wasn't populating `_page_cache`, so every `sections → direct` flow re-ran `html_to_markdown` — paying this cost twice. That gap is now closed (see `tests/test_perf.py` for regression coverage). But the underlying single-call cost remains the dominant latency for large-page generic-HTTP flows.
-- **Why deferred**: The cache fix removes the worst-case duplication. The remaining single-call cost is paid only once per page per session and is rare in practice (megapages are outliers). A remediation would be non-trivial: replace the BeautifulSoup-based `TextOnlyConverter` with a faster HTML parser (e.g. `selectolax`, `html5-parser`, or `lxml`) or cap the converter input size before parsing. Worth doing when a real regression or user report justifies the effort.
-- **Regression guard**: `tests/test_perf.py::test_html_to_markdown` asserts wall-clock stays within 2× of the captured baseline. Raises an alarm if a refactor accidentally pessimises the HTML→markdown step.
+- **Regression guard**: `tests/test_perf.py::test_html_to_markdown` asserts wall-clock stays within 2× of the captured (now htmd) baseline, so a refactor that accidentally pessimises the step still raises an alarm.
+- **Residual**: htmd is the floor for the generic path; the earlier remediation idea (swap the BS4 converter for `selectolax` / `lxml`) is moot. Further gains would need input-size capping or streaming, not currently justified.
 
 ## YouTube tool — deferred enhancements
 
@@ -95,7 +91,7 @@ The Reddit fast path was rebuilt on `oauth.reddit.com` userless tokens after Red
 
 - **Location**: `parkour_mcp/common.py#_classify_content_type` (whitelist), with the rejection emitted in `parkour_mcp/fetch_direct.py#web_fetch_direct` when the classifier returns `None`.
 - **Issue**: The classifier whitelists `text/html`, `application/json`, `application/xml`, and `text/plain`. Markdown (`text/markdown`) and YAML (`application/yaml`, `text/yaml`) return `None`, producing `Error: Unsupported content type '...'`. Both are machine-readable text formats, and the existing non-HTML branch in `web_fetch_direct` already renders raw text with frontmatter, so the data path could carry them trivially. Concrete affected target: Kagi's v1 API spec is served as `text/markdown` (`.md` flat pages) and `application/yaml` (bundle download); see the `kagi.py` bullet in `CLAUDE.md` for URLs. Sessions that need the source-of-truth Kagi spec currently have to shell out to `curl`.
-- **Why deferred**: Out of scope for the documentation-first turn that surfaced it. The fix is small (two added branches in `_classify_content_type` returning new classifier labels), and `_SOURCE_EXT_MAP` in `common.py` already maps `.md` to `markdown` and `.yaml`/`.yml` to `yaml`, so the syntax-tag plumbing is in place.
+- **Why deferred**: Out of scope for the documentation-first turn that surfaced it. The fix is small (two added branches in `_classify_content_type` returning new classifier labels), and `common.py#_LANGUAGE_MAP` already maps `.md` to `markdown` and `.yaml`/`.yml` to `yaml`, so the syntax-tag plumbing is in place.
 - **Mitigation**: Fetch via `curl` until the classifier is extended.
 
 ## `kagi.py` — v0 dormant island
@@ -111,7 +107,7 @@ The Reddit fast path was rebuilt on `oauth.reddit.com` userless tokens after Red
 
 ### `<header>` stripped from all pages — loses real h1s on spec docs
 
-- **Location**: `parkour_mcp/markdown.py:44` (`_NOISE_TAGS`) → `_HTMD_SKIP_TAGS` at line 154, passed to htmd's `skip_tags` option.
+- **Location**: `markdown.py#_NOISE_TAGS` → `markdown.py#_HTMD_SKIP_TAGS`, passed to htmd's `skip_tags` option.
 - **Issue**: `<header>` is decomposed on every page as site chrome. Spec documents (WHATWG HTML Living Standard and likely others) use `<header>` semantically for the document's primary h1 and metadata block, so the real title and subtitle are discarded along with the site-chrome content the strip targets on typical pages.
 - **Why deferred**: `<header>` is correctly site-chrome for ~99% of the open web; leaking nav/branding h1s into body output would be a worse default. Fixing the spec-doc case structurally needs either (a) context-sensitive stripping (strip `<header>` at nav depth but not at document root) or (b) a per-site escape hatch. Both are significantly more involved than the affected-page count justifies.
 - **Mitigation**: The title ladder falls through to `<title>` / `og:title` via `_extract_head_title` when no h1 survives outside fenced code (see `TestHtmlTitleExtraction`). For WHATWG this yields `"HTML Standard"` from `<title>`. The in-body visual subtitle ("Living Standard — Last Updated…") is still lost but has low information value.

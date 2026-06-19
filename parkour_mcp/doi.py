@@ -28,8 +28,8 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Rate limiters
 # ---------------------------------------------------------------------------
-# doi.org: CrossRef polite pool 10 req/s with mailto, 5 req/s without.
-# DataCite via doi.org: 1,000/5min (~3.3/s). Conservative default: 5/sec.
+# doi.org resolver throttle (content negotiation), shared across agencies.
+# DataCite via doi.org allows ~3.3/s (1,000/5min); 5/s is conservative.
 _doi_limiter = RateLimiter(0.2)
 
 
@@ -155,7 +155,7 @@ async def fetch_datacite_metadata(
 # ---------------------------------------------------------------------------
 # CrossRef REST API (retraction + adjacent enrichment)
 # ---------------------------------------------------------------------------
-# CrossRef polite pool: 10 req/s with mailto, 5 req/s without.
+# api.crossref.org throttle: a flat 5/s.
 _crossref_limiter = RateLimiter(0.2)
 
 # DOI format guard: "10." followed by registrant + "/" + suffix.  Applied
@@ -374,6 +374,8 @@ async def fetch_crossref_metadata(
     """
     await _crossref_limiter.wait()
     params: dict[str, str] = {}
+    # mailto as a query param; CrossRef also reads it from the UA. See the
+    # polite-pool note in common.py.
     contact = clean_env("MCP_CONTACT_EMAIL")
     if contact:
         params["mailto"] = contact

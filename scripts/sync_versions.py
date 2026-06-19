@@ -1,8 +1,8 @@
 """Sync version across pyproject.toml, manifest.json, and server.json.
 
 `pyproject.toml:project.version` is the single source of truth (PEP 440).
-python-semantic-release writes it directly during a release bump; this
-script mirrors the value out to the sibling files that track it.
+commitizen writes it during a release bump (`cz bump`); this script mirrors
+the value out to the sibling files that track it.
 
 `manifest.json` is consumed by Claude Desktop, which rejects PEP 440
 pre-release forms like `1.2.0rc1`. The PEP 440 string is translated to

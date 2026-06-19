@@ -1,8 +1,8 @@
 """YouTube integration via yt-dlp (metadata) and youtube-transcript-api (captions).
 
-Currently implements the ``video`` and ``transcript`` actions. Channel,
-playlist, and search actions land in later commits per the implementation
-sequencing in the design discussion.
+Implements the ``video``, ``transcript``, ``channel``, ``playlist``, and
+``search`` actions on the main tool; comment fetching lives in the sibling
+``youtube_comments`` tool.
 
 URL detection covers ``youtube.com/watch``, ``youtu.be``, ``shorts``, ``clip``,
 ``@handle``, ``/channel/UC...``, ``/c/`` , ``/user/``, and ``/playlist``.
