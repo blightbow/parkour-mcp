@@ -148,6 +148,18 @@ def app_config_dir(app: str) -> Path:
     return config_home() / app
 
 
+def ensure_dir(path: Path, *, mode: int = 0o700) -> Path:
+    """Create *path* (and any missing parents) if absent; return it.
+
+    Mirrors etcetera/platformdirs' ``ensure_exists``.  ``mode`` applies only
+    to a newly-created leaf directory (default ``0o700`` because the config
+    dir holds API keys); intermediate parents take the process umask, and an
+    existing directory is left untouched.
+    """
+    path.mkdir(mode=mode, parents=True, exist_ok=True)
+    return path
+
+
 # Base directory for filesystem-config fallbacks (API keys, opt-in gates).
 _CONFIG_DIR = app_config_dir("parkour")
 

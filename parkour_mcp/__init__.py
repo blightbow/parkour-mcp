@@ -157,7 +157,8 @@ PROFILE_VARS = {
         "kagi_resource_pointer": (
             "For per-lens purpose descriptions and activation status, see "
             "the kagi://lenses resource. For the full region code list, see "
-            "the kagi://regions resource."
+            "the kagi://regions resource. For locally defined query presets "
+            "(the preset= argument), see the kagi://presets resource."
         ),
     },
     "desktop": {
@@ -231,6 +232,9 @@ page=, filter by region= / after= / before=. The query string supports
 site: / filetype: / intitle: / inurl: filters, "exact phrases", +/- terms,
 boolean (A AND B) / (A OR B) grouping, and * wildcards — full operator
 syntax is on the query parameter.
+
+Apply a saved local bundle of operators and filters with preset=, an
+unbounded-site-list alternative to lens_id.
 
 {kagi_resource_pointer}""",
 
@@ -666,7 +670,22 @@ def main():
         default="desktop",
         help="Target client profile (default: desktop)",
     )
+    parser.add_argument(
+        "--init",
+        action="store_true",
+        help=(
+            "Create the config dir and seed a starter kagi_presets.yaml "
+            "(never overwrites an existing one), then exit."
+        ),
+    )
     args = parser.parse_args()
+
+    if args.init:
+        from .kagi import seed_presets_file  # noqa: PLC0415  # lazy: only needed for --init
+        # --init is a one-shot CLI mode that returns before the MCP stdio
+        # loop, so stdout is free for a user-facing status line.
+        print(seed_presets_file())  # noqa: T201
+        return
 
     init_tool_names(args.profile)
 
@@ -732,6 +751,18 @@ def main():
         """Built-in Kagi lens catalog for the kagi_search lens_id parameter."""
         from .kagi import kagi_lenses_markdown  # noqa: PLC0415  # lazy intra-package import inside resource handler
         return kagi_lenses_markdown()
+
+    # MCP resource: the user's local query presets for kagi_search.preset.
+    # Dynamic — reads the kagi_presets.yaml registry at call time, unlike the
+    # static lens/region snapshots above.
+    @mcp.resource(
+        "kagi://presets",
+        annotations=Annotations(audience=["assistant"]),
+    )
+    async def kagi_presets_resource() -> str:
+        """User-defined Kagi query presets for the kagi_search preset parameter."""
+        from .kagi import kagi_presets_markdown  # noqa: PLC0415  # lazy intra-package import inside resource handler
+        return kagi_presets_markdown()
 
     mcp.run(transport="stdio")
 

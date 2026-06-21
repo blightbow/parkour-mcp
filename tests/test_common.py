@@ -1,6 +1,7 @@
 """Tests for parkour_mcp.common module."""
 
 import socket
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
@@ -13,6 +14,7 @@ from parkour_mcp.common import (
     app_config_dir,
     check_url_ssrf,
     config_home,
+    ensure_dir,
     guarded_fetch,
     load_credential,
     _is_private_ip,
@@ -265,3 +267,23 @@ class TestConfigDir:
     def test_windows_falls_back_without_appdata(self, _clean_env):
         _clean_env.setattr(common.platform, "system", lambda: "Windows")
         assert config_home() == Path.home() / "AppData" / "Roaming"
+
+
+class TestEnsureDir:
+    def test_creates_dir_and_parents(self, tmp_path):
+        target = tmp_path / "a" / "b" / "parkour"
+        assert not target.exists()
+        assert ensure_dir(target) == target
+        assert target.is_dir()
+
+    def test_idempotent(self, tmp_path):
+        target = tmp_path / "parkour"
+        ensure_dir(target)
+        ensure_dir(target)  # must not raise on an existing dir
+        assert target.is_dir()
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX mode bits")
+    def test_leaf_created_0700(self, tmp_path):
+        target = tmp_path / "secure"
+        ensure_dir(target)
+        assert (target.stat().st_mode & 0o777) == 0o700

@@ -58,6 +58,32 @@ def test_main_reaches_run_without_error(monkeypatch):
     assert called["yes"] is True
 
 
+def test_init_flag_seeds_and_exits(monkeypatch, tmp_path, capsys):
+    """``--init`` seeds the presets file and returns before the stdio server.
+
+    It must write the starter file and never reach ``mcp.run`` (which would
+    block on the protocol loop).
+    """
+    import parkour_mcp.kagi as kagi_mod
+
+    target = tmp_path / "parkour" / "kagi_presets.yaml"
+    monkeypatch.setattr(kagi_mod, "PRESETS_PATH", target)
+    monkeypatch.setattr("sys.argv", ["parkour-mcp", "--init"])
+    ran = {"server": False}
+
+    def fake_run(*args, **kwargs):
+        del args, kwargs
+        ran["server"] = True
+
+    monkeypatch.setattr(parkour_mcp.mcp, "run", fake_run)
+
+    parkour_mcp.main()
+
+    assert "Wrote a starter" in capsys.readouterr().out
+    assert target.exists()
+    assert ran["server"] is False  # --init must not start the server
+
+
 def test_no_tool_emits_an_output_schema(monkeypatch):
     """Every tool must register with structured output suppressed.
 

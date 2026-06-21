@@ -9,13 +9,15 @@ load-bearing for that second tool and retire when the migration completes.
 
 import json
 import logging
+import sys
 from typing import Annotated, Any, Literal
 
 import httpx
+import yaml
 from kagiapi import KagiClient
 from pydantic import Field
 
-from .common import _API_USER_AGENT, _CONFIG_DIR, load_credential, tool_name
+from .common import _API_USER_AGENT, _CONFIG_DIR, ensure_dir, load_credential, tool_name
 from .detection import is_reddit_url
 from .markdown import (
     FMEntries,
@@ -218,6 +220,182 @@ def kagi_regions_markdown() -> str:
         "|------|--------|\n"
         f"{rows}\n"
     )
+
+
+# ---------------------------------------------------------------------------
+# Query presets (user-defined local "lenses")
+# ---------------------------------------------------------------------------
+# A preset is a reusable bundle of query operators (a `fragment`, typically a
+# site allow-list) plus structured filters, stored locally and applied with
+# the `preset` argument.  Unlike a Kagi lens (server-side, capped at 10 sites)
+# a fragment's `site:` list is unbounded.  The registry is a single YAML file
+# mapping slug -> preset; see docs/kagi-query-presets.md.
+
+PRESETS_PATH = _CONFIG_DIR / "kagi_presets.yaml"
+
+# Starter registry written by `parkour-mcp --init` and shown by the
+# kagi://presets resource when none are defined.  Entirely commented, so it
+# parses to an empty registry (no active presets) until the user uncomments.
+_PRESETS_TEMPLATE = """\
+# Kagi query presets for parkour.
+#
+# Each top-level key is a preset slug you pass to the search tool's `preset`
+# argument.  A preset bundles a query-operator `fragment` (typically a site:
+# allow-list, unbounded unlike a Kagi lens's 10-site cap) with optional
+# structured filters: region, after, before, lens_id, workflow.
+#
+# The fragment is prefixed to your query; a top-level OR is auto-grouped so it
+# binds tighter than your terms.  Filters fill gaps you do not pass explicitly;
+# an explicit argument always wins.  Uncomment an example or add your own.
+#
+# rust-blogs:
+#   name: Rust ecosystem blogs
+#   fragment: 'site:without.boats OR site:fasterthanli.me OR site:matklad.github.io'
+#   region: us
+#   after: '2024-01-01'
+#
+# infosec-news:
+#   fragment: 'site:krebsonsecurity.com OR site:schneier.com OR site:bleepingcomputer.com'
+"""
+
+# Fields a preset may declare.  `fragment` is the raw query-operator block;
+# the rest mirror search()'s structured filters and obey the same validation.
+_PRESET_FIELDS = frozenset(
+    {"name", "fragment", "region", "after", "before", "lens_id", "workflow"}
+)
+
+
+class PresetError(Exception):
+    """A preset registry could not be loaded or failed validation.
+
+    The message is user-facing: callers surface it verbatim as an
+    ``Error: ...`` string rather than letting the exception propagate.
+    """
+
+
+def _load_presets() -> dict[str, dict]:
+    """Load and validate the preset registry, returning ``{slug: preset}``.
+
+    Returns an empty dict when the file is absent.  Raises `PresetError` with
+    a user-facing message on malformed YAML, a non-mapping document, an
+    unknown field (catches typos like ``regon:``), or a region/workflow value
+    that search() would itself reject.  Dates are left for Kagi to validate,
+    matching how explicit ``after``/``before`` already flow.
+    """
+    if not PRESETS_PATH.exists():
+        return {}
+    try:
+        raw = yaml.safe_load(PRESETS_PATH.read_text()) or {}
+    except yaml.YAMLError as e:
+        raise PresetError(f"could not parse {PRESETS_PATH}: {e}") from e
+    if not isinstance(raw, dict):
+        raise PresetError(
+            f"{PRESETS_PATH} must map preset slugs to preset definitions."
+        )
+    presets: dict[str, dict] = {}
+    for slug, body in raw.items():
+        if not isinstance(body, dict):
+            raise PresetError(
+                f"preset {slug!r} must be a mapping of fields, "
+                f"got {type(body).__name__}."
+            )
+        unknown = set(body) - _PRESET_FIELDS
+        if unknown:
+            raise PresetError(
+                f"preset {slug!r} has unknown field(s): "
+                f"{', '.join(sorted(unknown))}. Valid fields: "
+                f"{', '.join(sorted(_PRESET_FIELDS))}."
+            )
+        region = body.get("region")
+        if region is not None and region not in _REGION_CODES:
+            raise PresetError(
+                f"preset {slug!r} sets an invalid region {region!r}; "
+                "see the kagi://regions resource for valid codes."
+            )
+        workflow = body.get("workflow")
+        if workflow is not None and workflow not in _VALID_WORKFLOWS:
+            raise PresetError(
+                f"preset {slug!r} sets an invalid workflow {workflow!r}. "
+                f"Must be one of: {', '.join(sorted(_VALID_WORKFLOWS))}."
+            )
+        presets[slug] = body
+    return presets
+
+
+def seed_presets_file() -> str:
+    """Create the config dir and write a starter ``kagi_presets.yaml`` if absent.
+
+    Never clobbers an existing registry.  Returns a one-line, user-facing
+    status string for ``parkour-mcp --init`` to print.
+    """
+    if PRESETS_PATH.exists():
+        return f"kagi_presets.yaml already present at {PRESETS_PATH}; left unchanged."
+    ensure_dir(PRESETS_PATH.parent)
+    PRESETS_PATH.write_text(_PRESETS_TEMPLATE)
+    return f"Wrote a starter kagi_presets.yaml to {PRESETS_PATH}."
+
+
+def kagi_presets_markdown() -> str:
+    """Render the user's local query presets for the kagi://presets resource."""
+    header = "# Kagi query presets\n\n"
+    try:
+        presets = _load_presets()
+    except PresetError as e:
+        return (
+            f"{header}The preset registry at `{PRESETS_PATH}` could not be "
+            f"loaded:\n\n> {e}\n"
+        )
+    if not presets:
+        if PRESETS_PATH.exists():
+            intro = (
+                f"The registry at `{PRESETS_PATH}` defines no active presets "
+                "(it may be entirely commented). Uncomment an example or add "
+                "your own, following the template below."
+            )
+        else:
+            intro = (
+                "No query presets are defined, and no registry exists yet. To "
+                f"write the starter file to `{PRESETS_PATH}` (it never "
+                "overwrites an existing one), run this in a terminal:\n\n"
+                "```sh\n"
+                f'"{sys.executable}" -m parkour_mcp --init\n'
+                "```\n\n"
+                "That points at this server's own interpreter, so it works on "
+                "both CLI and Claude Desktop bundle installs; `parkour-mcp "
+                "--init` is the short form when the console script is on your "
+                "PATH. You can also create the file by hand from the template "
+                "below."
+            )
+        return (
+            f"{header}{intro}\n\n"
+            "A preset is similar to a Kagi lens but local, and its `site:` "
+            "allow-list is unbounded (a lens caps at 10 sites). The fragment "
+            "is prefixed to your query (a top-level `OR` is auto-grouped so it "
+            "binds tighter than your terms); the filters fill in any you do "
+            "not pass explicitly, and an explicit argument always wins.\n\n"
+            "## Starter `kagi_presets.yaml`\n\n"
+            "```yaml\n"
+            f"{_PRESETS_TEMPLATE}```\n"
+        )
+    parts = [
+        header,
+        f"Local presets from `{PRESETS_PATH}`. Apply one with the `preset` "
+        "argument on the search tool. The `fragment` is grouped and prefixed "
+        "to your query; the filters fill gaps you do not pass explicitly (an "
+        "explicit argument wins).\n",
+    ]
+    for slug in sorted(presets):
+        p = presets[slug]
+        label = p.get("name")
+        parts.append(f"## `{slug}`" + (f" — {label}" if label else ""))
+        frag = p.get("fragment")
+        if frag:
+            parts.append(f"- fragment: `{frag}`")
+        for field in ("region", "after", "before", "lens_id", "workflow"):
+            if p.get(field) is not None:
+                parts.append(f"- {field}: `{p[field]}`")
+        parts.append("")
+    return "\n".join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -424,6 +602,82 @@ def _has_ungrouped_or(query: str) -> bool:
     return False
 
 
+def _group_fragment(fragment: str) -> str:
+    """Parenthesize a preset fragment when it carries a top-level ``OR``.
+
+    A bare ``site:a OR site:b`` would, once prefixed to the caller's query,
+    fracture the whole search (``OR`` binds looser than the implicit AND).
+    Wrapping keeps the alternatives scoped to the fragment.  Reuses the same
+    depth scanner that powers the ungrouped-OR warning, so a fragment that is
+    already grouped (or carries no top-level ``OR``) is returned unchanged.
+    """
+    fragment = fragment.strip()
+    if fragment and _has_ungrouped_or(fragment):
+        return f"({fragment})"
+    return fragment
+
+
+def _assemble_preset_query(fragment: str, user_query: str) -> str:
+    """Prefix a grouped preset *fragment* onto the caller's *user_query*."""
+    fragment = _group_fragment(fragment)
+    user_query = user_query.strip()
+    if not fragment:
+        return user_query
+    if not user_query:
+        return fragment
+    return f"{fragment} {user_query}"
+
+
+# Structured filter fields a preset can contribute (everything but the
+# query-string `fragment`, which is assembled separately).
+_PRESET_FILTER_FIELDS = ("workflow", "lens_id", "region", "after", "before")
+
+
+def _merge_preset_filters(
+    preset: dict, explicit: dict
+) -> tuple[dict, list[str]]:
+    """Merge preset filters under caller filters: an explicit value wins.
+
+    Returns the effective ``{field: value}`` mapping plus the list of fields
+    where a preset value was overridden by a differing explicit argument (for
+    a transparency warning).  ``explicit`` maps each filter field to the
+    caller's argument (``None`` when unset).
+    """
+    effective: dict = {}
+    overridden: list[str] = []
+    for field in _PRESET_FILTER_FIELDS:
+        caller = explicit.get(field)
+        preset_val = preset.get(field)
+        if caller is not None:
+            effective[field] = caller
+            if preset_val is not None and preset_val != caller:
+                overridden.append(field)
+        else:
+            effective[field] = preset_val
+    return effective, overridden
+
+
+def _preset_note(slug: str, preset: dict) -> str:
+    """One-line summary of an applied preset for the response frontmatter."""
+    bits: list[str] = []
+    frag = preset.get("fragment")
+    if frag:
+        n_sites = frag.lower().count("site:")
+        bits.append(
+            f"grouped {n_sites} site filter(s)" if n_sites else "query operators"
+        )
+    pinned = [
+        f"{field}={preset[field]!r}"
+        for field in _PRESET_FILTER_FIELDS
+        if preset.get(field) is not None
+    ]
+    if pinned:
+        bits.append("pinned " + ", ".join(pinned))
+    label = preset.get("name")
+    head = f"applied preset {slug!r}" + (f" ({label})" if label else "")
+    return head + (": " + "; ".join(bits) if bits else "")
+
+
 def _format_result_line(item: dict) -> str:
     """Format a single v1 result item as ``[title](url) - snippet (time)``.
 
@@ -467,6 +721,20 @@ async def search(
         ge=1, le=1024,
     )] = 5,
     *,
+    preset: Annotated[str | None, Field(
+        description=(
+            "Name of a local query preset from kagi_presets.yaml in the "
+            "parkour config dir. A preset bundles a query-operator "
+            "'fragment' (typically an unbounded site: allow-list, unlike a "
+            "Kagi lens's 10-site cap) with structured filters. The fragment "
+            "is grouped and prefixed to 'query' (a top-level OR is auto-"
+            "parenthesized so it binds tighter than your terms); the "
+            "preset's filters fill in any region/after/before/lens_id/"
+            "workflow you do not pass explicitly, and an explicit argument "
+            "always overrides the preset. An unknown name returns an error "
+            "listing the defined presets (no silent fallback)."
+        ),
+    )] = None,
     workflow: Annotated[_WorkflowType | None, Field(
         description=(
             "Result category. Omit for 'search' (web results with "
@@ -571,6 +839,42 @@ async def search(
     if not api_key:
         return _NO_KEY_MSG
 
+    original_query = query  # preserved for the frontmatter `source` line
+    applied_preset: dict | None = None
+    overridden_by_caller: list[str] = []
+    if preset is not None:
+        try:
+            presets = _load_presets()
+        except PresetError as e:
+            return f"Error: {e}"
+        if preset not in presets:
+            if presets:
+                return (
+                    f"Error: preset {preset!r} not found. Available presets: "
+                    f"{', '.join(sorted(presets))}."
+                )
+            return (
+                f"Error: preset {preset!r} not found; no presets are defined. "
+                f"Create {PRESETS_PATH} to define query presets."
+            )
+        applied_preset = presets[preset]
+        query = _assemble_preset_query(applied_preset.get("fragment") or "", query)
+        effective, overridden_by_caller = _merge_preset_filters(
+            applied_preset,
+            {
+                "workflow": workflow,
+                "lens_id": lens_id,
+                "region": region,
+                "after": after,
+                "before": before,
+            },
+        )
+        workflow = effective["workflow"]
+        lens_id = effective["lens_id"]
+        region = effective["region"]
+        after = effective["after"]
+        before = effective["before"]
+
     if workflow is not None and workflow not in _VALID_WORKFLOWS:
         return (
             f"Error: Invalid workflow {workflow!r}. "
@@ -660,10 +964,34 @@ async def search(
 
     content = "\n".join(output_parts)
 
+    if applied_preset is not None:
+        source = f"kagi {workflow or 'search'} (preset {preset!r}): {original_query}"
+    else:
+        source = f"kagi {workflow or 'search'}: {original_query}"
     fm_entries = FMEntries({
-        "source": f"kagi {workflow or 'search'}: {query}",
+        "source": source,
         "trust": _TRUST_ADVISORY,
     })
+
+    if applied_preset is not None:
+        assert preset is not None  # applied_preset is set only when preset is
+        _append_frontmatter_entry(
+            fm_entries, "note", _preset_note(preset, applied_preset)
+        )
+        if overridden_by_caller:
+            _append_frontmatter_entry(
+                fm_entries, "warning",
+                "preset values overridden by explicit arguments: "
+                f"{', '.join(overridden_by_caller)}.",
+            )
+        frag = applied_preset.get("fragment") or ""
+        if "site:" in frag.lower() and lens_id is not None:
+            _append_frontmatter_entry(
+                fm_entries, "warning",
+                f"preset fragment carries site: filters while lens_id={lens_id!r} "
+                "is active; the lens and site: scope intersect (AND) and may "
+                "return empty. Drop one if results vanish.",
+            )
 
     if lens_id is not None and workflow is not None and workflow != "search":
         _append_frontmatter_entry(

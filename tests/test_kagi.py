@@ -1,6 +1,7 @@
 """Tests for parkour_mcp.kagi — v1 search, v0 summarize island, error parsers."""
 
 import json
+import sys
 from unittest.mock import patch, MagicMock
 
 import httpx
@@ -10,12 +11,19 @@ import respx
 
 import parkour_mcp.kagi as kagi_mod
 from parkour_mcp.kagi import (
+    PresetError,
+    _assemble_preset_query,
     _check_balance,
     _extract_balance,
+    _group_fragment,
     _handle_v0_error,
     _handle_v1_error,
     _has_ungrouped_or,
+    _load_presets,
+    _merge_preset_filters,
+    kagi_presets_markdown,
     search,
+    seed_presets_file,
     summarize,
 )
 
@@ -531,6 +539,7 @@ class TestSearchDescriptionPerProfile:
         desc = _build_description("search", "code")
         assert "kagi://lenses" in desc
         assert "kagi://regions" in desc
+        assert "kagi://presets" in desc
         # No trailing whitespace — rstrip() in _build_description guards this.
         assert desc == desc.rstrip()
 
@@ -1105,3 +1114,293 @@ class TestSearchV1Args:
 
         sent = json.loads(route.calls.last.request.content)
         assert sent["filters"] == {"after": "2025-01-01"}
+
+
+# --- Query presets ---------------------------------------------------------
+
+_VALID_REGISTRY = """\
+rust-blogs:
+  name: Rust ecosystem blogs
+  fragment: 'site:without.boats OR site:fasterthanli.me'
+  region: us
+  after: '2024-01-01'
+"""
+
+
+@pytest.fixture
+def presets_file(monkeypatch, tmp_path):
+    """Point PRESETS_PATH at a tmp registry; return the (unwritten) path."""
+    path = tmp_path / "kagi_presets.yaml"
+    monkeypatch.setattr(kagi_mod, "PRESETS_PATH", path)
+    return path
+
+
+def _mock_search(items=None):
+    """Mock the v1 search endpoint (call inside an @respx.mock context)."""
+    respx.post("https://kagi.com/api/v1/search").mock(
+        return_value=httpx.Response(
+            200,
+            json={"meta": {"trace": "t", "ms": 1, "node": "x"},
+                  "data": {"search": items or []}},
+        )
+    )
+
+
+class TestPresetLoading:
+    def test_absent_file_returns_empty(self, presets_file):
+        assert not presets_file.exists()
+        assert _load_presets() == {}
+
+    def test_loads_valid_registry(self, presets_file):
+        presets_file.write_text(_VALID_REGISTRY)
+        presets = _load_presets()
+        assert set(presets) == {"rust-blogs"}
+        assert presets["rust-blogs"]["region"] == "us"
+
+    def test_malformed_yaml_raises(self, presets_file):
+        presets_file.write_text("rust-blogs: [unclosed")
+        with pytest.raises(PresetError, match="could not parse"):
+            _load_presets()
+
+    def test_non_mapping_document_raises(self, presets_file):
+        presets_file.write_text("- a\n- b\n")
+        with pytest.raises(PresetError, match="must map preset slugs"):
+            _load_presets()
+
+    def test_non_mapping_body_raises(self, presets_file):
+        presets_file.write_text("rust-blogs: just-a-string\n")
+        with pytest.raises(PresetError, match="must be a mapping of fields"):
+            _load_presets()
+
+    def test_unknown_field_raises(self, presets_file):
+        # A typo'd field is rejected, named, rather than silently ignored.
+        presets_file.write_text("x:\n  regon: us\n")
+        with pytest.raises(PresetError, match="unknown field.*regon"):
+            _load_presets()
+
+    def test_invalid_region_raises(self, presets_file):
+        presets_file.write_text("x:\n  region: ZZ\n")
+        with pytest.raises(PresetError, match="invalid region 'ZZ'"):
+            _load_presets()
+
+    def test_invalid_workflow_raises(self, presets_file):
+        presets_file.write_text("x:\n  workflow: blogs\n")
+        with pytest.raises(PresetError, match="invalid workflow 'blogs'"):
+            _load_presets()
+
+    def test_valid_region_and_workflow_accepted(self, presets_file):
+        presets_file.write_text("x:\n  region: us\n  workflow: news\n")
+        presets = _load_presets()
+        assert presets["x"] == {"region": "us", "workflow": "news"}
+
+
+class TestPresetAssembly:
+    def test_groups_top_level_or(self):
+        assert _group_fragment("site:a OR site:b") == "(site:a OR site:b)"
+
+    def test_leaves_already_grouped(self):
+        # The OR sits at depth 1, so no second wrap.
+        assert _group_fragment("(site:a OR site:b)") == "(site:a OR site:b)"
+
+    def test_leaves_non_or_fragment(self):
+        assert _group_fragment("site:a filetype:pdf") == "site:a filetype:pdf"
+
+    def test_empty_fragment(self):
+        assert _group_fragment("") == ""
+        assert _group_fragment("   ") == ""
+
+    def test_assemble_prefixes_grouped_fragment(self):
+        assert (
+            _assemble_preset_query("site:a OR site:b", "rust async")
+            == "(site:a OR site:b) rust async"
+        )
+
+    def test_assemble_empty_fragment_returns_query(self):
+        assert _assemble_preset_query("", "rust") == "rust"
+
+    def test_assemble_empty_query_returns_fragment(self):
+        assert _assemble_preset_query("site:a", "") == "site:a"
+
+
+class TestMergePresetFilters:
+    def test_explicit_overrides_preset(self):
+        eff, overridden = _merge_preset_filters(
+            {"region": "us"},
+            {"region": "de", "workflow": None, "lens_id": None,
+             "after": None, "before": None},
+        )
+        assert eff["region"] == "de"
+        assert overridden == ["region"]
+
+    def test_preset_fills_gap(self):
+        eff, overridden = _merge_preset_filters(
+            {"region": "us"},
+            {"region": None, "workflow": None, "lens_id": None,
+             "after": None, "before": None},
+        )
+        assert eff["region"] == "us"
+        assert overridden == []
+
+    def test_equal_values_not_counted_as_override(self):
+        eff, overridden = _merge_preset_filters(
+            {"region": "us"},
+            {"region": "us", "workflow": None, "lens_id": None,
+             "after": None, "before": None},
+        )
+        assert eff["region"] == "us"
+        assert overridden == []
+
+
+class TestSearchWithPreset:
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_applies_fragment_and_filters(self, _kagi_key, presets_file):
+        presets_file.write_text(_VALID_REGISTRY)
+        route = respx.post("https://kagi.com/api/v1/search").mock(
+            return_value=httpx.Response(
+                200,
+                json={"meta": {"trace": "t", "ms": 1, "node": "x"},
+                      "data": {"search": []}},
+            )
+        )
+
+        result = await search("async runtime", preset="rust-blogs")
+
+        sent = json.loads(route.calls.last.request.content)
+        assert sent["query"] == (
+            "(site:without.boats OR site:fasterthanli.me) async runtime"
+        )
+        assert sent["filters"] == {"region": "us", "after": "2024-01-01"}
+        assert "applied preset 'rust-blogs'" in result
+        assert "grouped 2 site filter(s)" in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_preset_or_is_grouped_no_warning(self, _kagi_key, presets_file):
+        presets_file.write_text(_VALID_REGISTRY)
+        _mock_search()
+        result = await search("async runtime", preset="rust-blogs")
+        # The preset's OR is parenthesized by assembly, so it must not trip
+        # the ungrouped-OR warning.
+        assert "ungrouped top-level OR" not in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_user_bare_or_still_warns_under_preset(self, _kagi_key, presets_file):
+        presets_file.write_text(_VALID_REGISTRY)
+        _mock_search()
+        # The caller's own bare OR is still at depth 0 after assembly.
+        result = await search("rust OR zig", preset="rust-blogs")
+        assert "ungrouped top-level OR" in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_explicit_arg_overrides_preset(self, _kagi_key, presets_file):
+        presets_file.write_text(_VALID_REGISTRY)
+        route = respx.post("https://kagi.com/api/v1/search").mock(
+            return_value=httpx.Response(
+                200,
+                json={"meta": {"trace": "t", "ms": 1, "node": "x"},
+                      "data": {"search": []}},
+            )
+        )
+
+        result = await search("q", preset="rust-blogs", region="de")
+
+        sent = json.loads(route.calls.last.request.content)
+        assert sent["filters"]["region"] == "de"
+        assert "overridden by explicit arguments: region" in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_unknown_preset_lists_available(self, _kagi_key, presets_file):
+        presets_file.write_text(_VALID_REGISTRY)
+        _mock_search()
+        result = await search("q", preset="nope")
+        assert "preset 'nope' not found" in result
+        assert "rust-blogs" in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_unknown_preset_no_registry(self, _kagi_key, presets_file):
+        # File absent: the error states none are defined, not a slug list.
+        assert not presets_file.exists()
+        _mock_search()
+        result = await search("q", preset="nope")
+        assert "no presets are defined" in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_malformed_registry_surfaces_error(self, _kagi_key, presets_file):
+        presets_file.write_text("rust-blogs: [unclosed")
+        _mock_search()
+        result = await search("q", preset="rust-blogs")
+        assert "could not parse" in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_lens_site_conflict_warns(self, _kagi_key, presets_file):
+        presets_file.write_text(_VALID_REGISTRY)
+        _mock_search()
+        result = await search("q", preset="rust-blogs", lens_id="academic")
+        assert "lens and site: scope intersect" in result
+
+
+class TestPresetsResource:
+    def test_absent_renders_starter_and_init_hint(self, presets_file):
+        # File absent: stub names the path, shows the exact reachable seed
+        # command (this interpreter), mentions the short form, shows template.
+        assert not presets_file.exists()
+        md = kagi_presets_markdown()
+        assert "No query presets are defined" in md
+        assert f'"{sys.executable}" -m parkour_mcp --init' in md
+        assert "parkour-mcp --init" in md  # short form mentioned too
+        assert str(presets_file) in md
+        assert "## Starter" in md
+
+    def test_present_but_empty_says_uncomment(self, presets_file):
+        # File exists but defines nothing (entirely commented).
+        presets_file.write_text("# all comments, no active presets\n")
+        md = kagi_presets_markdown()
+        assert "no active presets" in md
+        assert "## Starter" in md
+
+    def test_renders_defined_presets(self, presets_file):
+        presets_file.write_text(_VALID_REGISTRY)
+        md = kagi_presets_markdown()
+        assert "`rust-blogs`" in md
+        assert "Rust ecosystem blogs" in md
+        assert "site:without.boats" in md
+        assert "region" in md and "us" in md
+
+    def test_malformed_renders_error(self, presets_file):
+        presets_file.write_text("rust-blogs: [unclosed")
+        md = kagi_presets_markdown()
+        assert "could not be loaded" in md
+        assert "could not parse" in md
+
+
+class TestSeedPresetsFile:
+    @pytest.fixture
+    def seed_target(self, monkeypatch, tmp_path):
+        # Parent dir intentionally absent to exercise directory creation.
+        path = tmp_path / "parkour" / "kagi_presets.yaml"
+        monkeypatch.setattr(kagi_mod, "PRESETS_PATH", path)
+        return path
+
+    def test_seeds_when_absent(self, seed_target):
+        assert not seed_target.parent.exists()
+        msg = seed_presets_file()
+        assert seed_target.exists()
+        assert seed_target.parent.is_dir()
+        assert "Wrote a starter" in msg
+        # The seeded template activates no presets (fully commented).
+        assert _load_presets() == {}
+
+    def test_never_clobbers_existing(self, seed_target):
+        seed_target.parent.mkdir(parents=True)
+        seed_target.write_text("rust-blogs:\n  fragment: 'site:a'\n")
+        msg = seed_presets_file()
+        assert "already present" in msg
+        assert "site:a" in seed_target.read_text()
+        assert set(_load_presets()) == {"rust-blogs"}
