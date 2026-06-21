@@ -55,6 +55,7 @@ _reset_cache  # parkour_mcp/scorecard.py#_reset_cache
 # above — nothing references the function names directly, by design.
 kagi_regions_resource  # parkour_mcp/__init__.py#main
 kagi_lenses_resource  # parkour_mcp/__init__.py#main
+kagi_presets_resource  # parkour_mcp/__init__.py#main
 
 # Hermes plugin entrypoint. Declared in pyproject.toml under
 # [project.entry-points."hermes_agent.plugins"] and called by the Hermes host

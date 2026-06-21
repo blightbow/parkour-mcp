@@ -177,6 +177,17 @@ def display_path(path: Path) -> str:
         return str(path)
 
 
+def ensure_dir(path: Path, *, mode: int = 0o700) -> Path:
+    """Create *path* (and any missing parents) if absent; return it.
+
+    ``mode`` applies only to a newly-created leaf directory (default ``0o700``
+    because the config dir holds API keys); intermediate parents take the
+    process umask, and an existing directory is left untouched.
+    """
+    path.mkdir(mode=mode, parents=True, exist_ok=True)
+    return path
+
+
 def _parse_truthy_env(name: str) -> bool:
     """True if env var *name* holds an affirmative value (``1`` / ``true`` / ``yes``).
 
