@@ -79,8 +79,77 @@ def clean_env(name: str) -> str:
     return val
 
 
+# ---------------------------------------------------------------------------
+# Config directory resolution (etcnauseam seed)
+# ---------------------------------------------------------------------------
+# Stdlib-only, parkour-agnostic resolver modeled on the `etcetera` Rust crate
+# (github.com/lunacookies/etcetera). The app slug is the only input, so this
+# block can later be lifted out into the standalone `etcnauseam` package.
+#
+# Strategy dispatch mirrors etcetera's `choose_app_strategy`: the Windows
+# strategy on Windows, the XDG strategy everywhere else. macOS therefore
+# resolves config under the command-line convention (~/.config), not Apple's
+# GUI-oriented ~/Library/Application Support, matching how git, gh, kubectl,
+# and the astral toolchain (uv/ruff/ty) place CLI config. Only the config
+# directory is modeled; data/cache/state accessors are left to the extraction.
+
+
+def _xdg_config_home() -> Path:
+    """XDG base config directory for Linux and macOS.
+
+    ``$XDG_CONFIG_HOME`` is honored only when it holds an absolute path; per
+    the XDG Base Directory Specification a relative value is ignored, falling
+    back to ``~/.config``.
+    """
+    xdg = os.environ.get("XDG_CONFIG_HOME")
+    if xdg and os.path.isabs(xdg):
+        return Path(xdg)
+    return Path.home() / ".config"
+
+
+def _windows_config_home() -> Path:
+    """Windows roaming config base, ``%APPDATA%``.
+
+    Config maps to the roaming AppData folder so settings follow the user
+    across machines; the home-relative path is the fallback for the rare case
+    the variable is unset.
+    """
+    appdata = os.environ.get("APPDATA")
+    return Path(appdata) if appdata else Path.home() / "AppData" / "Roaming"
+
+
+def config_home() -> Path:
+    """Native per-user config base for the current OS.
+
+    Windows strategy on Windows, XDG strategy everywhere else (Linux and
+    macOS), per etcetera's ``choose_app_strategy``.
+    """
+    if platform.system() == "Windows":
+        return _windows_config_home()
+    return _xdg_config_home()
+
+
+def _config_override_var(app: str) -> str:
+    """Per-app override variable name, e.g. ``parkour`` to ``PARKOUR_CONFIG_DIR``."""
+    slug = "".join(c if c.isalnum() else "_" for c in app).upper()
+    return f"{slug}_CONFIG_DIR"
+
+
+def app_config_dir(app: str) -> Path:
+    """Config directory for application *app*, e.g. ``~/.config/parkour``.
+
+    A wholesale override is read from ``<APP>_CONFIG_DIR`` (the app slug
+    upper-cased, non-alphanumerics mapped to underscores), so ``parkour``
+    reads ``PARKOUR_CONFIG_DIR``. A leading ``~`` in the override is expanded.
+    """
+    override = os.environ.get(_config_override_var(app), "").strip()
+    if override:
+        return Path(override).expanduser()
+    return config_home() / app
+
+
 # Base directory for filesystem-config fallbacks (API keys, opt-in gates).
-_CONFIG_DIR = Path.home() / ".config" / "parkour"
+_CONFIG_DIR = app_config_dir("parkour")
 
 
 def _parse_truthy_env(name: str) -> bool:

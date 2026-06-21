@@ -1,18 +1,22 @@
 """Tests for parkour_mcp.common module."""
 
 import socket
+from pathlib import Path
 from unittest.mock import patch
 
 import httpx
 import pytest
 import respx
 
+from parkour_mcp import common
 from parkour_mcp.common import (
+    app_config_dir,
     check_url_ssrf,
-    _is_private_ip,
+    config_home,
     guarded_fetch,
-    _parse_truthy_env,
     load_credential,
+    _is_private_ip,
+    _parse_truthy_env,
 )
 
 
@@ -219,3 +223,45 @@ class TestGuardedFetchHttp2Fallback:
         assert resp.status_code == 200
         assert resp.text == "ok"
         assert route.call_count == 1
+
+
+# --- Config-dir resolution (etcetera-style choose_app_strategy seed) ---
+
+@pytest.fixture
+def _clean_env(monkeypatch):
+    """Strip the env vars the resolver reads; return monkeypatch to set them."""
+    for var in ("XDG_CONFIG_HOME", "PARKOUR_CONFIG_DIR", "APPDATA"):
+        monkeypatch.delenv(var, raising=False)
+    return monkeypatch
+
+
+class TestConfigDir:
+    def test_posix_default_is_dotconfig(self, _clean_env):
+        # Non-Windows host, no XDG var: config lands under ~/.config.
+        assert app_config_dir("parkour") == Path.home() / ".config" / "parkour"
+
+    def test_absolute_xdg_config_home_honored(self, _clean_env):
+        _clean_env.setenv("XDG_CONFIG_HOME", "/srv/cfg")
+        assert app_config_dir("parkour") == Path("/srv/cfg") / "parkour"
+
+    def test_relative_xdg_config_home_ignored(self, _clean_env):
+        # XDG spec: a non-absolute value is ignored, falling back to ~/.config.
+        _clean_env.setenv("XDG_CONFIG_HOME", "relative/cfg")
+        assert app_config_dir("parkour") == Path.home() / ".config" / "parkour"
+
+    def test_app_override_wins_and_expands(self, _clean_env):
+        _clean_env.setenv("PARKOUR_CONFIG_DIR", "~/custom-parkour")
+        assert app_config_dir("parkour") == Path.home() / "custom-parkour"
+
+    def test_override_var_derives_from_app_slug(self, _clean_env):
+        _clean_env.setenv("MY_TOOL_CONFIG_DIR", "/cfg/mytool")
+        assert app_config_dir("my-tool") == Path("/cfg/mytool")
+
+    def test_windows_uses_appdata(self, _clean_env):
+        _clean_env.setattr(common.platform, "system", lambda: "Windows")
+        _clean_env.setenv("APPDATA", "/fake/Roaming")
+        assert config_home() == Path("/fake/Roaming")
+
+    def test_windows_falls_back_without_appdata(self, _clean_env):
+        _clean_env.setattr(common.platform, "system", lambda: "Windows")
+        assert config_home() == Path.home() / "AppData" / "Roaming"

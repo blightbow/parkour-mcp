@@ -3,14 +3,13 @@
 import asyncio
 import logging
 import re
-from pathlib import Path
 from typing import Annotated
 
 from pydantic import Field
 
 import httpx
 
-from .common import _API_HEADERS, RateLimiter, load_credential, tool_name
+from .common import _API_HEADERS, _CONFIG_DIR, RateLimiter, load_credential, tool_name
 from .detection import _detect_s2_url
 from .markdown import _build_frontmatter
 
@@ -24,7 +23,7 @@ logger = logging.getLogger(__name__)
 _s2_limiter = RateLimiter(1.0)
 
 S2_BASE_URL = "https://api.semanticscholar.org/graph/v1"
-S2_CONFIG_PATH = Path.home() / ".config" / "parkour" / "s2_api_key"
+S2_CONFIG_PATH = _CONFIG_DIR / "s2_api_key"
 
 # URL detection (S2_URL_RE, _detect_s2_url) lives in detection.py.
 

@@ -9,14 +9,13 @@ load-bearing for that second tool and retire when the migration completes.
 
 import json
 import logging
-from pathlib import Path
 from typing import Annotated, Any, Literal
 
 import httpx
 from kagiapi import KagiClient
 from pydantic import Field
 
-from .common import _API_USER_AGENT, load_credential, tool_name
+from .common import _API_USER_AGENT, _CONFIG_DIR, load_credential, tool_name
 from .detection import is_reddit_url
 from .markdown import (
     FMEntries,
@@ -28,7 +27,7 @@ from .markdown import (
 
 logger = logging.getLogger(__name__)
 
-CONFIG_PATH = Path.home() / ".config" / "parkour" / "kagi_api_key"
+CONFIG_PATH = _CONFIG_DIR / "kagi_api_key"
 
 _NO_KEY_MSG = (
     "Error: API key not found. "

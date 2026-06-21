@@ -27,6 +27,7 @@ from pydantic import Field
 
 from .common import (
     _API_USER_AGENT,
+    _CONFIG_DIR,
     _FETCH_HEADERS,
     _LANGUAGE_MAP,
     RateLimiter,
@@ -56,7 +57,7 @@ def _urlquote(s: str) -> str:
 # Configuration
 # ---------------------------------------------------------------------------
 
-GITHUB_CONFIG_PATH = Path.home() / ".config" / "parkour" / "github_token"
+GITHUB_CONFIG_PATH = _CONFIG_DIR / "github_token"
 _GITHUB_API_VERSION = "2022-11-28"
 
 _NO_TOKEN_MSG = (
