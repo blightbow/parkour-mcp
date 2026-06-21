@@ -12,7 +12,14 @@ from mcp.types import Annotations, Icon, ToolAnnotations
 
 from ._cli import add_call_parser, run_call
 from .arxiv import arxiv
-from .common import _VERSION, TOOL_NAMES, init_tool_names, s2_enabled
+from .common import (
+    _CONFIG_DIR,
+    _VERSION,
+    TOOL_NAMES,
+    display_path,
+    init_tool_names,
+    s2_enabled,
+)
 from .discourse import discourse
 from .fetch_direct import web_fetch_direct, web_fetch_sections
 from .github import github
@@ -386,7 +393,7 @@ Query formats vary by action:
 - repo: "owner/repo" (e.g. "pallets/flask")
 - issue_templates: "owner/repo" (e.g. "pallets/flask") — call before filing an issue if the repo action's frontmatter hints at custom submission flow
 
-Authentication: Set GITHUB_TOKEN env var or create ~/.config/parkour/github_token
+Authentication: Set GITHUB_TOKEN env var or create {config_dir}/github_token
 for 5000 req/hr (vs 60/hr unauthenticated). No special scopes needed for public repos.""",
 
     "huggingface": """Inspect HuggingFace Hub models: metadata, files, and quantization quality.
@@ -420,7 +427,7 @@ misleading number. Set quant_audit=true to spend one extra request reading the
 base model's native weight format, which resolves several of those cases and
 yields a grid-preservation verdict.
 
-Authentication: optional. Set HF_TOKEN env var or create ~/.config/parkour/hf_token
+Authentication: optional. Set HF_TOKEN env var or create {config_dir}/hf_token
 to reach gated and private repos and raise the rate limit. Without a token the
 Hub returns an identical 401 for gated, private, and nonexistent repos, and this
 tool reports that ambiguity rather than guessing which one it hit.""",
@@ -678,6 +685,7 @@ def _build_description(
         _SEARCH_POSITIONING_OVERRIDE if override_web_search else _SEARCH_POSITIONING
     )
     fragments = {
+        "config_dir": display_path(_CONFIG_DIR),
         "search_grammar": SEARCH_GRAMMAR_DOC,
         "search_positioning": search_positioning.format(**profile_vars),
     }

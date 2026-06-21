@@ -5,6 +5,7 @@ import logging
 import os
 import socket
 import stat
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import httpcore
@@ -12,6 +13,7 @@ import httpx
 import pytest
 import respx
 
+from parkour_mcp import common
 from parkour_mcp.common import (
     _PROXY_ENV_VARS,
     BlockedAddress,
@@ -24,9 +26,12 @@ from parkour_mcp.common import (
     _sniff_pdf,
     check_url_scheme,
     check_url_ssrf,
+    config_home,
+    display_path,
     guarded_client,
     guarded_fetch,
     load_credential,
+    parkour_config_dir,
     proxy_in_effect,
 )
 
@@ -636,3 +641,63 @@ class TestSniffPdf:
         assert not _sniff_pdf(b"%PDX-1.7")
         assert not _sniff_pdf(b"")
         assert not _sniff_pdf(b"<html>%PDF-")
+
+
+# --- Config-dir resolution ---
+
+@pytest.fixture
+def _clean_env(monkeypatch):
+    """Strip the env vars the resolver reads; return monkeypatch to set them."""
+    for var in ("XDG_CONFIG_HOME", "PARKOUR_CONFIG_DIR", "APPDATA"):
+        monkeypatch.delenv(var, raising=False)
+    return monkeypatch
+
+
+def _on(monkeypatch, system: str) -> None:
+    monkeypatch.setattr(common.platform, "system", lambda: system)
+
+
+class TestConfigDir:
+    @pytest.mark.parametrize("system", ["Linux", "Darwin"])
+    def test_posix_default_is_dotconfig(self, _clean_env, system):
+        # macOS follows the CLI convention, not ~/Library/Application Support.
+        _on(_clean_env, system)
+        assert parkour_config_dir() == Path.home() / ".config" / "parkour"
+
+    @pytest.mark.parametrize("system", ["Linux", "Darwin"])
+    def test_absolute_xdg_config_home_honored(self, _clean_env, system):
+        _on(_clean_env, system)
+        _clean_env.setenv("XDG_CONFIG_HOME", "/srv/cfg")
+        assert parkour_config_dir() == Path("/srv/cfg") / "parkour"
+
+    def test_relative_xdg_config_home_ignored(self, _clean_env):
+        # XDG spec: a non-absolute value is ignored, falling back to ~/.config.
+        _on(_clean_env, "Linux")
+        _clean_env.setenv("XDG_CONFIG_HOME", "relative/cfg")
+        assert parkour_config_dir() == Path.home() / ".config" / "parkour"
+
+    @pytest.mark.parametrize("system", ["Linux", "Darwin", "Windows"])
+    def test_override_wins_and_expands(self, _clean_env, system):
+        _on(_clean_env, system)
+        _clean_env.setenv("XDG_CONFIG_HOME", "/srv/cfg")
+        _clean_env.setenv("APPDATA", "/fake/Roaming")
+        _clean_env.setenv("PARKOUR_CONFIG_DIR", "~/custom-parkour")
+        assert parkour_config_dir() == Path.home() / "custom-parkour"
+
+    def test_windows_uses_appdata_and_ignores_xdg(self, _clean_env):
+        _on(_clean_env, "Windows")
+        _clean_env.setenv("APPDATA", "/fake/Roaming")
+        _clean_env.setenv("XDG_CONFIG_HOME", "/srv/cfg")
+        assert parkour_config_dir() == Path("/fake/Roaming") / "parkour"
+
+    def test_windows_falls_back_without_appdata(self, _clean_env):
+        _on(_clean_env, "Windows")
+        assert config_home() == Path.home() / "AppData" / "Roaming"
+
+
+class TestDisplayPath:
+    def test_home_relative_path_uses_tilde(self):
+        assert display_path(Path.home() / ".config" / "parkour" / "k") == "~/.config/parkour/k"
+
+    def test_path_outside_home_is_unchanged(self):
+        assert display_path(Path("/srv/cfg/parkour/k")) == "/srv/cfg/parkour/k"

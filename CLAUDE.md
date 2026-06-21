@@ -119,6 +119,7 @@ cog.outl(f"- **`packages.py`** — deps.dev (Google Open Source Insights) integr
 | `GITHUB_TOKEN` | GitHub personal access token (fallback: `~/.config/parkour/github_token`). 5000 req/hr vs 60/hr unauthenticated |
 | `HF_TOKEN` | HuggingFace token (fallback: `~/.config/parkour/hf_token`). Optional — unlocks gated/private repos and raises the rate limit |
 | `S2_ACCEPT_TOS` | Set to `1` to enable Semantic Scholar integration (also: `~/.config/parkour/s2_accept_tos` file) |
+| `PARKOUR_CONFIG_DIR` | Replaces the config directory that holds the credential fallbacks above. Default: `$XDG_CONFIG_HOME/parkour` or `~/.config/parkour` on Linux and macOS, `%APPDATA%\parkour` on Windows (`common.py#parkour_config_dir`) |
 | `PLAYWRIGHT_BROWSER` | Browser engine for JS rendering: `auto` (default), `webkit`, `chromium`, `firefox`. Browser names resolve to their engine (`chrome`/`msedge` → chromium, `safari` → webkit); anything else warns and falls back to `auto` |
 | `MCP_AUTO_INSTALL_BROWSER` | Set to `1` to download a missing Playwright browser on demand instead of only reporting it (default: report only) |
 | `MCP_ALLOW_PRIVATE_IPS` | Set to `1` to allow fetching from private/loopback/link-local IPs (default: blocked) |

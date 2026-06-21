@@ -9,14 +9,19 @@ load-bearing for that second tool and retire when the migration completes.
 
 import json
 import logging
-from pathlib import Path
 from typing import Annotated, Any, Literal
 
 import httpx
 from kagiapi import KagiClient
 from pydantic import Field
 
-from .common import _API_USER_AGENT, load_credential, tool_name
+from .common import (
+    _API_USER_AGENT,
+    _CONFIG_DIR,
+    display_path,
+    load_credential,
+    tool_name,
+)
 from .detection import is_reddit_url
 from .markdown import (
     _TRUST_ADVISORY,
@@ -28,12 +33,13 @@ from .markdown import (
 
 logger = logging.getLogger(__name__)
 
-CONFIG_PATH = Path.home() / ".config" / "parkour" / "kagi_api_key"
+CONFIG_PATH = _CONFIG_DIR / "kagi_api_key"
 
 _NO_KEY_MSG = (
     "Error: API key not found. "
-    "Create ~/.config/parkour/kagi_api_key or set KAGI_API_KEY env var."
+    f"Create {display_path(CONFIG_PATH)} or set KAGI_API_KEY env var."
 )
+_CHECK_KEY_MSG = f"Check {display_path(CONFIG_PATH)} or KAGI_API_KEY env var."
 
 # ---------------------------------------------------------------------------
 # v1 public-preview API
@@ -290,7 +296,7 @@ def _handle_v0_error(e: Exception) -> str:
                 pass
 
     if status_code == 401:
-        return "Error: Invalid API key. Check ~/.config/parkour/kagi_api_key or KAGI_API_KEY env var."
+        return f"Error: Invalid API key. {_CHECK_KEY_MSG}"
     if status_code == 402:
         return "Error: Insufficient API credits. Add funds at https://kagi.com/settings?p=billing_api"
     return f"Error: {e}"
@@ -337,10 +343,7 @@ def _handle_v1_error(e: Exception) -> str:
                 code = err.get("code") or ""
                 message = err.get("message") or ""
                 if code == "general.unauthorized":
-                    return (
-                        "Error: Invalid API key. "
-                        "Check ~/.config/parkour/kagi_api_key or KAGI_API_KEY env var."
-                    )
+                    return f"Error: Invalid API key. {_CHECK_KEY_MSG}"
                 if "insufficient_credit" in code or "billing" in code:
                     return (
                         "Error: Insufficient API credits. "
@@ -352,10 +355,7 @@ def _handle_v1_error(e: Exception) -> str:
                     return f"Error: Kagi v1: {message}"
 
         if status_code == 401:
-            return (
-                "Error: Invalid API key. "
-                "Check ~/.config/parkour/kagi_api_key or KAGI_API_KEY env var."
-            )
+            return f"Error: Invalid API key. {_CHECK_KEY_MSG}"
         if status_code == 402:
             return (
                 "Error: Insufficient API credits. "

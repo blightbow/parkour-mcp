@@ -22,7 +22,6 @@ import logging
 import re
 from collections import Counter
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Annotated, Any
 
 import httpx
@@ -31,6 +30,7 @@ from pydantic import Field
 from ._pipeline import _page_cache
 from .common import (
     _API_USER_AGENT,
+    _CONFIG_DIR,
     RateLimiter,
     guarded_fetch,
     load_credential,
@@ -52,7 +52,7 @@ logger = logging.getLogger(__name__)
 # Configuration
 # ---------------------------------------------------------------------------
 
-HF_CONFIG_PATH = Path.home() / ".config" / "parkour" / "hf_token"
+HF_CONFIG_PATH = _CONFIG_DIR / "hf_token"
 
 _HF_API_BASE = "https://huggingface.co/api"
 _HF_SITE_BASE = "https://huggingface.co"

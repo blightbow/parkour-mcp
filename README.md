@@ -378,6 +378,19 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
   }
 }
 ```
+
+### Credential files
+
+Each credential below can come from an environment variable or from a file in
+parkour's config directory. The examples use `~/.config/parkour`, which is the
+default on Linux and macOS. The directory is chosen as follows:
+
+| Platform | Config directory |
+|---|---|
+| Linux, macOS | `$XDG_CONFIG_HOME/parkour` when `XDG_CONFIG_HOME` is set to an absolute path, otherwise `~/.config/parkour` |
+| Windows | `%APPDATA%\parkour` |
+| Any | `PARKOUR_CONFIG_DIR`, when set, replaces all of the above |
+
 ### Kagi API Key (for search/summarize tools)
 
 Set your Kagi API key via environment variable or config file:
