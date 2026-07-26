@@ -110,6 +110,14 @@ uv run python3 scripts/sync_versions.py
   `git cliff --tag --unreleased --prepend CHANGELOG.md` (after
   reverting the previous CHANGELOG edit), or hand-edit CHANGELOG.md
   directly. The latter is simpler for small wording tweaks.
+- **Edits here reach the GitHub Release.** The workflow's notes step
+  reads the `## [$NEXT]` section out of CHANGELOG.md and only falls
+  back to regenerating from commits when no such section exists (which
+  is the RC case, since CHANGELOG.md tracks finals only). So the file
+  in the repo and the release body cannot disagree — but it also means
+  a final release with no CHANGELOG section, or with a section whose
+  heading does not match the tag's version exactly, fails CI at the
+  release-notes step rather than publishing something wrong.
 - Sanity: every `feat:` / `fix:` / `refactor:` / `perf:` commit in
   the range should produce a bullet in the matching section. Flag any
   that are missing (probably means the commit's type didn't match any
@@ -147,10 +155,11 @@ cut from `main`):
 >     git push origin <branch> --follow-tags
 >
 > The release workflow fires on the tag push and handles: uv build,
-> PyPI OIDC publish, mcpb pack, GitHub Release creation (notes assembled
-> by git-cliff over the range since the last final tag), server.json
-> mcpb asset coordinates, MCP Registry publish. Watch the run at:
-> https://github.com/blightbow/parkour-mcp/actions
+> PyPI OIDC publish, mcpb pack, GitHub Release creation (notes read from
+> the CHANGELOG.md section for this version, or assembled by git-cliff
+> over the range since the last final tag when there is none — the RC
+> case), server.json mcpb asset coordinates, MCP Registry publish.
+> Watch the run at: https://github.com/blightbow/parkour-mcp/actions
 
 The trigger is the tag, not the branch: the workflow keys on
 `refs/tags/v*` and runs regardless of which branch the tag is pushed
