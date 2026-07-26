@@ -1,5 +1,6 @@
 """Shared fixtures for parkour-mcp tests."""
 
+import pathlib
 import sys
 import time
 
@@ -26,6 +27,9 @@ _github_mod = sys.modules["parkour_mcp.github"]
 
 import parkour_mcp.scorecard  # noqa: E402, F401
 _scorecard_mod = sys.modules["parkour_mcp.scorecard"]
+
+import parkour_mcp.huggingface  # noqa: E402, F401
+_hf_mod = sys.modules["parkour_mcp.huggingface"]
 
 import parkour_mcp.ietf  # noqa: E402, F401
 _ietf_mod = sys.modules["parkour_mcp.ietf"]
@@ -245,6 +249,24 @@ def _stub_scorecard_for_github(monkeypatch):
 
     monkeypatch.setattr(_github_mod, "_fetch_scorecard_overall", _no_score)
     _scorecard_mod._reset_cache()
+
+
+@pytest.fixture(autouse=True)
+def _hf_state(monkeypatch):
+    """Disable the HF rate limiter and isolate token lookup.
+
+    ``_get_hf_token`` caches for the process lifetime and falls back to
+    ``~/.config/parkour/hf_token``, so without this a developer who happens to
+    have a real token on disk would exercise a different auth path than CI.
+    """
+    monkeypatch.setattr(_hf_mod._hf_limiter, "min_interval", 0.0)
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.setattr(
+        _hf_mod, "HF_CONFIG_PATH", pathlib.Path("/nonexistent/hf_token"),
+    )
+    _hf_mod._reset_hf_state()
+    yield
+    _hf_mod._reset_hf_state()
 
 
 @pytest.fixture(autouse=True)

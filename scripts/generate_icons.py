@@ -81,6 +81,8 @@ GLYPHS: list[Glyph] = [
     Glyph("scholar",   0x2234, "NotoSansMono-Regular.ttf",     "∴", "THEREFORE"),
     Glyph("shelf",     0x229E, "NotoSansMath-Regular.ttf",     "⊞", "SQUARED PLUS"),
     Glyph("github",    0x2442, "NotoSansSymbols2-Regular.ttf", "⑂", "OCR FORK"),
+    # The Hub's own mascot — the one glyph a user will recognise instantly.
+    Glyph("huggingface", 0x1F917, "NotoEmoji-Regular.ttf",     "🤗", "HUGGING FACE"),
     Glyph("ietf",      0x1F40C, "NotoEmoji-Regular.ttf",       "🐌", "SNAIL"),
     Glyph("packages",  0x2B21, "NotoSansMath-Regular.ttf",     "⬡", "WHITE HEXAGON"),
     Glyph("discourse", 0x1F4AC, "NotoEmoji-Regular.ttf",       "💬", "SPEECH BALLOON"),

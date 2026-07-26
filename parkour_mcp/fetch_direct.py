@@ -41,12 +41,14 @@ from .detection import (
     _detect_arxiv_html_url,
     _detect_arxiv_url,
     _detect_doi_url,
+    _detect_hf_url,
     _detect_ietf_url,
     _detect_reddit_url,
     _detect_s2_url,
     _extract_comment_permalink,
     _strip_version,
 )
+from .huggingface import _hf_fast_path
 
 logger = logging.getLogger(__name__)
 
@@ -313,6 +315,40 @@ async def web_fetch_direct(
                 return result
     except Exception:
         logger.debug("GitHub fast path failed for %s; falling through", url, exc_info=True)
+
+    # --- HuggingFace fast path (after GitHub, before MediaWiki) ---
+    # The Hub's model pages are a JS SPA, so the generic path would scrape a
+    # shell. The API answers the same questions with structure the scrape
+    # cannot recover (dtype fingerprint, per-file checksums, lineage).
+    try:
+        if _detect_hf_url(url):
+            result = await _hf_fast_path(url)
+            if result is not None:
+                if want_slicing:
+                    return _dispatch_slicing(
+                        url, search, slices,
+                        slices_list if slices is not None else [],
+                        max_tokens, source_url, warning=fragment_warning,
+                        fallback=result,
+                    )
+                if section_names:
+                    cached = _page_cache.get(url)
+                    if cached and cached.markdown:
+                        return _process_markdown_sections(
+                            cached.markdown, section_names, max_tokens,
+                            frontmatter_entries=FMEntries({
+                                "source": source_url,
+                                "api": "HuggingFace",
+                                "warning": fragment_warning,
+                            }),
+                            cache_url=url,
+                        )
+                return result
+    except Exception:
+        logger.debug(
+            "HuggingFace fast path failed for %s; falling through",
+            url, exc_info=True,
+        )
 
     # --- MediaWiki fast path (before HTTP fetch) ---
     try:

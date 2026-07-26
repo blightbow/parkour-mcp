@@ -14,6 +14,7 @@ from .kagi import search
 from .fetch_direct import web_fetch_direct, web_fetch_sections
 from .arxiv import arxiv
 from .github import github
+from .huggingface import huggingface
 from .ietf import ietf
 from .packages import packages
 from .discourse import discourse
@@ -43,6 +44,7 @@ _ICON_FILES = {
     "semantic_scholar": "scholar",  # ∴  U+2234 THEREFORE (NotoSansMono)
     "research_shelf": "shelf",      # ⊞  U+229E SQUARED PLUS (NotoSansMath)
     "github": "github",             # ⑂  U+2442 OCR FORK (NotoSansSymbols2)
+    "huggingface": "huggingface",   # 🤗 U+1F917 HUGGING FACE (NotoEmoji)
     "ietf": "ietf",                 # 🐌 U+1F40C SNAIL (NotoEmoji)
     "packages": "packages",         # ⬡  U+2B21 WHITE HEXAGON (NotoSansMath)
     "discourse": "discourse",       # 💬 U+1F4AC SPEECH BALLOON (NotoEmoji)
@@ -65,6 +67,7 @@ _ALWAYS_ON_TOOLS: tuple[tuple[str, Callable[..., Any]], ...] = (
     ("arxiv", arxiv),
     ("research_shelf", research_shelf),
     ("github", github),
+    ("huggingface", huggingface),
     ("ietf", ietf),
     ("packages", packages),
     ("discourse", discourse),
@@ -138,6 +141,7 @@ PROFILE_VARS = {
         "fetch_sections": "WebFetchSections",
         "mediawiki_tool": "MediaWiki",
         "github_tool": "GitHub",
+        "huggingface_tool": "HuggingFace",
         "arxiv_tool": "ArXiv",
         "ietf_tool": "IETF",
         "semantic_scholar_tool": "SemanticScholar",
@@ -167,6 +171,7 @@ PROFILE_VARS = {
         "fetch_sections": "web_fetch_sections",
         "mediawiki_tool": "mediawiki",
         "github_tool": "github",
+        "huggingface_tool": "huggingface",
         "arxiv_tool": "arxiv",
         "ietf_tool": "ietf",
         "semantic_scholar_tool": "semantic_scholar",
@@ -198,6 +203,7 @@ PROFILE_VARS = {
         "fetch_sections": "web_fetch_sections",
         "mediawiki_tool": "mediawiki",
         "github_tool": "github",
+        "huggingface_tool": "huggingface",
         "arxiv_tool": "arxiv",
         "ietf_tool": "ietf",
         "semantic_scholar_tool": "semantic_scholar",
@@ -366,6 +372,41 @@ Query formats vary by action:
 
 Authentication: Set GITHUB_TOKEN env var or create ~/.config/parkour/github_token
 for 5000 req/hr (vs 60/hr unauthenticated). No special scopes needed for public repos.""",
+
+    "huggingface": """Inspect HuggingFace Hub models: metadata, files, and quantization quality.
+
+Use this for model-repo lookups: architecture and parameter count, checkpoint
+size and shard layout, gated/private status, base-model lineage, per-file sizes
+and LFS checksums, and a quantization analysis that reports *effective* bits per
+weight rather than what the uploader claimed. huggingface.co URLs are also
+handled automatically by {fetch_direct} — this tool is for structured queries.
+
+Actions: model, file, tree, search, org.
+
+Query formats vary by action:
+- model: "org/name" (e.g. "openai/gpt-oss-120b"), optionally "org/name@revision"
+- file: "org/name/path/to/file" (e.g. "openai/gpt-oss-120b/config.json") — use ref= for a branch/tag
+- tree: "org/name" or "org/name/subdirectory"
+- search: free text (Hub search is substring-based over repo ids); pair with author= to scope
+- org: an organization or user name (e.g. "mlx-community")
+
+Weight files are never downloaded. Asking for a .safetensors or .gguf file
+returns its size, LFS checksum, and the byte-range recipe for reading the
+header — a multi-GB shard exposes its per-tensor dtypes and shapes in a header
+of a few hundred KiB.
+
+On the model action, effective bits-per-weight is suppressed rather than guessed
+whenever the Hub's own numbers cannot support it: packed storage counts reported
+as parameter counts, repos shipping more than one checkpoint set, diffusers
+pipelines, and GGUF-only repos each get an explicit explanation instead of a
+misleading number. Set quant_audit=true to spend one extra request reading the
+base model's native weight format, which resolves several of those cases and
+yields a grid-preservation verdict.
+
+Authentication: optional. Set HF_TOKEN env var or create ~/.config/parkour/hf_token
+to reach gated and private repos and raise the rate limit. Without a token the
+Hub returns an identical 401 for gated, private, and nonexistent repos, and this
+tool reports that ambiguity rather than guessing which one it hit.""",
 
     "ietf": """Search and retrieve IETF RFCs, Internet-Drafts, and standards-track documents.
 

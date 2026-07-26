@@ -1,0 +1,845 @@
+"""Tests for parkour_mcp.huggingface (mocked, no network).
+
+The quant-analysis tests are the load-bearing ones.  Each ``bpw`` precondition
+in ``docs/huggingface-tool.md`` §14.1a has a real public repo that fails *only*
+that gate, and the dtype counts, file lists, and sizes in the fixtures below
+are transcribed from live Hub responses for those repos.  A detector that
+regresses past one of these gates does not merely return a wrong number: it
+publishes a false accusation of "bloat" against an honest release, which is
+why each gate gets a named test rather than sharing a parametrized one.
+"""
+
+import httpx
+import pytest
+import respx
+
+from parkour_mcp._pipeline import _page_cache
+from parkour_mcp.detection import _detect_hf_url, is_hf_commit_sha
+from parkour_mcp.huggingface import (
+    _HFRateLimit,
+    _cache_file_body,
+    _family_stem,
+    _hf_fast_path,
+    _fm_base,
+    _format_dtype_fingerprint,
+    _hf_request,
+    _partition_checkpoint_sets,
+    _pick_canonical_set,
+    _split_repo_path,
+    _split_repo_rev,
+    analyze_quant,
+    huggingface,
+)
+from parkour_mcp.markdown import _TRUST_ADVISORY
+
+GIB = 1024 ** 3
+
+
+# ---------------------------------------------------------------------------
+# Fixture builders
+# ---------------------------------------------------------------------------
+
+def _shards(stem: str, count: int, total_bytes: int, start: int = 1) -> list[dict]:
+    """Build a sharded ``-N-of-M`` sibling list totalling *total_bytes*."""
+    declared = count - 1 if start == 0 else count
+    each = total_bytes // count
+    return [
+        {
+            "rfilename": f"{stem}-{i:05d}-of-{declared:05d}.safetensors",
+            "size": each,
+            "lfs": {"sha256": f"{i:064x}"},
+        }
+        for i in range(start, start + count)
+    ]
+
+
+def _payload(**overrides) -> dict:
+    base = {
+        "id": "org/model",
+        "safetensors": {"parameters": {"BF16": 8_000_000_000}, "total": 8_000_000_000},
+        "siblings": [{"rfilename": "model.safetensors.index.json", "size": 100}],
+        "config": {},
+        "tags": [],
+        "gated": False,
+    }
+    base.update(overrides)
+    return base
+
+
+# ---------------------------------------------------------------------------
+# §14.1a precondition 1 — denominator validity (the U32 guard)
+# ---------------------------------------------------------------------------
+
+class TestPrecondition1DenominatorValidity:
+    """`safetensors.total` is sometimes storage elements, not logical weights."""
+
+    def test_unpacked_repo_reports_bpw(self):
+        """A genuine 3.2x packing ratio means `total` is a logical count."""
+        report = analyze_quant(_payload(
+            safetensors={
+                "parameters": {"U32": 77_182_000_000, "BF16": 19_345_000_000},
+                "total": 308_780_000_000,
+            },
+            siblings=[
+                {"rfilename": "model.safetensors.index.json", "size": 100},
+                *_shards("model", 36, int(323.56 * GIB)),
+            ],
+        ))
+        assert report.bpw is not None
+        assert report.bpw == pytest.approx(9.00, abs=0.02)
+
+    def test_u32_with_exact_equality_suppresses_bpw(self):
+        """dawncr0w/MiMo-V2.5-oQ4-MLX: ratio exactly 1.0 with a U32 container.
+
+        Without this gate the tool reports ~28.7 bpw on a legitimate 4-bit
+        quant and calls it bloat.
+        """
+        report = analyze_quant(_payload(
+            safetensors={
+                "parameters": {"U32": 39_628_000_000, "BF16": 10_465_000_000},
+                "total": 50_093_000_000,
+            },
+            siblings=[
+                {"rfilename": "model.safetensors.index.json", "size": 100},
+                *_shards("model", 30, int(167.12 * GIB)),
+            ],
+            config={"quantization_config": {"bits": 4}},
+        ))
+        assert report.bpw is None
+        assert report.bpw_suppressed is not None
+        assert "packed storage elements" in report.bpw_suppressed
+
+    def test_equality_without_u32_is_legitimate(self):
+        """openai/gpt-oss-120b also reports total == sum, but unpacked into U8.
+
+        Ratio 1.0 alone is not the signal; ratio 1.0 *with U32* is. Keying on
+        the ratio alone would suppress a repo whose number is perfectly good.
+        """
+        report = analyze_quant(_payload(
+            safetensors={
+                "parameters": {"U8": 118_245_000_000, "BF16": 2_167_000_000},
+                "total": 120_412_000_000,
+            },
+            siblings=[
+                {"rfilename": "model.safetensors.index.json", "size": 100},
+                *_shards("model", 15, int(60.77 * GIB), start=0),
+            ],
+            config={"quantization_config": {"quant_method": "mxfp4"}},
+        ))
+        assert report.bpw == pytest.approx(4.34, abs=0.02)
+
+    def test_bits_cross_check_suppresses_impossible_ratio(self):
+        """A bpw far above the declared width means the denominator is wrong.
+
+        Closes the residual hole in the U32 test: a container dtype the Hub
+        failed to unpack that is not U32 would otherwise pass gate 1.
+        """
+        report = analyze_quant(_payload(
+            safetensors={
+                "parameters": {"U8": 40_000_000_000, "BF16": 10_000_000_000},
+                "total": 50_000_000_000,
+            },
+            siblings=[
+                {"rfilename": "model.safetensors.index.json", "size": 100},
+                *_shards("model", 10, int(160 * GIB)),
+            ],
+            config={"quantization_config": {"bits": 4}},
+        ))
+        assert report.bpw is None
+        assert report.bpw_suppressed is not None
+        assert "double the declared 4-bit" in report.bpw_suppressed
+
+
+# ---------------------------------------------------------------------------
+# §14.1a precondition 2 — numerator validity (checkpoint-set partition)
+# ---------------------------------------------------------------------------
+
+class TestPrecondition2CheckpointSets:
+    """Summing every `.safetensors` over-counts repos with duplicate sets."""
+
+    def test_resharded_duplicate_in_subdirectory(self):
+        """openai/gpt-oss-120b ships the same weights re-sharded under original/.
+
+        All 22 checksums differ, so sha-based dedup collapses nothing; the
+        partition is what separates the two sets.
+        """
+        siblings = [
+            {"rfilename": "model.safetensors.index.json", "size": 100},
+            {"rfilename": "original/model.safetensors.index.json", "size": 100},
+            *_shards("model", 15, int(60.77 * GIB), start=0),
+            *_shards("original/model", 7, int(60.77 * GIB)),
+        ]
+        report = analyze_quant(_payload(
+            safetensors={
+                "parameters": {"U8": 118_245_000_000, "BF16": 2_167_000_000},
+                "total": 120_412_000_000,
+            },
+            siblings=siblings,
+        ))
+        assert report.bpw == pytest.approx(4.34, abs=0.02)
+        assert report.all_safetensors_bytes > report.canonical_bytes
+        assert report.duplicate_labels
+
+    def test_consolidated_blob_beside_sharded_set(self):
+        """mistralai/* ships consolidated.safetensors at top level.
+
+        "Top-level only" is not a fix here — both sets are top-level, so the
+        sharded-over-single preference is what picks correctly.
+        """
+        report = analyze_quant(_payload(
+            safetensors={
+                "parameters": {"BF16": 24_011_000_000},
+                "total": 24_011_000_000,
+            },
+            siblings=[
+                {"rfilename": "model.safetensors.index.json", "size": 100},
+                *_shards("model", 10, int(44.72 * GIB)),
+                {"rfilename": "consolidated.safetensors", "size": int(44.72 * GIB)},
+            ],
+        ))
+        assert report.bpw == pytest.approx(16.00, abs=0.02)
+
+    def test_unsharded_top_level_files_form_one_set(self):
+        """XiaomiMiMo/MiMo-V2.5 ships 18 top-level files with no -of-N anywhere.
+
+        This is the regression that the "singles" bucket exists for: keyed per
+        filename, every file becomes its own checkpoint, the canonical pick
+        lands on a 1.11 GiB fragment, and bpw reports 0.03 against a true 8.13.
+        The repo passes the diffusers pipeline gate cleanly, so nothing else
+        catches it.
+        """
+        siblings = [
+            {"rfilename": "model.safetensors.index.json", "size": 100},
+            *[
+                {"rfilename": f"model_pp0_ep{i}_shard0.safetensors",
+                 "size": int(32.01 * GIB)}
+                for i in range(8)
+            ],
+            *[
+                {"rfilename": f"model_pp0_ep{i}_shard1.safetensors",
+                 "size": int(3.25 * GIB)}
+                for i in range(1, 8)
+            ],
+            {"rfilename": "model_pp0_ep0_shard1.safetensors", "size": int(13.47 * GIB)},
+            {"rfilename": "model_mtp.safetensors", "size": int(1.11 * GIB)},
+        ]
+        report = analyze_quant(_payload(
+            safetensors={
+                "parameters": {"F8_E4M3": 306_655_000_000, "BF16": 4_052_000_000},
+                "total": 310_775_000_000,
+            },
+            siblings=siblings,
+            config={"quantization_config": {"quant_method": "fp8"}},
+        ))
+        assert report.bpw is not None, report.bpw_suppressed
+        assert report.bpw == pytest.approx(8.1, abs=0.2)
+
+    def test_shard_index_is_not_a_file_count_test(self):
+        """0-indexed and 1-indexed publishers both exist, so count != N.
+
+        gpt-oss numbers from 00000 (15 files for "of-14"); most others number
+        from 00001. Treating "file count != N" as a duplicate signal would
+        misfire on one of the two conventions.
+        """
+        zero_based = _partition_checkpoint_sets(
+            _shards("model", 15, 15_000, start=0),
+        )
+        one_based = _partition_checkpoint_sets(
+            _shards("model", 65, 65_000, start=1),
+        )
+        assert len(zero_based) == 1
+        assert len(one_based) == 1
+        assert len(zero_based[0].files) == 15
+        assert len(one_based[0].files) == 65
+
+    def test_precision_variants_collapse(self):
+        """A .fp16 sibling beside its full-precision stem is a duplicate."""
+        sets = _partition_checkpoint_sets([
+            {"rfilename": "unet/diffusion_pytorch_model.safetensors",
+             "size": int(9.56 * GIB)},
+            {"rfilename": "unet/diffusion_pytorch_model.fp16.safetensors",
+             "size": int(4.78 * GIB)},
+        ])
+        report = analyze_quant(_payload(
+            safetensors={"parameters": {"F32": 2_567_000_000},
+                         "total": 2_567_000_000},
+            siblings=[
+                {"rfilename": "model.safetensors.index.json", "size": 100},
+                {"rfilename": "unet/diffusion_pytorch_model.safetensors",
+                 "size": int(9.56 * GIB)},
+                {"rfilename": "unet/diffusion_pytorch_model.fp16.safetensors",
+                 "size": int(4.78 * GIB)},
+            ],
+        ))
+        assert sum(len(s.files) for s in sets) == 2
+        assert report.all_safetensors_bytes == pytest.approx(9.56 * GIB, rel=0.01)
+
+    def test_diffusers_pipeline_suppresses_bpw(self):
+        """model_index.json without a top-level shard index is a pipeline.
+
+        `safetensors.total` counts one component while bytes count the whole
+        pipeline, so no set choice yields a meaningful ratio.
+        """
+        report = analyze_quant(_payload(
+            safetensors={"parameters": {"BF16": 11_901_000_000},
+                         "total": 11_901_000_000},
+            siblings=[
+                {"rfilename": "model_index.json", "size": 100},
+                {"rfilename": "transformer/diffusion_pytorch_model.safetensors",
+                 "size": int(22.17 * GIB)},
+                {"rfilename": "flux1-dev.safetensors", "size": int(22.17 * GIB)},
+            ],
+        ))
+        assert report.bpw is None
+        assert report.bpw_suppressed is not None
+        assert "diffusers pipeline" in report.bpw_suppressed
+
+    def test_canonical_pick_prefers_top_level_then_sharded(self):
+        sets = _partition_checkpoint_sets([
+            {"rfilename": "sub/model-00001-of-00002.safetensors", "size": 10},
+            {"rfilename": "sub/model-00002-of-00002.safetensors", "size": 10},
+            {"rfilename": "consolidated.safetensors", "size": 40},
+            {"rfilename": "model-00001-of-00003.safetensors", "size": 5},
+            {"rfilename": "model-00002-of-00003.safetensors", "size": 5},
+            {"rfilename": "model-00003-of-00003.safetensors", "size": 5},
+        ])
+        picked = _pick_canonical_set(sets)
+        assert picked is not None
+        assert picked.directory == ""
+        assert picked.group == "of-3"
+
+
+# ---------------------------------------------------------------------------
+# §14.1a precondition 3 — is this actually a quant
+# ---------------------------------------------------------------------------
+
+class TestPrecondition3IsAQuant:
+    """Bloat commentary on a stock BF16 release is the highest-frequency
+    wrong output available, since unquantized repos outnumber quants."""
+
+    def test_stock_bf16_release_is_not_a_quant(self):
+        report = analyze_quant(_payload(
+            safetensors={"parameters": {"BF16": 8_292_000_000},
+                         "total": 8_292_000_000},
+            siblings=[
+                {"rfilename": "model.safetensors.index.json", "size": 100},
+                *_shards("model", 5, int(15.45 * GIB)),
+            ],
+        ))
+        assert report.bpw == pytest.approx(16.00, abs=0.02)
+        assert report.is_quant is False
+
+    def test_finetune_relation_is_not_a_quant_relation(self):
+        """Bloat is meaningless relative to yourself, and a finetune is not
+        a quant relationship."""
+        report = analyze_quant(_payload(
+            safetensors={"parameters": {"BF16": 24_011_000_000},
+                         "total": 24_011_000_000},
+            siblings=[
+                {"rfilename": "model.safetensors.index.json", "size": 100},
+                *_shards("model", 10, int(44.72 * GIB)),
+            ],
+            baseModels={"relation": "finetune",
+                        "models": [{"id": "mistralai/Mistral-Small-3.1-24B-Base-2503"}]},
+        ))
+        assert report.is_quant is False
+
+    def test_empty_projected_config_still_counts_as_quant(self):
+        """The disjunction is load-bearing.
+
+        Collapsing the gate to "non-empty quantization_config" suppresses
+        exactly the motivating case, whose projected config is `{}`.
+        """
+        report = analyze_quant(_payload(
+            safetensors={
+                "parameters": {"U32": 77_182_000_000, "BF16": 19_345_000_000},
+                "total": 308_780_000_000,
+            },
+            siblings=[
+                {"rfilename": "model.safetensors.index.json", "size": 100},
+                *_shards("model", 36, int(323.56 * GIB)),
+            ],
+            config={"quantization_config": {}},
+            baseModels={"relation": "quantized",
+                        "models": [{"id": "XiaomiMiMo/MiMo-V2.5"}]},
+        ))
+        assert report.is_quant is True
+
+    def test_self_declared_native_quant_counts(self):
+        """A repo declaring {"quant_method": "fp8"} with no container dtype,
+        no quant tag, and no lineage is still a quant."""
+        report = analyze_quant(_payload(
+            safetensors={"parameters": {"F8_E4M3": 306_655_000_000},
+                         "total": 306_655_000_000},
+            siblings=[
+                {"rfilename": "model.safetensors.index.json", "size": 100},
+                *_shards("model", 4, int(280 * GIB)),
+            ],
+            config={"quantization_config": {"quant_method": "fp8"}},
+        ))
+        assert report.is_quant is True
+
+
+# ---------------------------------------------------------------------------
+# §14.1a precondition 4 — measurable weights
+# ---------------------------------------------------------------------------
+
+class TestPrecondition4MeasurableWeights:
+    def test_gguf_only_repo_has_undefined_bpw(self):
+        """unsloth/*-GGUF has no safetensors block and relation=quantized, so
+        precondition 3 passes it into a None denominator."""
+        report = analyze_quant(_payload(
+            safetensors=None,
+            siblings=[{"rfilename": f"DeepSeek-V3.1-Q4_K_M-{i:05d}.gguf",
+                       "size": 40 * GIB} for i in range(3)],
+            baseModels={"relation": "quantized",
+                        "models": [{"id": "deepseek-ai/DeepSeek-V3.1"}]},
+        ))
+        assert report.bpw is None
+        assert report.bpw_suppressed
+        assert "no safetensors metadata" in report.bpw_suppressed
+
+    def test_no_weights_is_not_zero(self):
+        report = analyze_quant(_payload(
+            safetensors={"parameters": {"BF16": 1000}, "total": 1000},
+            siblings=[{"rfilename": "README.md", "size": 10}],
+        ))
+        assert report.bpw is None
+        assert report.bpw != 0
+
+
+# ---------------------------------------------------------------------------
+# §14.1b — presence, never truthiness
+# ---------------------------------------------------------------------------
+
+class TestConfigProjection:
+    """`expand=config` projects quantization_config through a field whitelist,
+    so present-but-emptied is a distinct signal from absent."""
+
+    def test_present_but_empty_is_the_gatekeeping_tell(self):
+        report = analyze_quant(_payload(config={"quantization_config": {}}))
+        assert report.quant_config_present is True
+        assert report.quant_config_empty is True
+
+    def test_absent_key_is_silent(self):
+        report = analyze_quant(_payload(config={"model_type": "llama"}))
+        assert report.quant_config_present is False
+        assert report.quant_config_empty is False
+
+    def test_populated_config_is_neither(self):
+        report = analyze_quant(_payload(
+            config={"quantization_config": {"bits": 4}},
+        ))
+        assert report.quant_config_present is True
+        assert report.quant_config_empty is False
+        assert report.declared_bits == 4
+
+    def test_empty_config_dict_does_not_crash(self):
+        """GGUF-only repos project `config` itself to {}."""
+        report = analyze_quant(_payload(config={}))
+        assert report.quant_config_present is False
+
+
+# ---------------------------------------------------------------------------
+# Fingerprint and format classification
+# ---------------------------------------------------------------------------
+
+class TestDtypeFingerprint:
+    def test_drops_trivial_housekeeping_buckets(self):
+        out = _format_dtype_fingerprint({
+            "U32": 77_182_000_000, "BF16": 19_345_000_000, "F32": 12_032,
+        })
+        assert out is not None
+        assert "U32" in out
+        assert "BF16" in out
+        assert "F32" not in out
+
+    def test_empty_returns_none(self):
+        assert _format_dtype_fingerprint({}) is None
+
+    def test_all_tiny_buckets_still_render(self):
+        """A repo whose every bucket is small must not render as nothing."""
+        assert _format_dtype_fingerprint({"F32": 10, "I64": 5}) is not None
+
+    def test_e8m0_scales_counted_in_both_spellings(self):
+        """MLX packs E8M0 scales into U8; a native release reports F8_E8M0.
+
+        Counting only U8 scores a preserved FP grid at 0.0 and calls it
+        all-affine, the opposite of the truth.
+        """
+        native = analyze_quant(_payload(
+            safetensors={
+                "parameters": {"I8": 141_734_000_000, "F8_E8M0": 8_859_000_000,
+                               "F8_E4M3": 6_023_000_000, "BF16": 1_415_000_000},
+                "total": 158_066_000_000,
+            },
+            siblings=[
+                {"rfilename": "model.safetensors.index.json", "size": 100},
+                *_shards("model", 46, int(148.66 * GIB)),
+            ],
+        ))
+        assert native.fp_grid is not None and native.fp_grid > 0.5
+        assert native.native_format is not None
+        assert "FP4-packed" in native.native_format
+        assert "FP8" in native.native_format
+
+
+class TestFamilyStem:
+    @pytest.mark.parametrize("repo,expected", [
+        ("inferencerlabs/MiMo-V2.5-LM-MLX-Q9", "MiMo-V2.5"),
+        ("dawncr0w/MiMo-V2.5-oQ4-MLX", "MiMo-V2.5"),
+        ("mlx-community/DeepSeek-V4-Flash-8bit", "DeepSeek-V4-Flash"),
+        ("unsloth/DeepSeek-V3.1-GGUF", "DeepSeek-V3.1"),
+        ("openai/gpt-oss-120b", "gpt-oss-120b"),
+    ])
+    def test_strips_stacked_quant_suffixes(self, repo, expected):
+        assert _family_stem(repo) == expected
+
+
+# ---------------------------------------------------------------------------
+# URL detection
+# ---------------------------------------------------------------------------
+
+class TestUrlDetection:
+    @pytest.mark.parametrize("url,kind", [
+        ("https://huggingface.co/openai/gpt-oss-120b", "model"),
+        ("https://huggingface.co/openai/gpt-oss-120b/tree/main", "tree"),
+        ("https://huggingface.co/openai/gpt-oss-120b/blob/main/config.json", "file"),
+        ("https://huggingface.co/openai/gpt-oss-120b/resolve/main/a.safetensors", "file"),
+        ("https://huggingface.co/openai/gpt-oss-120b/raw/main/README.md", "file"),
+        ("https://huggingface.co/mlx-community", "org"),
+        ("https://huggingface.co/datasets/rajpurkar/squad", "dataset"),
+        ("https://huggingface.co/spaces/gradio/hello", "space"),
+    ])
+    def test_kinds(self, url, kind):
+        match = _detect_hf_url(url)
+        assert match is not None
+        assert match.kind == kind
+
+    @pytest.mark.parametrize("url", [
+        "https://huggingface.co/models?search=mimo",
+        "https://huggingface.co/login",
+        "https://huggingface.co/",
+        "https://example.com/openai/gpt-oss-120b",
+    ])
+    def test_non_repo_urls_return_none(self, url):
+        """Hub feature paths must not parse as an org named "models"."""
+        assert _detect_hf_url(url) is None
+
+    def test_commit_url_carries_sha(self):
+        sha = "0123456789abcdef0123456789abcdef01234567"
+        match = _detect_hf_url(f"https://huggingface.co/o/m/commit/{sha}")
+        assert match is not None
+        assert match.kind == "commit"
+        assert match.sha == sha
+
+    def test_commit_sha_is_immutable(self):
+        assert is_hf_commit_sha("0123456789abcdef0123456789abcdef01234567")
+        assert not is_hf_commit_sha("main")
+
+    def test_unknown_repo_tab_falls_back_to_model(self):
+        match = _detect_hf_url("https://huggingface.co/o/m/discussions")
+        assert match is not None
+        assert match.kind == "model"
+        assert match.repo == "o/m"
+
+
+class TestQueryParsing:
+    def test_repo_at_revision(self):
+        assert _split_repo_rev("org/model@abc123") == ("org/model", "abc123")
+
+    def test_bare_repo_defaults_to_main(self):
+        assert _split_repo_rev("org/model") == ("org/model", "main")
+
+    def test_garbage_rejected(self):
+        assert _split_repo_rev("not a repo")[0] == ""
+
+    def test_file_path_split(self):
+        assert _split_repo_path("org/model/sub/config.json") == (
+            "org/model", "sub/config.json", "main",
+        )
+
+
+# ---------------------------------------------------------------------------
+# Rate limit parsing
+# ---------------------------------------------------------------------------
+
+class TestRateLimitParsing:
+    def test_parses_rfc_9651_structured_fields(self):
+        """The Hub does not send X-RateLimit-*; params trail a quoted bucket
+        name, so `int(header)` is not the parse."""
+        rl = _HFRateLimit.from_headers(httpx.Headers({
+            "ratelimit": '"api";r=495;t=140',
+            "ratelimit-policy": '"fixed window";"api";q=500;w=300',
+        }))
+        assert rl is not None
+        assert rl.bucket == "api"
+        assert rl.remaining == 495
+        assert rl.reset_seconds == 140
+        assert rl.quota == 500
+        assert rl.window == 300
+
+    def test_absent_header_returns_none(self):
+        assert _HFRateLimit.from_headers(httpx.Headers({})) is None
+
+    def test_malformed_header_does_not_raise(self):
+        rl = _HFRateLimit.from_headers(httpx.Headers({"ratelimit": "garbage"}))
+        assert rl is not None
+        assert rl.remaining is None
+
+
+# ---------------------------------------------------------------------------
+# HTTP behavior
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+class TestRequestErrors:
+    @respx.mock
+    async def test_401_is_honestly_ambiguous(self):
+        """Gated-invisible, private, and nonexistent are byte-identical 401s
+        when unauthenticated. Naming one of them would be a confident lie."""
+        respx.get("https://huggingface.co/api/models/x/y").mock(
+            return_value=httpx.Response(
+                401, json={"error": "Invalid username or password."},
+            ),
+        )
+        result = await _hf_request("/models/x/y", repo="x/y")
+        assert result.startswith("Error:")
+        assert "gated, private, or does not exist" in result
+
+    @respx.mock
+    async def test_400_surfaces_the_hub_error_body(self):
+        """The Hub enumerates valid `expand` tokens in its 400 body, which is
+        a live drift signal worth showing rather than swallowing."""
+        respx.get("https://huggingface.co/api/models/x/y").mock(
+            return_value=httpx.Response(
+                400, json={"error": '"expand" must be one of [author, config]'},
+            ),
+        )
+        result = await _hf_request("/models/x/y", repo="x/y")
+        assert '"expand" must be one of' in result
+
+    @respx.mock
+    async def test_5xx_retries_then_reports(self):
+        route = respx.get("https://huggingface.co/api/models/x/y").mock(
+            return_value=httpx.Response(503),
+        )
+        result = await _hf_request("/models/x/y", repo="x/y")
+        assert "503" in result
+        assert route.call_count > 1
+
+
+# ---------------------------------------------------------------------------
+# Tool surface
+# ---------------------------------------------------------------------------
+
+def test_fm_base_seeds_trust():
+    """Every action fences uploader-controlled content, so the advisory must
+    originate in one place."""
+    assert _fm_base("https://huggingface.co/o/m")["trust"] == _TRUST_ADVISORY
+
+
+@pytest.mark.asyncio
+class TestPageCachePopulation:
+    """The fast path must cache full content while returning a truncated view.
+
+    Without this the tool truncates, tells the caller to narrow with
+    ``section=`` / ``search=``, and then has nothing to narrow: the follow-up
+    re-enters the fast path, finds no entry, and returns the same truncated
+    text. The steering hint would loop back to itself.
+    """
+
+    @respx.mock
+    async def test_model_card_is_cached_in_full(self):
+        long_card = "# Title\n\n" + "\n\n".join(
+            f"## Section {i}\n\n" + ("body text " * 200) for i in range(12)
+        )
+        respx.get("https://huggingface.co/api/models/org/model").mock(
+            return_value=httpx.Response(200, json=_payload()),
+        )
+        respx.get(
+            "https://huggingface.co/org/model/raw/main/README.md",
+        ).mock(return_value=httpx.Response(200, text=long_card))
+
+        url = "https://huggingface.co/org/model"
+        out = await _hf_fast_path(url)
+        assert out is not None
+
+        entry = _page_cache.get(url)
+        assert entry is not None
+        # The returned view is truncated; the cached copy is not.
+        assert len(entry.markdown) > len(out)
+        assert "Section 11" in entry.markdown
+        assert "Section 11" not in out
+
+    @respx.mock
+    async def test_file_body_is_cached_and_sliceable(self):
+        weight_map = {
+            f"model.layers.{i}.mlp.experts.weight": "model-00001-of-00002.safetensors"
+            for i in range(400)
+        }
+        respx.get(
+            "https://huggingface.co/org/model/raw/main/model.safetensors.index.json",
+        ).mock(return_value=httpx.Response(
+            200, json={"metadata": {"total_size": 1000}, "weight_map": weight_map},
+        ))
+
+        url = "https://huggingface.co/org/model/blob/main/model.safetensors.index.json"
+        assert await _hf_fast_path(url) is not None
+        entry = _page_cache.get(url)
+        assert entry is not None
+        assert len(entry.slices) > 1
+
+    @respx.mock
+    async def test_card_and_file_share_an_eviction_group(self):
+        """A repo's card and its config should not outlive each other."""
+        respx.get("https://huggingface.co/api/models/org/model").mock(
+            return_value=httpx.Response(200, json=_payload()),
+        )
+        respx.get(
+            "https://huggingface.co/org/model/raw/main/README.md",
+        ).mock(return_value=httpx.Response(200, text="# Card\n\nbody " * 500))
+        respx.get(
+            "https://huggingface.co/org/model/raw/main/config.json",
+        ).mock(return_value=httpx.Response(200, json={"model_type": "llama"}))
+
+        card_url = "https://huggingface.co/org/model"
+        file_url = "https://huggingface.co/org/model/blob/main/config.json"
+        await _hf_fast_path(card_url)
+        await _hf_fast_path(file_url)
+
+        card_entry = _page_cache.get(card_url)
+        file_entry = _page_cache.get(file_url)
+        assert card_entry is not None and file_entry is not None
+        assert card_entry.group == "hf:org/model@main"
+        assert file_entry.group == card_entry.group
+
+    @respx.mock
+    async def test_oversize_file_is_rejected_before_caching(self):
+        """The size cap is the outer guard; nothing that large reaches the
+        splitter, and nothing is cached on the rejection path."""
+        respx.get(
+            "https://huggingface.co/org/model/raw/main/blob.txt",
+        ).mock(return_value=httpx.Response(200, text="x" * 2_000_000))
+
+        url = "https://huggingface.co/org/model/blob/main/blob.txt"
+        out = await _hf_fast_path(url)
+        assert out is not None
+        assert out.startswith("Error")
+        assert _page_cache.get(url) is None
+
+    @respx.mock
+    async def test_oversize_json_is_also_rejected(self):
+        """Regression: the cap must apply to the rendered form, not just the
+        text branch. Gating only `text` exempts every JSON file, and a
+        weight_map is exactly the JSON that runs to tens of MB."""
+        huge = {f"key_{i}": "v" * 100 for i in range(20_000)}
+        respx.get(
+            "https://huggingface.co/org/model/raw/main/big.json",
+        ).mock(return_value=httpx.Response(200, json=huge))
+
+        url = "https://huggingface.co/org/model/blob/main/big.json"
+        out = await _hf_fast_path(url)
+        assert out is not None
+        assert out.startswith("Error")
+        assert _page_cache.get(url) is None
+
+    @respx.mock
+    async def test_tool_path_without_cache_url_does_not_cache(self):
+        """Only the fetch-interception path has a URL worth keying on."""
+        respx.get("https://huggingface.co/api/models/org/model").mock(
+            return_value=httpx.Response(200, json=_payload()),
+        )
+        respx.get(
+            "https://huggingface.co/org/model/raw/main/README.md",
+        ).mock(return_value=httpx.Response(200, text="# Card\n\nbody"))
+        out = await huggingface("model", "org/model")
+        assert not out.startswith("Error")
+        assert _page_cache.get("https://huggingface.co/org/model") is None
+
+
+def test_presplit_failure_skips_cache():
+    """A single line over the presplit ceiling is the issue-#6 splitter DoS
+    vector; caching is skipped rather than routed into it.
+
+    Exercised directly because the file action's size cap (identical
+    threshold) rejects such content before it could ever reach the splitter.
+    The skip still has to be correct for any future caller that does not sit
+    behind that cap.
+    """
+    url = "https://huggingface.co/org/model/blob/main/x.txt"
+    _cache_file_body(url, "org/model", "x.txt", "main", "x.txt", "y" * 1_500_000)
+    assert _page_cache.get(url) is None
+
+
+@pytest.mark.asyncio
+class TestToolDispatch:
+    async def test_unknown_action_rejected(self):
+        out = await huggingface("frobnicate", "org/model")
+        assert out.startswith("Error: Unknown action")
+
+    async def test_dataset_url_declined_explicitly(self):
+        """A dataset answered by the model handler would be confidently wrong,
+        so v1 declines rather than guessing."""
+        out = await huggingface(
+            "model", "https://huggingface.co/datasets/rajpurkar/squad",
+        )
+        assert out.startswith("Error:")
+        assert "dataset" in out
+
+    @respx.mock
+    async def test_weight_file_is_never_downloaded(self):
+        """A .safetensors read returns the range-read recipe, not the payload."""
+        respx.get(
+            "https://huggingface.co/api/models/org/model",
+        ).mock(return_value=httpx.Response(200, json=_payload(
+            siblings=[{
+                "rfilename": "model-00001-of-00002.safetensors",
+                "size": 5 * GIB,
+                "lfs": {"sha256": "abc123"},
+            }],
+        )))
+        out = await huggingface(
+            "file", "org/model/model-00001-of-00002.safetensors",
+        )
+        assert "not transferred" in out
+        assert "Range: bytes=0-7" in out
+        assert "abc123" in out
+
+    @respx.mock
+    async def test_gated_repo_warns_with_the_enum(self):
+        """`gated` is tri-state; the distinction between instant click-through
+        and a human approval queue is the actionable part."""
+        respx.get("https://huggingface.co/api/models/meta/llama").mock(
+            return_value=httpx.Response(200, json=_payload(gated="manual")),
+        )
+        respx.get(
+            "https://huggingface.co/meta/llama/raw/main/README.md",
+        ).mock(return_value=httpx.Response(404))
+        out = await huggingface("model", "meta/llama")
+        assert "gated: manual" in out
+        assert "manual approval" in out
+
+    @respx.mock
+    async def test_bpw_suppression_reaches_frontmatter(self):
+        """A suppressed number is a correct output, so the envelope must say
+        why rather than silently omitting it."""
+        respx.get("https://huggingface.co/api/models/d/oq4").mock(
+            return_value=httpx.Response(200, json=_payload(
+                safetensors={
+                    "parameters": {"U32": 39_628_000_000, "BF16": 10_465_000_000},
+                    "total": 50_093_000_000,
+                },
+                siblings=[
+                    {"rfilename": "model.safetensors.index.json", "size": 100},
+                    *_shards("model", 30, int(167.12 * GIB)),
+                ],
+                config={"quantization_config": {"bits": 4}},
+            )),
+        )
+        respx.get(
+            "https://huggingface.co/d/oq4/raw/main/README.md",
+        ).mock(return_value=httpx.Response(404))
+        out = await huggingface("model", "d/oq4")
+        assert "effective bits-per-weight not reported" in out
+        assert "28." not in out.split("┌─ untrusted")[0]

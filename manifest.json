@@ -116,6 +116,10 @@
       "description": "Search and retrieve code, issues, and pull requests from GitHub"
     },
     {
+      "name": "huggingface",
+      "description": "Inspect HuggingFace Hub models: metadata, files, and quantization quality"
+    },
+    {
       "name": "ietf",
       "description": "Search and retrieve IETF RFCs, Internet-Drafts, and standards-track documents"
     },

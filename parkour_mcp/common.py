@@ -307,6 +307,7 @@ TOOL_NAMES: dict[str, dict[str, str]] = {
     "arxiv": {"code": "ArXiv", "desktop": "arxiv"},
     "research_shelf": {"code": "ResearchShelf", "desktop": "research_shelf"},
     "github": {"code": "GitHub", "desktop": "github"},
+    "huggingface": {"code": "HuggingFace", "desktop": "huggingface"},
     "ietf": {"code": "IETF", "desktop": "ietf"},
     "packages": {"code": "Packages", "desktop": "packages"},
     "discourse": {"code": "Discourse", "desktop": "discourse"},

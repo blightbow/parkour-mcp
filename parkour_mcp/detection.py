@@ -18,12 +18,20 @@ Deliberately NOT here:
   response-header check respectively), not from the URL string, so they have
   no pure predicate to host here.
 
+HuggingFace *is* here, and the contrast with GitHub is deliberate rather than
+accidental.  A Hub repo's gated / private / nonexistent status is a property of
+the API *response*, never of the URL string, and the Hub returns an identical
+401 for all three when unauthenticated — so there is no HF URL shape whose
+classification could consult a token even if it wanted to.  Detection stays
+pure; the token only ever affects the fetch.
+
 Fetch-ready URL *rewriting* tied to a specific endpoint stays with its handler
 (e.g. reddit's swap to ``oauth.reddit.com`` and ``.json`` suffixing); only the
 ``old.reddit.com`` normalisation that detection itself performs lives here.
 """
 
 import re
+from dataclasses import dataclass
 from enum import Enum
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
@@ -320,3 +328,128 @@ def _classify_reddit_url(url: str) -> RedditPageType:
     if _USER_RE.search(path):
         return RedditPageType.USER
     return RedditPageType.SUBREDDIT
+
+
+# ---------------------------------------------------------------------------
+# HuggingFace Hub
+# ---------------------------------------------------------------------------
+
+@dataclass
+class HFUrlMatch:
+    """Parsed components of a HuggingFace Hub URL.
+
+    *kind* is one of ``model``, ``tree``, ``file``, ``commit``, or ``org``.
+    ``dataset`` and ``space`` are recognised only so the caller can decline
+    them explicitly — v1 handles models, and silently treating a dataset URL
+    as a model repo would produce a confidently wrong answer.
+    """
+    kind: str
+    repo: str = ""          # "<org>/<name>" for repo kinds; "" for org
+    org: str = ""
+    rev: str = "main"
+    path: str | None = None
+    sha: str | None = None
+
+
+# Reserved first path segments that are Hub features, not orgs.  A URL like
+# /models?search=… or /login must never parse as an org named "models".
+_HF_RESERVED = frozenset({
+    "datasets", "spaces", "models", "docs", "blog", "learn", "papers",
+    "collections", "posts", "login", "join", "settings", "pricing",
+    "notifications", "new", "organizations", "chat", "tasks", "inference",
+    "api", "search", "welcome", "enterprise", "changelog", "terms-of-service",
+    "privacy", "content-guidelines", "code-of-conduct", "brand",
+})
+
+_HF_HOST_RE = re.compile(
+    r"^https?://(?:www\.)?huggingface\.co(/.*)?$", re.IGNORECASE,
+)
+
+# Repo sub-paths, applied to the remainder after "<org>/<name>/".
+_HF_TREE_RE = re.compile(r"^tree/([^/]+)(?:/(.*))?$")
+_HF_BLOB_RE = re.compile(r"^(?:blob|resolve|raw)/([^/]+)/(.+)$")
+_HF_COMMIT_RE = re.compile(r"^commit/([0-9a-f]{7,40})$", re.IGNORECASE)
+
+_HF_SHA_RE = re.compile(r"^[0-9a-f]{40}$", re.IGNORECASE)
+
+
+def is_hf_commit_sha(rev: str) -> bool:
+    """True when *rev* is a full 40-hex commit SHA.
+
+    Callers use this to decide cacheability: a commit-pinned revision is
+    immutable, so its metadata can be cached indefinitely, while ``main``
+    and other branch refs move under you.
+    """
+    return bool(_HF_SHA_RE.match(rev))
+
+
+def _detect_hf_url(url: str) -> HFUrlMatch | None:
+    """Parse a HuggingFace Hub URL into its components, or return None.
+
+    Pure string parsing — see the module docstring for why this is stateless
+    where the GitHub equivalent is not.
+
+    ``/resolve/`` (CDN raw) and ``/raw/`` (LFS pointer) collapse into the same
+    ``file`` kind as ``/blob/``: they differ in what bytes the *browser* gets,
+    but the tool answers all three from the same repo-file handler, and for
+    weight files it answers without transferring the payload at all.
+    """
+    host = _HF_HOST_RE.match(url.strip())
+    if not host:
+        return None
+
+    parsed = urlparse(url.strip())
+    segments = [s for s in parsed.path.split("/") if s]
+
+    if not segments:
+        return None
+
+    head = segments[0].lower()
+
+    # Non-model repo types: recognised, then declined by the caller.
+    if head in ("datasets", "spaces"):
+        if len(segments) >= 3:
+            repo = f"{segments[1]}/{segments[2]}"
+        elif len(segments) == 2:
+            repo = segments[1]
+        else:
+            return None
+        return HFUrlMatch(
+            kind="dataset" if head == "datasets" else "space",
+            repo=repo,
+            org=segments[1],
+        )
+
+    if head in _HF_RESERVED:
+        return None
+
+    # Bare /<org> — an org or user profile.
+    if len(segments) == 1:
+        return HFUrlMatch(kind="org", org=segments[0])
+
+    org, name = segments[0], segments[1]
+    repo = f"{org}/{name}"
+    rest = "/".join(segments[2:])
+
+    if not rest:
+        return HFUrlMatch(kind="model", repo=repo, org=org)
+
+    if m := _HF_COMMIT_RE.match(rest):
+        return HFUrlMatch(kind="commit", repo=repo, org=org, sha=m.group(1))
+
+    if m := _HF_TREE_RE.match(rest):
+        return HFUrlMatch(
+            kind="tree", repo=repo, org=org,
+            rev=m.group(1), path=m.group(2) or "",
+        )
+
+    if m := _HF_BLOB_RE.match(rest):
+        return HFUrlMatch(
+            kind="file", repo=repo, org=org,
+            rev=m.group(1), path=m.group(2),
+        )
+
+    # Some other repo tab (discussions, settings, …) — the repo itself is
+    # still the useful answer, so fall back to the model beta rather than
+    # dropping to a generic scrape of a JS-rendered page.
+    return HFUrlMatch(kind="model", repo=repo, org=org)
