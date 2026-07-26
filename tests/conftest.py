@@ -1,6 +1,7 @@
 """Shared fixtures for parkour-mcp tests."""
 
 import sys
+import time
 
 import pytest
 
@@ -102,6 +103,27 @@ def _disable_reddit_rate_limit(monkeypatch):
     monkeypatch.setattr(_reddit_mod._reddit_limiter, "min_interval", 0.0)
 
 
+@pytest.fixture(autouse=True)
+def _reddit_oauth_state(monkeypatch):
+    """Reset Reddit OAuth module state and seed a valid fake token.
+
+    Module-level token state would otherwise leak across tests.  Seeding a
+    far-future token lets content-fetch and fast-path tests skip mocking the
+    token mint; auth-flow tests invalidate it (set ``_oauth_expires_at = 0``)
+    to exercise minting.  ``monkeypatch.setattr`` auto-reverts after the test.
+    """
+    monkeypatch.setattr(_reddit_mod, "_oauth_token", "test-token")
+    monkeypatch.setattr(_reddit_mod, "_oauth_token_headers", {})
+    monkeypatch.setattr(_reddit_mod, "_oauth_expires_at", time.monotonic() + 86400)
+    monkeypatch.setattr(_reddit_mod, "_oauth_backend", "mobile")
+    yield
+    # Cancel any refresh daemon a test may have started.
+    task = getattr(_reddit_mod, "_refresh_task", None)
+    if task is not None:
+        task.cancel()
+        monkeypatch.setattr(_reddit_mod, "_refresh_task", None)
+
+
 class FakeResponse:
     """Stand-in for curl_cffi.requests.Response used in tests.
 
@@ -128,11 +150,19 @@ class FakeResponse:
 
 
 class _FakeAsyncSession:
-    """URL-keyed mock for curl_cffi's AsyncSession — respx-like semantics."""
+    """URL-keyed mock for curl_cffi's AsyncSession — respx-like semantics.
+
+    Each URL maps to a queue of responses (or exceptions).  A single
+    registered response repeats for every call; multiple registrations are
+    consumed in order, the last one repeating once the queue drains.  This
+    lets a test mock a 401-then-200 sequence on the same URL to exercise the
+    Reddit OAuth refresh-and-retry path.
+    """
 
     def __init__(self):
-        self._get: dict[str, object] = {}
-        self._head: dict[str, object] = {}
+        self._get: dict[str, list] = {}
+        self._head: dict[str, list] = {}
+        self._post: dict[str, list] = {}
 
     async def __aenter__(self):
         return self
@@ -147,23 +177,38 @@ class _FakeAsyncSession:
         # HEAD defaults to 200 with url-as-final to support redirect-follow tests
         return self._dispatch("HEAD", self._head, url, default=FakeResponse(200, url=url))
 
+    async def post(self, url, **_):
+        return self._dispatch("POST", self._post, url)
+
     @staticmethod
     def _dispatch(method, table, url, default=None):
-        v = table.get(url, default)
-        if v is None:
+        queue = table.get(url)
+        if not queue:
+            if default is not None:
+                return default
             raise RuntimeError(f"No mock registered for {method} {url}")
-        if isinstance(v, BaseException):
-            raise v
-        return v
+        item = queue.pop(0) if len(queue) > 1 else queue[0]
+        if isinstance(item, BaseException):
+            raise item
+        return item
 
     def mock_get(self, url, *, status=200, json_data=None, headers=None, final_url=None):
-        self._get[url] = FakeResponse(status, json_data=json_data, headers=headers, url=final_url or url)
+        self._get.setdefault(url, []).append(
+            FakeResponse(status, json_data=json_data, headers=headers, url=final_url or url)
+        )
 
     def mock_head(self, url, *, status=200, headers=None, final_url=None):
-        self._head[url] = FakeResponse(status, headers=headers, url=final_url or url)
+        self._head.setdefault(url, []).append(
+            FakeResponse(status, headers=headers, url=final_url or url)
+        )
+
+    def mock_post(self, url, *, status=200, json_data=None, headers=None):
+        self._post.setdefault(url, []).append(
+            FakeResponse(status, json_data=json_data, headers=headers, url=url)
+        )
 
     def raise_on_get(self, url, exc):
-        self._get[url] = exc
+        self._get.setdefault(url, []).append(exc)
 
 
 @pytest.fixture

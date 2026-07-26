@@ -11,18 +11,28 @@ the codebase.  Authentication is optional: unauthenticated requests get
 
 import asyncio
 import base64
+import contextlib
+import importlib
 import logging
 import re
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated, Any, Awaitable, Callable, Optional
+from typing import Annotated, Any, Optional
+from collections.abc import Awaitable, Callable
 from urllib.parse import quote as _urlquote_raw
 
 import httpx
 from pydantic import Field
 
-from .common import _API_USER_AGENT, _FETCH_HEADERS, RateLimiter, tool_name
+from .common import (
+    _API_USER_AGENT,
+    _FETCH_HEADERS,
+    _LANGUAGE_MAP,
+    RateLimiter,
+    load_credential,
+    tool_name,
+)
 from .markdown import (
     FMEntries,
     _append_frontmatter_entry,
@@ -33,6 +43,7 @@ from .markdown import (
 )
 from .scorecard import fetch_overall as _fetch_scorecard_overall
 from .scorecard import format_score as _format_scorecard
+from datetime import UTC, datetime
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +60,7 @@ GITHUB_CONFIG_PATH = Path.home() / ".config" / "parkour" / "github_token"
 _GITHUB_API_VERSION = "2022-11-28"
 
 _NO_TOKEN_MSG = (
-    "Rate limited. Unauthenticated GitHub API allows only 60 requests/hour.\n"
+    "Rate limited. Unauthenticated GitHub API allows only 60 requests/hour.\n"  # noqa: S105  # not a secret: user-facing rate-limit message
     "Set GITHUB_TOKEN env var or create ~/.config/parkour/github_token "
     "with a personal access token.\n"
     "No special scopes needed for public repos. "
@@ -79,15 +90,8 @@ def _get_github_token() -> str:
     global _github_token_cache
     if _github_token_cache is not None:
         return _github_token_cache
-    from .common import clean_env
-    if key := clean_env("GITHUB_TOKEN"):
-        _github_token_cache = key
-        return key
-    if GITHUB_CONFIG_PATH.exists():
-        _github_token_cache = GITHUB_CONFIG_PATH.read_text().strip()
-        return _github_token_cache
-    _github_token_cache = ""
-    return ""
+    _github_token_cache = load_credential("GITHUB_TOKEN", GITHUB_CONFIG_PATH)
+    return _github_token_cache
 
 
 def _github_headers(accept: str = "application/vnd.github.v3+json") -> dict:
@@ -143,7 +147,7 @@ _RETRY_BACKOFF = 1.0  # seconds; constant backoff (gh CLI pattern)
 async def _github_request(
     method: str,
     path: str,
-    params: Optional[dict] = None,
+    params: dict | None = None,
     accept: str = "application/vnd.github.v3+json",
 ) -> dict | list | str:
     """Core HTTP call to the GitHub API.
@@ -245,10 +249,10 @@ class GitHubUrlMatch:
     kind: str  # "blob", "tree", "issue", "pull", "discussion", "repo", "gist", "wiki", "commit", "compare"
     owner: str = ""
     repo: str = ""
-    number: Optional[int] = None
-    ref: Optional[str] = None
-    path: Optional[str] = None
-    gist_id: Optional[str] = None
+    number: int | None = None
+    ref: str | None = None
+    path: str | None = None
+    gist_id: str | None = None
 
 
 # Main github.com URL — captures owner, repo, and remaining path
@@ -286,7 +290,7 @@ _ORG_RE = re.compile(
 )
 
 
-def _detect_github_url(url: str) -> Optional[GitHubUrlMatch]:
+def _detect_github_url(url: str) -> GitHubUrlMatch | None:
     """Parse a GitHub URL into its components, or return None.
 
     Supports github.com repo URLs (blob, tree, issues, pull, discussions,
@@ -430,7 +434,7 @@ def _detect_github_url(url: str) -> Optional[GitHubUrlMatch]:
 # Rate limit warning for frontmatter
 # ---------------------------------------------------------------------------
 
-def _rate_limit_warning() -> Optional[str]:
+def _rate_limit_warning() -> str | None:
     """Return a warning string if rate limit is low and unauthenticated."""
     if _get_github_token():
         return None
@@ -551,7 +555,7 @@ class CodeDefinition:
     start_line: int
     end_line: int
     depth: int      # nesting level (0 = top-level)
-    docstring: Optional[str] = None  # first line only
+    docstring: str | None = None  # first line only
 
 
 def _get_code_splitter(ext: str):
@@ -560,8 +564,7 @@ def _get_code_splitter(ext: str):
     Lazily imports the tree-sitter grammar package. Returns None if the
     grammar is not installed.
     """
-    from semantic_text_splitter import CodeSplitter
-    import importlib
+    from semantic_text_splitter import CodeSplitter  # noqa: PLC0415  # heavy optional dep
 
     grammar_info = _EXT_TO_GRAMMAR.get(ext)
     if not grammar_info:
@@ -594,7 +597,7 @@ def _extract_name_text(node, source: bytes) -> str:
     return source[node.start_byte:node.end_byte].decode(errors="replace")
 
 
-def _extract_python_docstring(node, source: bytes) -> Optional[str]:
+def _extract_python_docstring(node, source: bytes) -> str | None:
     """Extract first line of a Python docstring from a function/class body."""
     body = node.child_by_field_name("body")
     if not body:
@@ -611,7 +614,7 @@ def _extract_python_docstring(node, source: bytes) -> Optional[str]:
     return None
 
 
-def _extract_preceding_comment(node, source: bytes) -> Optional[str]:
+def _extract_preceding_comment(node, source: bytes) -> str | None:
     """Extract first line of a doc comment preceding a definition node."""
     # Walk backward through siblings to find a comment
     prev = node.prev_sibling
@@ -639,15 +642,13 @@ def extract_code_definitions(
     Uses tree-sitter for AST parsing. Returns an empty list if the grammar
     for the given file extension is not installed.
     """
-    import importlib
-
     grammar_info = _EXT_TO_GRAMMAR.get(ext)
     if not grammar_info:
         return []
 
     module_name, func_name = grammar_info
     try:
-        import tree_sitter
+        import tree_sitter  # noqa: PLC0415  # heavy optional dep
         mod = importlib.import_module(module_name)
         lang_fn = getattr(mod, func_name)
         lang = tree_sitter.Language(lang_fn())
@@ -659,7 +660,7 @@ def extract_code_definitions(
     tree = parser.parse(source_bytes)
 
     def_types = _DEFINITION_TYPES.get(module_name, [])
-    type_map = {node_type: name_field for node_type, name_field in def_types}
+    type_map = dict(def_types)
     uses_body_docstring = module_name in _DOC_COMMENT_GRAMMARS
     uses_preceding_comment = module_name in _PRECEDING_COMMENT_GRAMMARS
 
@@ -705,7 +706,7 @@ def extract_code_definitions(
     return results
 
 
-def _sectionize_code(source: str, ext: str) -> Optional[list[tuple[int, str]]]:
+def _sectionize_code(source: str, ext: str) -> list[tuple[int, str]] | None:
     """Split source code at AST boundaries for presplit cache storage.
 
     Returns (char_offset, chunk_text) tuples suitable for
@@ -742,7 +743,7 @@ def _plaintext_presplit(
     source: str,
     chunk_chars: int = _PLAINTEXT_CHUNK_CHARS,
     max_line_chars: int = _MAX_PLAINTEXT_LINE_CHARS,
-) -> Optional[list[tuple[int, str]]]:
+) -> list[tuple[int, str]] | None:
     """Line-oriented presplit for plaintext blobs with no tree-sitter grammar.
 
     Groups consecutive lines into chunks up to ``chunk_chars`` in length,
@@ -788,7 +789,7 @@ def _plaintext_presplit(
     return chunks
 
 
-def _blob_presplit(source: str, ext: str) -> Optional[list[tuple[int, str]]]:
+def _blob_presplit(source: str, ext: str) -> list[tuple[int, str]] | None:
     """Presplit a GitHub blob for ``_page_cache.store(presplit=...)``.
 
     Tries AST-aware splitting via ``_sectionize_code`` first.  Falls back to
@@ -888,10 +889,9 @@ def _parse_owner_repo_path(query: str) -> tuple[str, str, str] | str:
 
 def _fmt_relative_time(iso_date: str) -> str:
     """Format an ISO 8601 timestamp as a relative time string."""
-    from datetime import datetime, timezone
     try:
         dt = datetime.fromisoformat(iso_date.replace("Z", "+00:00"))
-        delta = datetime.now(timezone.utc) - dt
+        delta = datetime.now(UTC) - dt
         seconds = int(delta.total_seconds())
         if seconds < 60:
             return "just now"
@@ -937,8 +937,12 @@ def _fm_base(source: str, api: str = "GitHub") -> FMEntries:
     Returns ``FMEntries`` so multi-contributor keys downstream compose
     cleanly — any caller that later appends a ``hint`` or ``warning``
     stacks on top of the rate-limit warning we seed here.
+
+    Seeds ``trust`` because every GitHub tool action fences untrusted
+    repository content (code, READMEs, issue/PR bodies, search snippets);
+    centralizing it here is the single source of that invariant.
     """
-    entries = FMEntries({"source": source, "api": api})
+    entries = FMEntries({"source": source, "api": api, "trust": _TRUST_ADVISORY})
     entries.append("warning", _rate_limit_warning())
     return entries
 
@@ -953,7 +957,7 @@ _RE_REPO_QUAL = re.compile(r'repo:(?:"([^"]+)"|(\S+))')
 _RE_LABEL_QUAL = re.compile(r'label:(?:"([^"]+)"|(\S+))')
 
 
-async def _label_hint_for_empty_search(query: str) -> Optional[str]:
+async def _label_hint_for_empty_search(query: str) -> str | None:
     """When an issue search returns 0 results and uses label: + repo:
     qualifiers, fetch the repo's labels and return a hint string listing
     them.  Returns None if the qualifiers are absent or the label fetch
@@ -1203,15 +1207,15 @@ async def _cached_repo_fetch(
 
 async def _fetch_citation_cff(
     owner: str, repo: str, default_branch: str,
-) -> Optional[dict]:
+) -> dict | None:
     """Fetch and parse CITATION.cff from the repo root. Returns parsed YAML or None."""
-    import yaml
+    import yaml  # noqa: PLC0415  # optional dep, lazy by convention
 
     raw_url = (
         f"https://raw.githubusercontent.com/{owner}/{repo}/{default_branch}/CITATION.cff"
     )
 
-    async def _do_fetch() -> Optional[dict]:
+    async def _do_fetch() -> dict | None:
         headers = {"User-Agent": _API_USER_AGENT}
         token = _get_github_token()
         if token:
@@ -1238,7 +1242,7 @@ _ISSUE_TEMPLATE_DIR = ".github/ISSUE_TEMPLATE"
 
 async def _fetch_issue_template_listing(
     owner: str, repo: str,
-) -> Optional[list[dict]]:
+) -> list[dict] | None:
     """List entries in ``.github/ISSUE_TEMPLATE/`` on the default branch.
 
     Returns the contents-API list (one dict per file) if the directory
@@ -1247,7 +1251,7 @@ async def _fetch_issue_template_listing(
     """
     api_path = f"/repos/{owner}/{repo}/contents/{_ISSUE_TEMPLATE_DIR}"
 
-    async def _do_fetch() -> Optional[list[dict]]:
+    async def _do_fetch() -> list[dict] | None:
         result = await _github_request("GET", api_path)
         if isinstance(result, list):
             return result
@@ -1258,7 +1262,7 @@ async def _fetch_issue_template_listing(
 
 async def _fetch_issue_form_yaml(
     owner: str, repo: str, filename: str,
-) -> Optional[dict]:
+) -> dict | None:
     """Fetch and parse an individual issue form YAML via contents API.
 
     Returns the parsed header (name, description, title, labels,
@@ -1266,13 +1270,13 @@ async def _fetch_issue_form_yaml(
     entries are the form's field definitions, too verbose for advisory
     output. Returns ``None`` on any failure. Cached.
     """
-    import yaml
+    import yaml  # noqa: PLC0415  # optional dep, lazy by convention
 
     api_path = (
         f"/repos/{owner}/{repo}/contents/{_ISSUE_TEMPLATE_DIR}/{filename}"
     )
 
-    async def _do_fetch() -> Optional[dict]:
+    async def _do_fetch() -> dict | None:
         result = await _github_request("GET", api_path)
         if not isinstance(result, dict):
             return None
@@ -1296,7 +1300,7 @@ async def _fetch_issue_form_yaml(
 
 async def _fetch_issue_template_config_yml(
     owner: str, repo: str,
-) -> Optional[dict]:
+) -> dict | None:
     """Fetch and parse ``.github/ISSUE_TEMPLATE/config.yml`` via contents API.
 
     Uses the repo's default branch implicitly (contents API resolves it
@@ -1304,11 +1308,11 @@ async def _fetch_issue_template_config_yml(
     Returns the parsed YAML dict, or ``None`` on any failure (404, parse
     error, network error). Cached.
     """
-    import yaml
+    import yaml  # noqa: PLC0415  # optional dep, lazy by convention
 
     api_path = f"/repos/{owner}/{repo}/contents/{_ISSUE_TEMPLATE_DIR}/config.yml"
 
-    async def _do_fetch() -> Optional[dict]:
+    async def _do_fetch() -> dict | None:
         result = await _github_request("GET", api_path)
         if not isinstance(result, dict):
             return None
@@ -1329,7 +1333,7 @@ async def _fetch_issue_template_config_yml(
 
 async def _probe_issue_templates(
     owner: str, repo: str,
-) -> Optional[dict]:
+) -> dict | None:
     """Probe a repo's ``.github/ISSUE_TEMPLATE/`` configuration.
 
     Returns a structured dict describing custom issue forms, markdown
@@ -1355,7 +1359,7 @@ async def _probe_issue_templates(
         name = entry.get("name")
         if not isinstance(name, str):
             continue
-        if name == "config.yml" or name == "config.yaml":
+        if name in {"config.yml", "config.yaml"}:
             has_config = True
             continue
         lower = name.lower()
@@ -1378,8 +1382,8 @@ async def _probe_issue_templates(
     config = results[0]
     form_details_raw = results[1:]
 
-    blank_issues_enabled: Optional[bool] = None
-    contact_links: Optional[list[dict]] = None
+    blank_issues_enabled: bool | None = None
+    contact_links: list[dict] | None = None
     if isinstance(config, dict):
         raw_flag = config.get("blank_issues_enabled")
         if isinstance(raw_flag, bool):
@@ -1391,7 +1395,7 @@ async def _probe_issue_templates(
     # Build forms_detail: {filename: parsed_header_dict_or_None}.
     # None for forms that failed to parse — the formatter degrades
     # gracefully to filename-only for those.
-    forms_detail: dict[str, Optional[dict]] = {}
+    forms_detail: dict[str, dict | None] = {}
     for form_name, detail in zip(forms, form_details_raw):
         forms_detail[form_name] = detail if isinstance(detail, dict) else None
 
@@ -1414,7 +1418,7 @@ async def _probe_issue_templates(
 
 async def _noop_none() -> None:
     """Awaitable that returns None. Used as a no-op slot in gather()."""
-    return None
+    return
 
 
 def _build_issue_template_hint(owner: str, repo: str) -> str:
@@ -1435,7 +1439,7 @@ def _build_issue_template_hint(owner: str, repo: str) -> str:
 
 async def _maybe_issue_template_hint(
     owner: str, repo: str,
-) -> Optional[str]:
+) -> str | None:
     """Return the steering hint if the repo has a custom submission flow.
 
     Wraps the cached directory-listing fetch. Returns ``None`` when the
@@ -1449,8 +1453,8 @@ async def _maybe_issue_template_hint(
 
 
 def _build_issue_template_note(
-    probe: Optional[dict], owner: str, repo: str,
-) -> Optional[str]:
+    probe: dict | None, owner: str, repo: str,
+) -> str | None:
     """Compose the frontmatter ``note:`` advisory from structural signals.
 
     Uses counts, boolean flags, and a server-built chooser URL only —
@@ -1492,7 +1496,7 @@ def _build_issue_template_note(
     )
 
 
-def _format_issue_submission_section(probe: Optional[dict]) -> Optional[str]:
+def _format_issue_submission_section(probe: dict | None) -> str | None:
     """Render the fenced-body ``## Issue Submission`` section.
 
     Contributor-supplied strings (form filenames, contact link names,
@@ -1575,7 +1579,7 @@ def _format_issue_submission_section(probe: Optional[dict]) -> Optional[str]:
     return "\n".join(lines)
 
 
-def _parse_citation_cff(cff: dict) -> tuple[Optional[str], str, list[str], Optional[int]]:
+def _parse_citation_cff(cff: dict) -> tuple[str | None, str, list[str], int | None]:
     """Extract DOI, title, authors, and year from a CITATION.cff dict.
 
     Prefers ``preferred-citation`` when present (it references the
@@ -1607,17 +1611,13 @@ def _parse_citation_cff(cff: dict) -> tuple[Optional[str], str, list[str], Optio
     year = None
     date_released = source.get("date-released") or cff.get("date-released")
     if date_released:
-        try:
+        with contextlib.suppress(ValueError, TypeError):
             year = int(str(date_released)[:4])
-        except (ValueError, TypeError):
-            pass
     if year is None:
         raw_year = source.get("year") or cff.get("year")
         if raw_year:
-            try:
+            with contextlib.suppress(ValueError, TypeError):
                 year = int(raw_year)
-            except (ValueError, TypeError):
-                pass
 
     return doi, title, authors, year
 
@@ -1628,8 +1628,8 @@ async def _track_repo_on_shelf(
     full_name: str,
     description: str,
     repo_data: dict,
-    citation_cff: Optional[dict],
-) -> Optional[str]:
+    citation_cff: dict | None,
+) -> str | None:
     """Track a GitHub repo on the research shelf and return the status line.
 
     If CITATION.cff is present, extracts DOI + metadata from it.
@@ -1637,7 +1637,7 @@ async def _track_repo_on_shelf(
     Returns the compact shelf status line for the frontmatter ``shelf:``
     field, or None on any error.
     """
-    from .shelf import _track_on_shelf, CitationRecord
+    from .shelf import _track_on_shelf, CitationRecord  # noqa: PLC0415  # intra-package, lazy to avoid import cycle
 
     if citation_cff:
         doi, title, authors, year = _parse_citation_cff(citation_cff)
@@ -1660,10 +1660,8 @@ async def _track_repo_on_shelf(
     created = repo_data.get("created_at", "")
     year = None
     if len(created) >= 4:
-        try:
+        with contextlib.suppress(ValueError, TypeError):
             year = int(created[:4])
-        except (ValueError, TypeError):
-            pass
 
     result = await _track_on_shelf(CitationRecord(
         doi=f"github:{full_name}",
@@ -1731,7 +1729,9 @@ async def _action_repo(query: str) -> str:
             try:
                 readme_text = base64.b64decode(content).decode("utf-8")
             except Exception:
-                pass
+                logger.debug(
+                    "README base64 decode failed for %s/%s", owner, repo, exc_info=True,
+                )
     elif isinstance(readme_result, str) and not readme_result.startswith("Error"):
         # Raw text response (shouldn't happen with default accept, but handle it)
         readme_text = readme_result
@@ -1798,7 +1798,6 @@ async def _action_issue_templates(query: str) -> str:
     chooser_url = f"https://github.com/{owner}/{repo}/issues/new/choose"
     fm_entries = _fm_base(chooser_url)
     fm_entries.append("note", _build_issue_template_note(probe, owner, repo))
-    fm_entries["trust"] = _TRUST_ADVISORY
 
     body = _format_issue_submission_section(probe) or ""
     fm = _build_frontmatter(fm_entries)
@@ -1810,7 +1809,7 @@ async def _action_issue_templates(query: str) -> str:
 # ---------------------------------------------------------------------------
 
 async def _action_tree(
-    query: str, ref: Optional[str],
+    query: str, ref: str | None,
 ) -> str:
     """Fetch directory listing from a repository."""
     parsed = _parse_owner_repo_path(query)
@@ -1962,7 +1961,6 @@ async def _action_issue(
 
     fm_entries = _fm_base(f"https://github.com/{owner}/{repo}/issues/{number}")
     fm_entries.update(extra_fm)
-    fm_entries["trust"] = _TRUST_ADVISORY
 
     content, trunc_hint = _apply_semantic_truncation(raw_md, 5000)
     if trunc_hint:
@@ -2131,7 +2129,6 @@ async def _action_pull_request(
 
     fm_entries = _fm_base(f"https://github.com/{owner}/{repo}/pull/{number}")
     fm_entries.update(extra_fm)
-    fm_entries["trust"] = _TRUST_ADVISORY
 
     content, trunc_hint = _apply_semantic_truncation(raw_md, 5000)
     if trunc_hint:
@@ -2150,7 +2147,7 @@ async def _action_pull_request(
 # ---------------------------------------------------------------------------
 
 async def _action_file(
-    query: str, ref: Optional[str], max_tokens: int = 5000,
+    query: str, ref: str | None, max_tokens: int = 5000,
 ) -> str:
     """Fetch raw file content from a repository."""
     parsed = _parse_owner_repo_path(query)
@@ -2203,7 +2200,6 @@ async def _action_file(
 
     # Detect language from extension for code fencing
     ext = Path(path).suffix.lower() if "." in path else ""
-    from .common import _LANGUAGE_MAP
     lang = _LANGUAGE_MAP.get(ext, "")
 
     # Truncate if needed
@@ -2265,7 +2261,7 @@ async def github(
             "For repo and issue_templates: 'owner/repo' (e.g. 'facebook/react')."
         ),
     )],
-    ref: Annotated[Optional[str], Field(
+    ref: Annotated[str | None, Field(
         description="Git ref (branch, tag, or commit SHA) for file/tree actions. Defaults to the repo's default branch.",
     )] = None,
     limit: Annotated[int, Field(

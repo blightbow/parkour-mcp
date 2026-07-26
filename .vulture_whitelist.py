@@ -24,3 +24,9 @@ _.convert_img  # parkour_mcp/markdown.py:14
 # by ~39 sites across the test suite (test_shelf.py, test_doi.py, etc.).
 # Vulture is scanning parkour_mcp/ only, so it doesn't see the test usage.
 _reset_shelf  # parkour_mcp/shelf.py:541
+
+# FMEntries.tip_ledger class attribute — read by betamatter's
+# build_frontmatter and FMEntries.set_tip via getattr(entries,
+# "tip_ledger", ...). Vulture scans parkour_mcp/ only and cannot see
+# the cross-package getattr consumption.
+_.tip_ledger  # parkour_mcp/markdown.py#FMEntries

@@ -10,14 +10,13 @@ Parkour is a content exploration toolkit that helps LLMs surface high signal, un
 
 API integrations:
 - Kagi Search
-- Kagi Summarize
 - Semantic Scholar
 - arXiv
 - IETF
 - deps.dev (library package lookups)
 - GitHub
 - MediaWiki (Wikipedia and other MediaWiki sites — dedicated tool with footnote and inline-citation resolution)
-- Reddit (old.reddit.com JSON API)
+- Reddit (userless OAuth API, oauth.reddit.com)
 - Discourse (header-detected, raw markdown API)
 
 ## Why Parkour?
@@ -43,7 +42,7 @@ Parkour also intercepts requests for content from websites with robust first-par
 | Semantic Scholar | `semanticscholar.org/paper/` | S2 Graph API (bypasses CAPTCHA) |
 | DOI | `doi.org/10.*` URLs | Content negotiation (CrossRef/DataCite metadata) |
 | GitHub | `github.com/*` | REST API (bypasses JS SPA) |
-| Reddit | `reddit.com`, `redd.it` | `old.reddit.com` `.json` endpoint (bypasses login wall) |
+| Reddit | `reddit.com`, `redd.it` | Userless OAuth API (`oauth.reddit.com`, anonymous token, no account or API key) |
 | Discourse | `x-discourse-route` response header | JSON API with raw author markdown |
 | IETF | `rfc-editor.org/rfc/rfcN[.json]`, `datatracker.ietf.org` | RFC Editor JSON / Datatracker REST. `.html`/`.txt`/`.xml` body URLs deliberately fall through to the generic HTML pipeline so `section=` / `search=` work over the rendered RFC. |
 
@@ -311,8 +310,8 @@ The `--profile` argument adjusts tool names and descriptions for the target clie
 
 | Profile | Target | Tool Names |
 |---------|--------|------------|
-| `desktop` (default) | Claude Desktop | `kagi_search`, `kagi_summarize`, `web_fetch_incisive`, `web_fetch_sections`, `semantic_scholar`, `arxiv`, `github`, `ietf`, `packages`, `discourse`, `mediawiki` |
-| `code` | Claude Code | `KagiSearch`, `KagiSummarize`, `WebFetchIncisive`, `WebFetchSections`, `SemanticScholar`, `ArXiv`, `GitHub`, `IETF`, `Packages`, `Discourse`, `MediaWiki` |
+| `desktop` (default) | Claude Desktop | `kagi_search`, `web_fetch_incisive`, `web_fetch_sections`, `semantic_scholar`, `arxiv`, `github`, `ietf`, `packages`, `discourse`, `mediawiki` |
+| `code` | Claude Code | `KagiSearch`, `WebFetchIncisive`, `WebFetchSections`, `SemanticScholar`, `ArXiv`, `GitHub`, `IETF`, `Packages`, `Discourse`, `MediaWiki` |
 
 The `desktop` profile (snake_case) is the default as it aligns with MCP ecosystem conventions. Claude Code's PascalCase naming is the exception, not the norm.
 
@@ -337,7 +336,6 @@ cog.outl(render_tool_table())
 | packages           | Packages                | Inspect software packages across 7 language ecosystems via deps.dev (5 actions: package, version, dependencies, project, advisory) |
 | discourse          | Discourse               | Search and browse Discourse forum topics (3 actions: topic, search, latest) — auto-detected via response headers |
 | mediawiki          | MediaWiki               | Search and retrieve Wikipedia / MediaWiki articles, with native footnote and inline-citation resolution (3 actions: page, search, references). First tool to use the split `title=` / `query=` parameter convention |
-| kagi_summarize     | KagiSummarize           | Summarize URLs or text (supports PDFs, YouTube, audio) |
 <!-- [[[end]]] -->
 
 For detailed capabilities, worked examples, and integration-specific behavior, see the [Guide](docs/guide.md).
@@ -562,15 +560,9 @@ Kagi is optimized against SEO pollution and a natural fit for research needs. If
 
 Kagi's search API is currently in closed beta and access is granted on an individual basis. The process is simple, send an e-mail and they will enable your use of the search API. https://help.kagi.com/kagi/api/search.html
 
-> Why is the kagi_summarize tool refusing my request? I have money in my API wallet.
+> Where is the kagi_summarize tool? I used to be able to call it.
 
-The MCP server automatically locks out the kagi_summarize tool if your balance dips below $1 USD. This is a safeguard against having your search functionality locked out by expensive kagi_summarize calls.
-
-The flag is stored internally and persists until a kagi_search call successfully executes and observes that the balance has gone above $1 again. Restarting the MCP server will also clear the flag.
-
-> My agent developed an addiction to kagi_summarize and drank my entire API balance in one sitting!
-
-You probably shouldn't have auto-approved that tool. Sorry, we can't help.
+It is temporarily unregistered while we wait for Kagi to ship `/summarize` on the v1 API. The v0 endpoint that backed it is being retired, and there is no v1 counterpart yet. The MCP server will re-register the tool once the v1 endpoint is available.
 
 > Where is the Semantic Scholar tool? I don't see it in my tool list.
 

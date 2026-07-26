@@ -4,13 +4,14 @@ import asyncio
 import logging
 import re
 from pathlib import Path
-from typing import Annotated, Optional
+from typing import Annotated
 
 from pydantic import Field
 
 import httpx
 
-from .common import _API_HEADERS, RateLimiter, tool_name
+from .common import _API_HEADERS, RateLimiter, load_credential, tool_name
+from .detection import _detect_s2_url
 from .markdown import _build_frontmatter
 
 logger = logging.getLogger(__name__)
@@ -25,17 +26,23 @@ _s2_limiter = RateLimiter(1.0)
 S2_BASE_URL = "https://api.semanticscholar.org/graph/v1"
 S2_CONFIG_PATH = Path.home() / ".config" / "parkour" / "s2_api_key"
 
-# Matches semanticscholar.org/paper/ URLs, captures 40-char hex paper ID
-S2_URL_RE = re.compile(
-    r'https?://(?:www\.)?semanticscholar\.org/paper/(?:[^/]+/)?([0-9a-f]{40})',
-    re.IGNORECASE,
-)
+# URL detection (S2_URL_RE, _detect_s2_url) lives in detection.py.
 
 _NO_KEY_MSG = (
     "Rate limited (HTTP 429). Unauthenticated requests share a global pool.\n"
     "To get your own rate limit, set S2_API_KEY env var or create "
     "~/.config/parkour/s2_api_key with a free key from:\n"
     "https://www.semanticscholar.org/product/api#api-key-form"
+)
+
+_KEY_REJECTED_MSG = (
+    "Semantic Scholar rejected the configured API key (HTTP 403 Forbidden). "
+    "This means the key itself is invalid — malformed, revoked, or deactivated — "
+    "not a request problem; Semantic Scholar has no endpoint to check a key's "
+    "status ahead of time. This requires the user's attention: they should "
+    "double-check the key value, then resubmit "
+    "https://www.semanticscholar.org/product/api#api-key-form (the same form "
+    "used to request a key) to reactivate it."
 )
 
 # Field sets for different query types
@@ -62,12 +69,7 @@ _AUTHOR_PAPER_FIELDS = (
 
 def _get_s2_api_key() -> str:
     """Load Semantic Scholar API key from env or config file. Returns '' if missing."""
-    from .common import clean_env
-    if key := clean_env("S2_API_KEY"):
-        return key
-    if S2_CONFIG_PATH.exists():
-        return S2_CONFIG_PATH.read_text().strip()
-    return ""
+    return load_credential("S2_API_KEY", S2_CONFIG_PATH)
 
 
 def _s2_headers() -> dict:
@@ -83,7 +85,7 @@ _S2_MAX_RETRIES = 3
 _S2_RETRY_BACKOFF = 1.25  # seconds; doubles each retry
 
 
-async def _s2_request(path: str, params: Optional[dict] = None) -> dict | str:
+async def _s2_request(path: str, params: dict | None = None) -> dict | str:
     """Core HTTP call to Semantic Scholar API.
 
     Returns parsed JSON dict on success, or an error string on failure.
@@ -107,6 +109,10 @@ async def _s2_request(path: str, params: Optional[dict] = None) -> dict | str:
             return response.json()
         if response.status_code == 404:
             return "Error: Not found on Semantic Scholar."
+        if response.status_code == 403:
+            if _get_s2_api_key():
+                return f"Error: {_KEY_REJECTED_MSG}"
+            return "Error: Semantic Scholar API returned HTTP 403 (Forbidden)."
         if response.status_code == 429:
             if attempt < _S2_MAX_RETRIES:
                 backoff = _S2_RETRY_BACKOFF * (2 ** attempt)
@@ -121,12 +127,6 @@ async def _s2_request(path: str, params: Optional[dict] = None) -> dict | str:
 
     # Unreachable, but satisfies type checker
     return "Error: Semantic Scholar API request failed."
-
-
-def _detect_s2_url(url: str) -> Optional[str]:
-    """Extract a 40-char hex paper ID from a Semantic Scholar URL, or None."""
-    m = S2_URL_RE.search(url)
-    return m.group(1) if m else None
 
 
 def _format_paper_detail(data: dict) -> str:
@@ -224,7 +224,7 @@ def _format_paper_detail(data: dict) -> str:
     return "\n".join(parts)
 
 
-def _format_paper_list(papers: list[dict], total: Optional[int] = None, offset: int = 0) -> str:
+def _format_paper_list(papers: list[dict], total: int | None = None, offset: int = 0) -> str:
     """Format a list of papers as a compact numbered list."""
     if not papers:
         return "No papers found."
@@ -263,7 +263,7 @@ def _format_paper_list(papers: list[dict], total: Optional[int] = None, offset: 
     return "\n".join(lines)
 
 
-def _format_author(data: dict, papers: Optional[list[dict]] = None) -> str:
+def _format_author(data: dict, papers: list[dict] | None = None) -> str:
     """Format author details as markdown."""
     parts = []
 
@@ -301,8 +301,8 @@ def _format_author(data: dict, papers: Optional[list[dict]] = None) -> str:
 
 
 def _s2_see_also(
-    arxiv_id: Optional[str], doi: Optional[str],
-) -> Optional[list[str] | str]:
+    arxiv_id: str | None, doi: str | None,
+) -> list[str] | str | None:
     """Build see_also hints for an S2 paper response."""
     hints = []
     if arxiv_id:
@@ -316,7 +316,7 @@ def _s2_see_also(
 
 async def _fetch_s2_paper(paper_id: str) -> str:
     """Fetch a single paper and return formatted markdown with frontmatter."""
-    from .doi import (
+    from .doi import (  # noqa: PLC0415  # lazy: intra-package import, avoids s2<->doi cycle
         _alt_dois_from_relations,
         _build_alert_message,
         _build_correction_note,
@@ -324,7 +324,7 @@ async def _fetch_s2_paper(paper_id: str) -> str:
         fetch_crossref_metadata,
         fetch_formatted_citation,
     )
-    from .markdown import _format_retraction_banner
+    from .markdown import _format_retraction_banner  # noqa: PLC0415  # lazy: intra-package import
 
     result = await _s2_request(f"/paper/{paper_id}", {"fields": _DETAIL_FIELDS})
     if isinstance(result, str):
@@ -351,15 +351,15 @@ async def _fetch_s2_paper(paper_id: str) -> str:
         try:
             citation_text = await asyncio.wait_for(cite_task, timeout=6.0)
         except Exception:
-            pass
+            logger.debug("citation fetch failed for %s", doi, exc_info=True)
 
     # Collect CrossRef enrichment
-    crossref_meta: Optional[dict] = None
+    crossref_meta: dict | None = None
     if crossref_task:
         try:
             crossref_meta = await asyncio.wait_for(crossref_task, timeout=6.0)
         except Exception:
-            pass
+            logger.debug("CrossRef enrichment failed for %s", doi, exc_info=True)
     retraction = (crossref_meta or {}).get("retraction")
     other_update = (crossref_meta or {}).get("other_update")
     relations = (crossref_meta or {}).get("relations") or {}
@@ -373,11 +373,11 @@ async def _fetch_s2_paper(paper_id: str) -> str:
 
     # Passive shelf tracking (fire-and-forget)
     fm_shelf: object = None
-    fm_note: Optional[str] = None
+    fm_note: str | None = None
     if not doi:
         fm_shelf = "not tracked — paper has no DOI in Semantic Scholar"
     else:
-        from .shelf import _track_on_shelf, CitationRecord
+        from .shelf import _track_on_shelf, CitationRecord  # noqa: PLC0415  # lazy: .shelf passive tracking, avoids import cycle
         authors = result.get("authors") or []
         author_names = [a.get("name", "Unknown") for a in authors]
         citation_styles = result.get("citationStyles") or {}
@@ -385,7 +385,6 @@ async def _fetch_s2_paper(paper_id: str) -> str:
         # the BibTeX citation has the full list.  Fall back to parsing
         # the BibTeX author field when top-level data is all "Unknown".
         if all(n == "Unknown" for n in author_names) and citation_styles.get("bibtex"):
-            import re
             m = re.search(r'author\s*=\s*\{(.+?)\}', citation_styles["bibtex"])
             if m:
                 author_names = [a.strip() for a in m.group(1).split(" and ")]
@@ -431,7 +430,7 @@ async def _fetch_s2_paper(paper_id: str) -> str:
     return fm + "\n\n" + body
 
 
-def _format_snippets(data: dict, paper_id: Optional[str] = None) -> str:
+def _format_snippets(data: dict, paper_id: str | None = None) -> str:
     """Format snippet search results as markdown.
 
     For single-paper results (paper_id given): group by section.
@@ -461,32 +460,31 @@ def _format_snippets(data: dict, paper_id: Optional[str] = None) -> str:
             for t in texts:
                 parts.append(t + "\n")
         return "\n".join(parts)
-    else:
-        # Corpus-wide: group by paper
-        papers: dict[str, dict] = {}  # corpusId -> {title, sections}
-        for item in results:
-            paper = item.get("paper", {})
-            corpus_id = str(paper.get("corpusId", "unknown"))
-            title = paper.get("title", "Untitled")
-            snippet = item.get("snippet", {})
-            section = snippet.get("section") or "Untitled Section"
-            text = snippet.get("text", "")
-            kind = snippet.get("snippetKind", "body")
-            if kind != "body":
-                text = f"[{kind}] {text}"
+    # Corpus-wide: group by paper
+    papers: dict[str, dict] = {}  # corpusId -> {title, sections}
+    for item in results:
+        paper = item.get("paper", {})
+        corpus_id = str(paper.get("corpusId", "unknown"))
+        title = paper.get("title", "Untitled")
+        snippet = item.get("snippet", {})
+        section = snippet.get("section") or "Untitled Section"
+        text = snippet.get("text", "")
+        kind = snippet.get("snippetKind", "body")
+        if kind != "body":
+            text = f"[{kind}] {text}"
 
-            if corpus_id not in papers:
-                papers[corpus_id] = {"title": title, "sections": {}}
-            papers[corpus_id]["sections"].setdefault(section, []).append(text)
+        if corpus_id not in papers:
+            papers[corpus_id] = {"title": title, "sections": {}}
+        papers[corpus_id]["sections"].setdefault(section, []).append(text)
 
-        parts = []
-        for corpus_id, info in papers.items():
-            parts.append(f"## {info['title']}\n")
-            for section, texts in info["sections"].items():
-                parts.append(f"### {section}\n")
-                for t in texts:
-                    parts.append(t + "\n")
-        return "\n".join(parts)
+    parts = []
+    for corpus_id, info in papers.items():
+        parts.append(f"## {info['title']}\n")
+        for section, texts in info["sections"].items():
+            parts.append(f"### {section}\n")
+            for t in texts:
+                parts.append(t + "\n")
+    return "\n".join(parts)
 
 
 async def semantic_scholar(
@@ -510,10 +508,10 @@ async def semantic_scholar(
     offset: Annotated[int, Field(
         description="Starting position for pagination.",
     )] = 0,
-    fields: Annotated[Optional[str], Field(
+    fields: Annotated[str | None, Field(
         description="Comma-separated S2 API field names to override defaults (advanced, rarely needed).",
     )] = None,
-    paper_id: Annotated[Optional[str], Field(
+    paper_id: Annotated[str | None, Field(
         description="Paper ID to scope snippet search to a single paper. Accepts S2 hash, DOI:10.xxx, ARXIV:xxx, or S2 URL. Only used by snippets action.",
     )] = None,
 ) -> str:
@@ -551,10 +549,10 @@ async def semantic_scholar(
         })
         return fm + "\n\n" + _format_paper_list(papers, total=total, offset=offset)
 
-    elif action == "paper":
+    if action == "paper":
         return await _fetch_s2_paper(query)
 
-    elif action == "references":
+    if action == "references":
         params = {
             "fields": fields or _REFERENCE_FIELDS,
             "limit": min(limit, 100),
@@ -578,7 +576,7 @@ async def semantic_scholar(
         })
         return fm + "\n\n" + _format_paper_list(papers, total=None, offset=offset)
 
-    elif action == "author_search":
+    if action == "author_search":
         params = {
             "query": query,
             "fields": fields or _AUTHOR_FIELDS,
@@ -620,7 +618,7 @@ async def semantic_scholar(
         })
         return fm + "\n\n" + "\n".join(lines)
 
-    elif action == "author":
+    if action == "author":
         params = {"fields": fields or _AUTHOR_FIELDS}
         result = await _s2_request(f"/author/{query}", params)
         if isinstance(result, str):
@@ -645,7 +643,7 @@ async def semantic_scholar(
         })
         return fm + "\n\n" + _format_author(result, papers=papers)
 
-    elif action == "snippets":
+    if action == "snippets":
         # Pre-flight: check text availability when scoped to a single paper
         if paper_id:
             avail_result = await _s2_request(
@@ -677,8 +675,7 @@ async def semantic_scholar(
         })
         return fm + "\n\n" + _format_snippets(result, paper_id=paper_id)
 
-    else:
-        return (
-            f"Error: Unknown action '{action}'. "
-            "Valid actions: search, paper, references, author_search, author, snippets"
-        )
+    return (
+        f"Error: Unknown action '{action}'. "
+        "Valid actions: search, paper, references, author_search, author, snippets"
+    )

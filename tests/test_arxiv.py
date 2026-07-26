@@ -11,15 +11,14 @@ _arxiv_module = sys.modules["parkour_mcp.arxiv"]
 
 from parkour_mcp.arxiv import (  # noqa: E402
     ARXIV_API_URL,
-    _detect_arxiv_url,
     _fetch_arxiv_paper,
     _format_arxiv_list,
     _format_arxiv_paper,
     _parse_arxiv_entry,
-    _strip_version,
     _arxiv_request,
     arxiv,
 )
+from parkour_mcp.detection import _detect_arxiv_url, _strip_version  # noqa: E402
 from parkour_mcp._pipeline import _arxiv_fast_path  # noqa: E402
 
 
@@ -173,7 +172,7 @@ class TestStripVersion:
 class TestParseArxivEntry:
     def _get_entry(self, xml_str: str):
         """Parse XML and return the first <entry> element."""
-        import xml.etree.ElementTree as ET
+        import defusedxml.ElementTree as ET
         root = ET.fromstring(xml_str)
         ns = "http://www.w3.org/2005/Atom"
         return root.find(f"{{{ns}}}entry")
@@ -282,7 +281,7 @@ class TestArxivRequest:
 
 class TestFormatArxivPaper:
     def test_full_paper(self):
-        import xml.etree.ElementTree as ET
+        import defusedxml.ElementTree as ET
         root = ET.fromstring(ARXIV_SINGLE_ENTRY_XML)
         entry = root.find(f"{{{_arxiv_module._ATOM_NS}}}entry")
         assert entry is not None
@@ -311,7 +310,7 @@ class TestFormatArxivPaper:
 
     def test_publisher_doi_shown_separately(self):
         """When publisher DOI is distinct from arXiv DOI, both are shown."""
-        import xml.etree.ElementTree as ET
+        import defusedxml.ElementTree as ET
         root = ET.fromstring(ARXIV_SINGLE_ENTRY_XML)
         entry = root.find(f"{{{_arxiv_module._ATOM_NS}}}entry")
         assert entry is not None

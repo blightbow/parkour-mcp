@@ -10,11 +10,11 @@ negotiation (doi.org) and the DataCite REST API.  These are used for:
 import asyncio
 import logging
 import re
-from typing import Optional
+from urllib.parse import urlparse
 
 import httpx
 
-from .common import _API_USER_AGENT, RateLimiter, s2_enabled, tool_name
+from .common import _API_USER_AGENT, RateLimiter, clean_env, s2_enabled, tool_name
 from .markdown import (
     FMEntries,
     _build_frontmatter,
@@ -34,23 +34,15 @@ _doi_limiter = RateLimiter(0.2)
 
 
 # ---------------------------------------------------------------------------
-# URL detection
+# DOI-string classification
 # ---------------------------------------------------------------------------
-DOI_URL_RE = re.compile(
-    r'https?://(?:dx\.)?doi\.org/(10\.\S+)',
-    re.IGNORECASE,
-)
-
+# URL detection (DOI_URL_RE, _detect_doi_url) lives in detection.py.
+# ARXIV_DOI_RE classifies a DOI *string* (not a URL) for arXiv delegation and
+# stays with the DOI handler that uses it.
 ARXIV_DOI_RE = re.compile(
     r'^10\.48550/arXiv\.(.+)$',
     re.IGNORECASE,
 )
-
-
-def _detect_doi_url(url: str) -> Optional[str]:
-    """Extract a bare DOI from a doi.org URL, or None."""
-    m = DOI_URL_RE.search(url)
-    return m.group(1) if m else None
 
 
 # ---------------------------------------------------------------------------
@@ -59,7 +51,7 @@ def _detect_doi_url(url: str) -> Optional[str]:
 _ra_cache: dict[str, str] = {}
 
 
-async def _detect_ra(doi: str, *, timeout: float = 5.0) -> Optional[str]:
+async def _detect_ra(doi: str, *, timeout: float = 5.0) -> str | None:
     """Detect the Registration Agency for a DOI prefix.
 
     Uses doi.org/doiRA/{prefix} API with in-memory caching.
@@ -94,7 +86,7 @@ _datacite_limiter = RateLimiter(0.1)  # 10 req/s
 
 async def fetch_datacite_metadata(
     doi: str, *, timeout: float = 5.0,
-) -> Optional[dict]:
+) -> dict | None:
     """Fetch enriched metadata from DataCite REST API.
 
     Returns a simplified dict with ORCIDs, affiliations, SPDX license,
@@ -188,7 +180,7 @@ _UPDATE_TYPE_PRIORITY = (
 _RELATION_BUCKETS = ("is-preprint-of", "has-preprint", "is-version-of", "has-version")
 
 
-def _format_crossref_date(date_parts_obj: Optional[dict]) -> Optional[str]:
+def _format_crossref_date(date_parts_obj: dict | None) -> str | None:
     """Format a CrossRef date-parts object as ISO YYYY-MM-DD / YYYY-MM / YYYY.
 
     CrossRef wraps dates as ``{"date-parts": [[YYYY, MM, DD]]}`` (month/day
@@ -210,7 +202,7 @@ def _format_crossref_date(date_parts_obj: Optional[dict]) -> Optional[str]:
         return None
 
 
-def _classify_update_type(raw_type: str) -> Optional[str]:
+def _classify_update_type(raw_type: str) -> str | None:
     """Map a raw CrossRef update type to our normalized taxonomy.
 
     Returns "retraction", "expression_of_concern", "correction", or None.
@@ -225,7 +217,7 @@ def _classify_update_type(raw_type: str) -> Optional[str]:
     return None
 
 
-def _extract_update_notice(updated_by: list) -> tuple[Optional[dict], Optional[dict]]:
+def _extract_update_notice(updated_by: list) -> tuple[dict | None, dict | None]:
     """Scan CrossRef ``message.updated-by`` and return (retraction, other_update).
 
     Returns the highest-priority retraction entry as ``retraction``.  If no
@@ -249,7 +241,7 @@ def _extract_update_notice(updated_by: list) -> tuple[Optional[dict], Optional[d
             continue
         by_class[normalized].append(entry)
 
-    def _pick(entries: list[dict]) -> Optional[dict]:
+    def _pick(entries: list[dict]) -> dict | None:
         """Pick the most recently-dated entry from the list.
 
         When CrossRef carries multiple entries for the same classification
@@ -274,7 +266,7 @@ def _extract_update_notice(updated_by: list) -> tuple[Optional[dict], Optional[d
 
         return max(entries, key=_sort_key)
 
-    def _normalize(entry: dict, *, include_type: Optional[str] = None) -> Optional[dict]:
+    def _normalize(entry: dict, *, include_type: str | None = None) -> dict | None:
         notice_doi = entry.get("DOI") or ""
         if not _DOI_SAFE_RE.match(notice_doi):
             notice_doi = ""
@@ -310,7 +302,7 @@ def _extract_update_notice(updated_by: list) -> tuple[Optional[dict], Optional[d
     return None, None
 
 
-def _extract_relations(relation_obj: Optional[dict]) -> dict:
+def _extract_relations(relation_obj: dict | None) -> dict:
     """Filter CrossRef ``message.relation`` to our tracked buckets.
 
     Returns ``{bucket: [doi, ...]}`` with only DOI-typed entries, each
@@ -337,7 +329,7 @@ def _extract_relations(relation_obj: Optional[dict]) -> dict:
     return result
 
 
-def _extract_licenses(license_obj: Optional[list]) -> list[dict]:
+def _extract_licenses(license_obj: list | None) -> list[dict]:
     """Filter CrossRef ``message.license`` to url/content-version/start dicts."""
     if not isinstance(license_obj, list):
         return []
@@ -360,7 +352,7 @@ def _extract_licenses(license_obj: Optional[list]) -> list[dict]:
 
 async def fetch_crossref_metadata(
     doi: str, *, timeout: float = 5.0,
-) -> Optional[dict]:
+) -> dict | None:
     """Fetch retraction + adjacent enrichment from the CrossRef REST API.
 
     Calls ``https://api.crossref.org/works/{doi}``.  The singular-work
@@ -382,7 +374,6 @@ async def fetch_crossref_metadata(
     """
     await _crossref_limiter.wait()
     params: dict[str, str] = {}
-    from .common import clean_env
     contact = clean_env("MCP_CONTACT_EMAIL")
     if contact:
         params["mailto"] = contact
@@ -431,8 +422,8 @@ async def fetch_crossref_metadata(
 
 
 def _build_alert_message(
-    retraction: Optional[dict], other_update: Optional[dict],
-) -> Optional[str]:
+    retraction: dict | None, other_update: dict | None,
+) -> str | None:
     """Compose the ``alert:`` frontmatter value for a retraction or EoC.
 
     Returns None for corrections (which should use ``note:`` instead) or
@@ -459,7 +450,7 @@ def _build_alert_message(
     return " ".join(bits)
 
 
-def _build_correction_note(other_update: Optional[dict]) -> Optional[str]:
+def _build_correction_note(other_update: dict | None) -> str | None:
     """Compose a ``note:`` frontmatter value for a correction notice."""
     if not other_update or other_update.get("type") != "correction":
         return None
@@ -471,7 +462,7 @@ def _build_correction_note(other_update: Optional[dict]) -> Optional[str]:
     return " ".join(bits)
 
 
-def _relations_fm_entry(relations: Optional[dict]) -> Optional[list[str]]:
+def _relations_fm_entry(relations: dict | None) -> list[str] | None:
     """Build a compact ``relation:`` frontmatter list from CrossRef relations.
 
     Returns None if no relations are present.  Each entry is a single
@@ -486,7 +477,7 @@ def _relations_fm_entry(relations: Optional[dict]) -> Optional[list[str]]:
     return lines or None
 
 
-def _alt_dois_from_relations(relations: Optional[dict]) -> list[str]:
+def _alt_dois_from_relations(relations: dict | None) -> list[str]:
     """Extract version-linkage DOIs usable as shelf ``alt_dois``.
 
     Includes is/has-version and is/has-preprint buckets; excludes buckets
@@ -518,7 +509,7 @@ _DOI_REDIRECT_ALLOW = frozenset({
 
 async def _doi_content_negotiate(
     doi: str, accept: str, *, timeout: float = 5.0,
-) -> Optional[httpx.Response]:
+) -> httpx.Response | None:
     """Send a rate-limited content negotiation request to doi.org.
 
     Follows redirects only to known metadata hosts (CrossRef, DataCite,
@@ -527,8 +518,6 @@ async def _doi_content_negotiate(
     Returns the Response on HTTP 200, or None on any failure.
     Never raises — designed for concurrent use with asyncio.gather.
     """
-    from urllib.parse import urlparse
-
     await _doi_limiter.wait()
     try:
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
@@ -560,7 +549,7 @@ async def _doi_content_negotiate(
 
 async def fetch_formatted_citation(
     doi: str, *, style: str = "apa", timeout: float = 5.0,
-) -> Optional[str]:
+) -> str | None:
     """Fetch a pre-formatted citation string via DOI content negotiation.
 
     Returns the citation string, or None on any failure.
@@ -574,7 +563,7 @@ async def fetch_formatted_citation(
 
 async def fetch_csl_json(
     doi: str, *, timeout: float = 5.0,
-) -> Optional[dict]:
+) -> dict | None:
     """Fetch structured CSL-JSON metadata via DOI content negotiation.
 
     Returns parsed JSON dict, or None on any failure.
@@ -598,7 +587,7 @@ def _format_csl_author(author: dict) -> str:
     return family or given or "Unknown"
 
 
-def _format_csl_date(issued: dict) -> Optional[str]:
+def _format_csl_date(issued: dict) -> str | None:
     """Format a CSL-JSON date-parts or literal date."""
     if literal := issued.get("literal"):
         return literal
@@ -607,14 +596,13 @@ def _format_csl_date(issued: dict) -> Optional[str]:
         dp = parts[0]
         if len(dp) >= 3:
             return f"{dp[0]}-{dp[1]:02d}-{dp[2]:02d}"
-        elif len(dp) >= 2:
+        if len(dp) >= 2:
             return f"{dp[0]}-{dp[1]:02d}"
-        else:
-            return str(dp[0])
+        return str(dp[0])
     return None
 
 
-def _format_csl_json_as_markdown(data: dict, *, datacite: Optional[dict] = None) -> str:
+def _format_csl_json_as_markdown(data: dict, *, datacite: dict | None = None) -> str:
     """Format CSL-JSON metadata into readable markdown.
 
     When datacite enrichment dict is provided, merges ORCIDs into author
@@ -649,9 +637,8 @@ def _format_csl_json_as_markdown(data: dict, *, datacite: Optional[dict] = None)
 
     # Date, publisher, type
     meta_bits = []
-    if issued := data.get("issued"):
-        if date_str := _format_csl_date(issued):
-            meta_bits.append(f"**Published:** {date_str}")
+    if (issued := data.get("issued")) and (date_str := _format_csl_date(issued)):
+        meta_bits.append(f"**Published:** {date_str}")
     if publisher := data.get("publisher"):
         meta_bits.append(f"**Publisher:** {publisher}")
     if container := data.get("container-title"):
@@ -701,14 +688,14 @@ async def _fetch_doi_paper(doi: str) -> str:
     # Delegate arXiv DOIs to the arXiv handler
     arxiv_match = ARXIV_DOI_RE.match(doi)
     if arxiv_match:
-        from .arxiv import _fetch_arxiv_paper
+        from .arxiv import _fetch_arxiv_paper  # noqa: PLC0415  # lazy: intra-package import, avoids doi<->arxiv cycle
         arxiv_id = arxiv_match.group(1)
         return await _fetch_arxiv_paper(arxiv_id)
 
     # Delegate RFC DOIs to the IETF handler
     rfc_match = re.match(r'^10\.17487/RFC(\d+)$', doi, re.IGNORECASE)
     if rfc_match:
-        from .ietf import _fetch_rfc_paper
+        from .ietf import _fetch_rfc_paper  # noqa: PLC0415  # lazy: intra-package import, avoids doi<->ietf cycle
         return await _fetch_rfc_paper(int(rfc_match.group(1)))
 
     # Concurrent: CSL-JSON metadata + formatted APA citation + RA detection
@@ -752,7 +739,7 @@ async def _fetch_doi_paper(doi: str) -> str:
         body += f"\n## Citation\n\n{citation_text}\n"
 
     # Passive shelf tracking
-    from .shelf import _track_on_shelf, CitationRecord
+    from .shelf import _track_on_shelf, CitationRecord  # noqa: PLC0415  # lazy: .shelf passive tracking, avoids import cycle
     authors = [_format_csl_author(a) for a in (csl_data or {}).get("author", [])]
     year = None
     if issued := (csl_data or {}).get("issued"):

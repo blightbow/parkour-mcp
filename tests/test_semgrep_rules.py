@@ -35,9 +35,11 @@ def test_semgrep_rules_pass():
     content fencing).  Fix the offending site or add a targeted
     ``# nosemgrep: <rule-id>`` suppression with a comment explaining why."""
     assert _SEMGREP_RULES.is_dir(), f"missing rules dir: {_SEMGREP_RULES}"
-    result = subprocess.run(
+    semgrep_bin = shutil.which("semgrep")
+    assert semgrep_bin is not None  # guaranteed by the skipif gate above
+    result = subprocess.run(  # noqa: S603 - fixed args, no shell, trusted dev tool
         [
-            "semgrep",
+            semgrep_bin,
             "--config", str(_SEMGREP_RULES),
             "--error",          # non-zero exit on any finding
             "--quiet",          # suppress banner + progress noise

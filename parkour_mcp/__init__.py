@@ -8,9 +8,9 @@ from collections.abc import Callable
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
-from mcp.types import Icon, ToolAnnotations
+from mcp.types import Annotations, Icon, ToolAnnotations
 
-from .kagi import search, summarize
+from .kagi import search
 from .fetch_direct import web_fetch_direct, web_fetch_sections
 from .arxiv import arxiv
 from .github import github
@@ -37,7 +37,6 @@ _ICONS_DIR = pathlib.Path(__file__).parent / "assets" / "icons"
 # Internal tool key → SVG filename (without .svg extension)
 _ICON_FILES = {
     "search": "search",             # 🔍 U+1F50D MAGNIFYING GLASS (NotoSansSymbols2)
-    "summarize": "summarize",       # Σ  U+03A3 GREEK CAPITAL SIGMA (NotoSansMono)
     "web_fetch_sections": "sections",  # §  U+00A7 SECTION SIGN (NotoSansMono)
     "web_fetch_direct": "exact",    # ⌖  U+2316 POSITION INDICATOR (NotoSansSymbols2)
     "arxiv": "arxiv",               # χ  U+03C7 GREEK SMALL CHI (NotoSansMono)
@@ -63,7 +62,6 @@ _ALWAYS_ON_TOOLS: tuple[tuple[str, Callable[..., Any]], ...] = (
     ("search", search),
     ("web_fetch_sections", web_fetch_sections),
     ("web_fetch_direct", web_fetch_direct),
-    ("summarize", summarize),
     ("arxiv", arxiv),
     ("research_shelf", research_shelf),
     ("github", github),
@@ -138,7 +136,6 @@ PROFILE_VARS = {
         "web_fetch": "WebFetch",
         "fetch_direct": "WebFetchIncisive",
         "fetch_sections": "WebFetchSections",
-        "summarize": "KagiSummarize",
         "mediawiki_tool": "MediaWiki",
         "github_tool": "GitHub",
         "arxiv_tool": "ArXiv",
@@ -155,13 +152,19 @@ PROFILE_VARS = {
             "bans of data-center subnets, or for extracting specific details that\n"
             "summarization would discard."
         ),
+        # Claude Code wraps MCP resources as model-callable read tools, so the
+        # LLM in this profile can act on the kagi://* URIs directly.
+        "kagi_resource_pointer": (
+            "For per-lens purpose descriptions and activation status, see "
+            "the kagi://lenses resource. For the full region code list, see "
+            "the kagi://regions resource."
+        ),
     },
     "desktop": {
         "web_search": "web_search",
         "web_fetch": "web_fetch",
         "fetch_direct": "web_fetch_incisive",
         "fetch_sections": "web_fetch_sections",
-        "summarize": "kagi_summarize",
         "mediawiki_tool": "mediawiki",
         "github_tool": "github",
         "arxiv_tool": "arxiv",
@@ -177,6 +180,11 @@ PROFILE_VARS = {
             "Use this for a rich content exploring experience that is not subject to 403\n"
             "bans of data-center subnets, or when web_fetch is rejected with PERMISSIONS_ERROR.\n"
         ),
+        # Claude Desktop surfaces MCP resources via user @-mention attachment
+        # only — the LLM cannot autonomously read kagi://* URIs in this profile,
+        # so the lens_id Field description's inline slug list is the floor and
+        # the pointer resolves to nothing.
+        "kagi_resource_pointer": "",
     },
     # hermes profile: snake_case (matches Hermes' built-in tool naming). The
     # sibling-tool placeholders point at Hermes' own web_search / web_extract,
@@ -188,7 +196,6 @@ PROFILE_VARS = {
         "web_fetch": "web_extract",
         "fetch_direct": "web_fetch_incisive",
         "fetch_sections": "web_fetch_sections",
-        "summarize": "kagi_summarize",
         "mediawiki_tool": "mediawiki",
         "github_tool": "github",
         "arxiv_tool": "arxiv",
@@ -204,6 +211,11 @@ PROFILE_VARS = {
             "bans of data-center subnets, or for extracting specific details that\n"
             "summarization would discard."
         ),
+        # Hermes plugins register through ctx.register_tool only — Hermes'
+        # plugin API has no resource primitive, so the kagi://* URIs do not
+        # resolve in this profile and the pointer stays empty. The lens_id
+        # Field description's inline slug list is the floor.
+        "kagi_resource_pointer": "",
     },
 }
 
@@ -213,15 +225,14 @@ TOOL_DESCRIPTIONS = {
 
 {search_positioning}
 
-Supports search operators in the query string:
-- site:example.com — restrict to a domain
-- filetype:pdf — restrict to a file type
-- intitle:term — match in page title
-- inurl:term — match in URL
-- "exact phrase" — exact match
-- +term / -term — require / exclude a term
-- (A AND B), (A OR B) — boolean grouping, e.g. recipes (szechuan OR cantonese)
-- * — wildcard word substitution, e.g. best * ever""",
+Switch result categories via workflow= (search / images / videos / news /
+podcasts). Cap returns with limit=, scope with lens_id=, paginate with
+page=, filter by region= / after= / before=. The query string supports
+site: / filetype: / intitle: / inurl: filters, "exact phrases", +/- terms,
+boolean (A AND B) / (A OR B) grouping, and * wildcards — full operator
+syntax is on the query parameter.
+
+{kagi_resource_pointer}""",
 
     "web_fetch_sections": """List a document's section headings to understand page composition or plan targeted extraction.
 
@@ -232,9 +243,9 @@ with {fetch_direct} using the returned heading names as section= or
 slugs as slices=. URL fragments (e.g. #section-name) are resolved
 against the heading tree.
 
-For a quick sense of document scope, prefer this over {summarize} — the
-section tree reveals structure at minimal cost and leaves the source
-material unsummarized for precise follow-up.
+For a quick sense of document scope, the section tree reveals structure
+at minimal cost and leaves the source material unsummarized for precise
+follow-up.
 
 For Reddit threads, returns the comment tree with author, score, and
 content length metadata. Comment IDs serve as section identifiers for
@@ -284,22 +295,6 @@ A browser render annotates interactive elements for follow-up actions;
 max_elements caps that list, and 0 omits it.
 
 Supports HTML, plain text, JSON, and XML content types.""",
-
-    "summarize": """Summarize content from a URL using Kagi's Universal Summarizer.
-
-{summarize_positioning}
-
-Reach for this when even {fetch_direct} can't retrieve the source
-(captcha-gated pages, anti-bot walls), or for formats neither built-in
-fetcher processes: PDFs, YouTube videos, audio files, podcasts. Each
-call is billed against the user's Kagi API credits — treat it as
-higher-effort than {web_fetch}.
-
-Two summary modes via summary_type= parameter:
-- "summary" (default) — flowing prose paragraphs
-- "takeaway" — bullet-point key takeaways
-
-Summary length is determined by the source.""",
 
     "arxiv": """Search and retrieve academic papers from arXiv.
 
@@ -592,22 +587,6 @@ independently curated and resistant to SEO spam. Results stay compact
 (snippets and timestamps per hit), keeping context lean across
 multi-query research workflows."""
 
-_SUMMARIZE_POSITIONING = """Position relative to the two fetch tools:
-- {web_fetch} returns host-summarized content (fast, default; subject
-  to bot detection and datacenter IP bans)
-- {fetch_direct} returns raw unsummarized content (local fetch through
-  the user's device; bypasses the bot detection and IP bans that
-  block {web_fetch})
-- this tool summarizes through Kagi's layer — returns a condensed
-  digest only, never raw content"""
-
-_SUMMARIZE_POSITIONING_OVERRIDE = """Position relative to the fetch tools:
-- {fetch_direct} returns raw unsummarized content (local fetch through
-  the user's device; bypasses the bot detection and IP bans that block
-  datacenter fetchers)
-- this tool summarizes through Kagi's layer, returning a condensed
-  digest only, never raw content"""
-
 # Override variant of the hermes profile's fetch_direct_when_to_use: drops the
 # "Unlike web_extract" comparison, since under override parkour *is* web_extract.
 _HERMES_FETCH_DIRECT_WHEN_TO_USE_OVERRIDE = (
@@ -640,15 +619,14 @@ def _build_description(
     search_positioning = (
         _SEARCH_POSITIONING_OVERRIDE if override_web_search else _SEARCH_POSITIONING
     )
-    summarize_positioning = (
-        _SUMMARIZE_POSITIONING_OVERRIDE if override_web_extract else _SUMMARIZE_POSITIONING
-    )
     fragments = {
         "search_grammar": SEARCH_GRAMMAR_DOC,
         "search_positioning": search_positioning.format(**profile_vars),
-        "summarize_positioning": summarize_positioning.format(**profile_vars),
     }
-    return TOOL_DESCRIPTIONS[tool_name].format(**profile_vars, **fragments)
+    # rstrip() collapses the trailing blank line(s) when a profile-specific
+    # placeholder (e.g. kagi_resource_pointer) resolves to an empty string,
+    # so descriptions terminate cleanly across profiles.
+    return TOOL_DESCRIPTIONS[tool_name].format(**profile_vars, **fragments).rstrip()
 
 
 def _apply_s2_enrichment() -> None:
@@ -674,7 +652,7 @@ def _resolve_catalog(s2_on: bool) -> list[tuple[str, Callable[..., Any]]]:
     """
     catalog: list[tuple[str, Callable[..., Any]]] = list(_ALWAYS_ON_TOOLS)
     if s2_on:
-        from .semantic_scholar import semantic_scholar
+        from .semantic_scholar import semantic_scholar  # noqa: PLC0415  # lazy intra-package tool import: only loaded when S2 opt-in is set
         catalog.append(("semantic_scholar", semantic_scholar))
     return catalog
 
@@ -726,8 +704,34 @@ def main():
         records = await shelf.list_all()
         if not records:
             return "Research shelf is empty."
-        from .shelf import _format_shelf_list
+        from .shelf import _format_shelf_list  # noqa: PLC0415  # lazy intra-package import inside resource handler
         return _format_shelf_list(records)
+
+    # MCP resource: enumerated valid region codes for kagi_search.region.
+    # Static snapshot — refresh via scripts/generate_kagi_regions.py when
+    # Kagi adds region codes upstream.  audience=["assistant"] signals model-
+    # facing intent per MCP spec; non-binding, ignored by clients that don't
+    # honor the hint, but the spec-blessed forward-compat marker.
+    @mcp.resource(
+        "kagi://regions",
+        annotations=Annotations(audience=["assistant"]),
+    )
+    async def kagi_regions_resource() -> str:
+        """Valid region codes for the kagi_search region parameter."""
+        from .kagi import kagi_regions_markdown  # noqa: PLC0415  # lazy intra-package import inside resource handler
+        return kagi_regions_markdown()
+
+    # MCP resource: built-in lens catalog for kagi_search.lens_id.
+    # Static snapshot — refresh via scripts/generate_kagi_lenses.py when
+    # Kagi adds default lenses upstream.
+    @mcp.resource(
+        "kagi://lenses",
+        annotations=Annotations(audience=["assistant"]),
+    )
+    async def kagi_lenses_resource() -> str:
+        """Built-in Kagi lens catalog for the kagi_search lens_id parameter."""
+        from .kagi import kagi_lenses_markdown  # noqa: PLC0415  # lazy intra-package import inside resource handler
+        return kagi_lenses_markdown()
 
     mcp.run(transport="stdio")
 

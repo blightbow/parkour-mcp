@@ -8,7 +8,7 @@ assembly common to web_fetch_direct's static path and its headless-browser
 import logging
 import re
 from collections import OrderedDict
-from typing import Optional
+from pathlib import Path
 from urllib.parse import urldefrag
 
 import httpx
@@ -33,10 +33,24 @@ from .mediawiki import (
     _mediawiki_html_to_markdown,
     _INLINE_CITEREF_MD_RE,
 )
-from .arxiv import _detect_arxiv_url, _fetch_arxiv_paper
-from .doi import _detect_doi_url, _fetch_doi_paper
-from .reddit import _detect_reddit_url, _fetch_reddit_content, _split_by_comments
-from .common import ResponseTooLarge, guarded_fetch, tool_name
+from .arxiv import _fetch_arxiv_paper
+from .detection import (
+    _detect_arxiv_url,
+    _detect_doi_url,
+    _detect_ietf_url,
+    _detect_reddit_url,
+    _detect_s2_url,
+)
+from .doi import _fetch_doi_paper
+from .reddit import _fetch_reddit_content, _split_by_comments
+from .common import (
+    _FETCH_HEADERS,
+    _LANGUAGE_MAP,
+    ResponseTooLarge,
+    guarded_fetch,
+    s2_enabled,
+    tool_name,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +84,7 @@ class _WikiCacheEntry:
 
     __slots__ = ("url", "wiki_info", "wiki_page")
 
-    def __init__(self, url: str, wiki_info: dict, wiki_page: Optional[dict]):
+    def __init__(self, url: str, wiki_info: dict, wiki_page: dict | None):
         self.url = url
         self.wiki_info = wiki_info
         self.wiki_page = wiki_page
@@ -83,7 +97,7 @@ class _WikiCache:
         self._entries: OrderedDict[str, _WikiCacheEntry] = OrderedDict()
         self._max_entries = max_entries
 
-    def get(self, url: str) -> tuple[Optional[dict], Optional[dict]]:
+    def get(self, url: str) -> tuple[dict | None, dict | None]:
         """Return (wiki_info, wiki_page) if url is cached, else (None, None)."""
         entry = self._entries.get(url)
         if entry is not None:
@@ -91,7 +105,7 @@ class _WikiCache:
             return entry.wiki_info, entry.wiki_page
         return None, None
 
-    def store(self, url: str, wiki_info: dict, wiki_page: Optional[dict]):
+    def store(self, url: str, wiki_info: dict, wiki_page: dict | None):
         """Cache a MediaWiki page, evicting the LRU entry if at capacity."""
         if url in self._entries:
             self._entries[url] = _WikiCacheEntry(url, wiki_info, wiki_page)
@@ -139,7 +153,7 @@ _MAX_MARKDOWN_LINE_CHARS = 1_000_000
 def _safe_markdown_presplit(
     markdown: str,
     max_line_chars: int = _MAX_MARKDOWN_LINE_CHARS,
-) -> Optional[list[tuple[int, str]]]:
+) -> list[tuple[int, str]] | None:
     """Run MarkdownSplitter with a pre-check for pathological input.
 
     Returns ``chunk_indices()`` output for well-formed markdown.
@@ -214,9 +228,9 @@ class _CacheEntry:
         url: str,
         title: str,
         markdown: str,
-        renderer: Optional[str] = None,
-        group: Optional[str] = None,
-        presplit: Optional[list[tuple[int, str]]] = None,
+        renderer: str | None = None,
+        group: str | None = None,
+        presplit: list[tuple[int, str]] | None = None,
     ):
         self.url = url
         self.title = title
@@ -439,7 +453,7 @@ class _PageCache:
         """
         return url in self._protected or url in self._probation
 
-    def get(self, url: str, renderer: Optional[str] = None) -> Optional[_CacheEntry]:
+    def get(self, url: str, renderer: str | None = None) -> _CacheEntry | None:
         """Return the cached entry for *url*, or None on miss.
 
         Accessing a **probation** entry promotes it to **protected** (proving
@@ -481,9 +495,9 @@ class _PageCache:
         url: str,
         title: str,
         markdown: str,
-        renderer: Optional[str] = None,
-        presplit: Optional[list[tuple[int, str]]] = None,
-        group: Optional[str] = None,
+        renderer: str | None = None,
+        presplit: list[tuple[int, str]] | None = None,
+        group: str | None = None,
     ):
         """Slice markdown, build BM25 index, and cache the entry.
 
@@ -612,7 +626,7 @@ _page_cache = _PageCache()
 register_group_cache(_page_cache)
 
 
-async def _cached_mediawiki_fetch(url: str) -> tuple[Optional[dict], Optional[dict]]:
+async def _cached_mediawiki_fetch(url: str) -> tuple[dict | None, dict | None]:
     """Detect and fetch a MediaWiki page, using the LRU cache.
 
     Returns (wiki_info, wiki_page) or (None, None) if not a MediaWiki site.
@@ -640,13 +654,13 @@ async def _cached_mediawiki_fetch(url: str) -> tuple[Optional[dict], Optional[di
 # URL helpers
 # ---------------------------------------------------------------------------
 
-def _extract_fragment(url: str) -> tuple[str, Optional[str]]:
+def _extract_fragment(url: str) -> tuple[str, str | None]:
     """Split a URL fragment and return (clean_url, fragment_or_none)."""
     clean, fragment = urldefrag(url)
     return clean, fragment or None
 
 
-def _normalize_sections(section) -> Optional[list[str]]:
+def _normalize_sections(section) -> list[str] | None:
     """Normalize section parameter to a list or None."""
     if section is None:
         return None
@@ -654,8 +668,8 @@ def _normalize_sections(section) -> Optional[list[str]]:
 
 
 def _resolve_fragment_source(
-    url: str, fragment: Optional[str], section
-) -> tuple[str, Optional[str]]:
+    url: str, fragment: str | None, section
+) -> tuple[str, str | None]:
     """Compute the citation source URL and any fragment-override warning.
 
     Returns (source_url, fragment_warning_or_none).
@@ -676,11 +690,11 @@ def _resolve_fragment_source(
 
 async def _mediawiki_fast_path(
     url: str,
-    section_names: Optional[list[str]],
+    section_names: list[str] | None,
     max_tokens: int,
     extra_entries=None,
-    cache_url: Optional[str] = None,
-) -> Optional[str]:
+    cache_url: str | None = None,
+) -> str | None:
     """Attempt to fetch a MediaWiki page via the API, bypassing browser/httpx.
 
     Returns formatted output string on success, or None to signal fallback.
@@ -769,7 +783,7 @@ async def _mediawiki_fast_path(
 # arXiv fast path
 # ---------------------------------------------------------------------------
 
-async def _arxiv_fast_path(url: str) -> Optional[str]:
+async def _arxiv_fast_path(url: str) -> str | None:
     """Attempt to fetch an arXiv paper via the API.
 
     Returns formatted paper details on success, or None if the URL is not
@@ -785,21 +799,20 @@ async def _arxiv_fast_path(url: str) -> Optional[str]:
 
     result = await _fetch_arxiv_paper(arxiv_id, _pdf_url=is_pdf)
     # Always return the result to avoid falling through to HTTP fetch
-    return result
+    return result  # noqa: RET504  # comment documents intentional always-return
 
 
-async def _s2_fast_path(url: str) -> Optional[str]:
+async def _s2_fast_path(url: str) -> str | None:
     """Attempt to fetch a Semantic Scholar paper via the API.
 
     Returns formatted paper details on success, or None to signal fallback.
     Gated on ``s2_enabled()`` — returns None (fall through) when S2 is not
     opted in, so the URL proceeds to generic HTTP fetch.
     """
-    from .common import s2_enabled
     if not s2_enabled():
         return None
 
-    from .semantic_scholar import _detect_s2_url, _fetch_s2_paper
+    from .semantic_scholar import _fetch_s2_paper  # noqa: PLC0415  # lazy fast-path sibling to avoid heavy deps / cycle
 
     paper_id = _detect_s2_url(url)
     if not paper_id:
@@ -809,17 +822,17 @@ async def _s2_fast_path(url: str) -> Optional[str]:
     # _fetch_s2_paper always returns a string; if it starts with "Error:"
     # the API call failed — still return it to avoid falling through to
     # an HTTP fetch that would hit CAPTCHA.
-    return result
+    return result  # noqa: RET504  # comment documents intentional always-return
 
 
-async def _ietf_fast_path(url: str) -> Optional[str]:
+async def _ietf_fast_path(url: str) -> str | None:
     """Attempt to fetch an IETF RFC or Internet-Draft via structured APIs.
 
     Returns formatted content on success, or None if not an IETF URL.
     Once matched, always returns a string (even errors) to prevent
     fallback to generic HTTP fetch.
     """
-    from .ietf import _detect_ietf_url, _fetch_rfc_paper, _fetch_draft
+    from .ietf import _fetch_rfc_paper, _fetch_draft  # noqa: PLC0415  # lazy fast-path sibling to avoid heavy deps / cycle
 
     match = _detect_ietf_url(url)
     if not match:
@@ -832,7 +845,7 @@ async def _ietf_fast_path(url: str) -> Optional[str]:
     return None
 
 
-async def _doi_fast_path(url: str) -> Optional[str]:
+async def _doi_fast_path(url: str) -> str | None:
     """Attempt to resolve a doi.org URL via content negotiation.
 
     Returns formatted paper details on success, or None to signal fallback.
@@ -849,7 +862,7 @@ async def _doi_fast_path(url: str) -> Optional[str]:
 # Reddit fast path
 # ---------------------------------------------------------------------------
 
-async def _reddit_fast_path(url: str, max_tokens: int = 5000) -> Optional[str]:
+async def _reddit_fast_path(url: str, max_tokens: int = 5000) -> str | None:
     """Attempt to fetch a Reddit page via the old.reddit.com .json endpoint.
 
     Returns formatted content on success, or None if not a Reddit URL.
@@ -875,7 +888,7 @@ async def _reddit_fast_path(url: str, max_tokens: int = 5000) -> Optional[str]:
 
     fm_entries = FMEntries({
         "source": url,
-        "api": "Reddit (.json)",
+        "api": "Reddit (oauth.reddit.com)",
         "trust": _TRUST_ADVISORY,
     })
     if trunc_hint:
@@ -892,7 +905,7 @@ async def _reddit_fast_path(url: str, max_tokens: int = 5000) -> Optional[str]:
 
 async def _discourse_fast_path(
     url: str, headers: httpx.Headers, max_tokens: int = 5000,
-) -> Optional[str]:
+) -> str | None:
     """Handle a Discourse topic URL detected via response headers.
 
     Unlike other fast paths, this is invoked *after* the initial HTTP fetch —
@@ -902,7 +915,7 @@ async def _discourse_fast_path(
 
     Populates ``_page_cache`` so the caller can dispatch slicing.
     """
-    from .discourse import (
+    from .discourse import (  # noqa: PLC0415  # lazy fast-path sibling to avoid heavy deps / cycle
         _detect_discourse_headers, _extract_topic_id,
         _fetch_discourse_content, _split_by_posts,
     )
@@ -945,8 +958,8 @@ async def _discourse_fast_path(
 
 async def _github_fast_path(
     url: str, max_tokens: int = 5000,
-    line_range: Optional[tuple[int, int]] = None,
-) -> Optional[str]:
+    line_range: tuple[int, int] | None = None,
+) -> str | None:
     """Attempt to handle a GitHub URL via the API or raw.githubusercontent.com.
 
     Returns formatted content on success, or None if not a GitHub URL.
@@ -959,15 +972,12 @@ async def _github_fast_path(
         line_range: Optional (start, end) 1-based inclusive line range for
             blob URLs.  Extracted from ``#L45`` or ``#L45-L100`` fragments.
     """
-    from .github import (
+    from .github import (  # noqa: PLC0415  # lazy fast-path sibling to avoid heavy deps / cycle
         _detect_github_url, _action_repo, _action_tree,
         _build_issue_markdown, _build_pr_markdown,
         _blob_presplit, _split_github_comments,
         _rate_limit_warning, _get_github_token,
     )
-    from .common import _FETCH_HEADERS
-    from pathlib import Path
-    import httpx
 
     match = _detect_github_url(url)
     if match is None:
@@ -1026,14 +1036,13 @@ async def _github_fast_path(
             )
 
         # Format response (same as _action_file but without a second fetch)
-        from .common import _LANGUAGE_MAP
         lang = _LANGUAGE_MAP.get(ext, "")
 
         all_lines = raw_content.split("\n")
         total_lines = len(all_lines)
 
         source = f"https://github.com/{match.owner}/{match.repo}/blob/{match.ref}/{match.path}"
-        fm_entries = FMEntries({"source": source, "api": "GitHub (raw)"})
+        fm_entries = FMEntries({"source": source, "api": "GitHub (raw)", "trust": _TRUST_ADVISORY})
         if lang:
             fm_entries["language"] = lang
 
@@ -1182,7 +1191,7 @@ async def _github_fast_path(
 
     # --- Gist ---
     if match.kind == "gist" and match.gist_id:
-        from .github import _github_request
+        from .github import _github_request  # noqa: PLC0415  # lazy fast-path sibling to avoid heavy deps / cycle
         gist_result = await _github_request("GET", f"/gists/{match.gist_id}")
         if isinstance(gist_result, str):
             return gist_result
@@ -1210,7 +1219,7 @@ async def _github_fast_path(
 
     # --- Org/user profile ---
     if match.kind == "org":
-        from .github import _github_request
+        from .github import _github_request  # noqa: PLC0415  # lazy fast-path sibling to avoid heavy deps / cycle
 
         org_result = await _github_request("GET", f"/orgs/{match.owner}")
         # Fall back to user endpoint if orgs/ returns error (personal accounts)
@@ -1309,7 +1318,7 @@ async def _github_fast_path(
 
     # --- Commit ---
     if match.kind == "commit" and match.ref:
-        from .github import _github_request
+        from .github import _github_request  # noqa: PLC0415  # lazy fast-path sibling to avoid heavy deps / cycle
 
         result = await _github_request(
             "GET", f"/repos/{match.owner}/{match.repo}/commits/{match.ref}",
@@ -1359,7 +1368,7 @@ async def _github_fast_path(
 
     # --- Compare ---
     if match.kind == "compare" and match.path:
-        from .github import _github_request
+        from .github import _github_request  # noqa: PLC0415  # lazy fast-path sibling to avoid heavy deps / cycle
 
         result = await _github_request(
             "GET", f"/repos/{match.owner}/{match.repo}/compare/{match.path}",
@@ -1411,7 +1420,7 @@ async def _github_fast_path(
 
     # --- Releases ---
     if match.kind == "releases":
-        from .github import _github_request
+        from .github import _github_request  # noqa: PLC0415  # lazy fast-path sibling to avoid heavy deps / cycle
 
         # Check if this is a specific tag release
         rest = match.path
@@ -1508,12 +1517,12 @@ async def _github_fast_path(
 
 def _process_markdown_sections(
     markdown_content: str,
-    section_names: Optional[list[str]],
+    section_names: list[str] | None,
     max_tokens: int,
     frontmatter_entries,
-    title: Optional[str] = None,
-    cache_url: Optional[str] = None,
-    renderer: Optional[str] = None,
+    title: str | None = None,
+    cache_url: str | None = None,
+    renderer: str | None = None,
 ) -> str:
     """Apply section filtering, truncation, and frontmatter to markdown content.
 
@@ -1602,8 +1611,8 @@ def _slice_output(
     indices: list[int],
     max_tokens: int,
     fm_entries: dict,
-    title: Optional[str] = None,
-    search_term: Optional[str] = None,
+    title: str | None = None,
+    search_term: str | None = None,
 ) -> str:
     """Assemble sliced output with YAML frontmatter and --- dividers.
 
@@ -1653,8 +1662,8 @@ def _slice_output(
 
 def _build_failed_response(
     fm_entries: dict,
-    search_term: Optional[str] = None,
-    slice_indices: Optional[list[int]] = None,
+    search_term: str | None = None,
+    slice_indices: list[int] | None = None,
 ) -> str:
     """Frontmatter-only response for pages the BM25 cache refuses to build.
 
@@ -1700,8 +1709,8 @@ def _search_slices(
     search: str,
     max_tokens: int,
     fm_entries,
-    title: Optional[str] = None,
-) -> Optional[str]:
+    title: str | None = None,
+) -> str | None:
     """BM25 search over cached page slices.
 
     Uses tantivy for language-aware tokenization and BM25 ranking.
@@ -1750,8 +1759,8 @@ def _get_slices(
     indices: list[int],
     max_tokens: int,
     fm_entries,
-    title: Optional[str] = None,
-) -> Optional[str]:
+    title: str | None = None,
+) -> str | None:
     """Retrieve specific slices by index from the page cache.
 
     Returns formatted output on cache hit, or None on cache miss.
@@ -1785,13 +1794,13 @@ def _get_slices(
 
 def _dispatch_slicing(
     url: str,
-    search: Optional[str],
+    search: str | None,
     slices,
     slices_list: list[int],
     max_tokens: int,
     source_url: str,
     warning=None,
-    fallback: Optional[str] = None,
+    fallback: str | None = None,
 ) -> str:
     """Dispatch to search or slice retrieval after cache has been populated.
 
@@ -1814,6 +1823,5 @@ def _dispatch_slicing(
     if search is not None:
         return _search_slices(url, search, max_tokens, fm_base, title=title) or \
             "Error: Page cache unavailable."
-    else:
-        return _get_slices(url, slices_list, max_tokens, fm_base, title=title) or \
-            "Error: Page cache unavailable."
+    return _get_slices(url, slices_list, max_tokens, fm_base, title=title) or \
+        "Error: Page cache unavailable."

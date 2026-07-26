@@ -147,12 +147,15 @@ def render_tool_table() -> str:
 
 
 def protected_keys() -> tuple[str, ...]:
-    """Return ``FMEntries.PROTECTED_ORDER`` — the canonical-order tuple of
-    multi-contributor keys.  Used to drive prose, count, and table cog
-    blocks in ``docs/frontmatter-standard.md``.
+    """Return the canonical-order tuple of multi-contributor keys.
+
+    Sourced from betamatter's ``PROTECTED_ORDER`` — the library owns the
+    canonical order (see docs in the betamatter repo, ``standard.md``
+    "Consumer contract"); ``FMEntries`` inherits it.  Used to drive
+    prose, count, and table cog blocks in ``docs/frontmatter-standard.md``.
     """
-    from parkour_mcp.markdown import FMEntries
-    return FMEntries.PROTECTED_ORDER
+    from betamatter import PROTECTED_ORDER
+    return PROTECTED_ORDER
 
 
 def protected_keys_inline() -> str:

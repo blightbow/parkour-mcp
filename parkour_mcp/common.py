@@ -9,7 +9,6 @@ import socket
 import time
 from importlib.metadata import version as _pkg_version
 from pathlib import Path
-from typing import Optional
 from urllib.parse import urlparse
 
 import httpx
@@ -26,11 +25,39 @@ _PLATFORM = platform.system()  # "Darwin", "Linux", "Windows"
 # ---------------------------------------------------------------------------
 # User-Agent strings
 # ---------------------------------------------------------------------------
-# Browser-spoofing UA for HTML page fetches (sites expect a browser)
+# Browser-spoofing identity for HTML page fetches (sites expect a browser).
+# Everything that encodes the Chrome version is derived from _CHROME_MAJOR so
+# the User-Agent and the Client-Hint headers can never drift out of sync.  WAFs
+# weight UA-vs-Client-Hint *inconsistency*, not the version number itself, so
+# coherence matters more than currency — bumping Chrome is a one-line change.
+_CHROME_MAJOR = "149"
+
+# The Sec-Fetch-* quad describes a top-level, user-initiated navigation with no
+# referrer, which is exactly what a parkour fetch is (a human asked for this
+# URL).  Sending them — plus the Client Hints a real Chrome always emits — is
+# what clears modern WAF consistency checks: Akamai Bot Manager 403s an
+# otherwise-Chrome request that arrives without them (and over HTTP/1.1; see
+# guarded_fetch).
 _FETCH_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.5",
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        f"Chrome/{_CHROME_MAJOR}.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "sec-ch-ua": (
+        f'"Chromium";v="{_CHROME_MAJOR}", '
+        f'"Google Chrome";v="{_CHROME_MAJOR}", '
+        '"Not_A Brand";v="99"'
+    ),
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": '"macOS"',
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Upgrade-Insecure-Requests": "1",
 }
 
 def clean_env(name: str) -> str:
@@ -50,6 +77,40 @@ def clean_env(name: str) -> str:
     if not val or val.startswith("${"):
         return ""
     return val
+
+
+# Base directory for filesystem-config fallbacks (API keys, opt-in gates).
+_CONFIG_DIR = Path.home() / ".config" / "parkour"
+
+
+def _parse_truthy_env(name: str) -> bool:
+    """True if env var *name* holds an affirmative value (``1`` / ``true`` / ``yes``).
+
+    Case-insensitive and whitespace-tolerant.  Centralizes the opt-in idiom so
+    every feature gate accepts the same affirmative set: a gate that rolls its
+    own check can (and did) silently reject ``True`` / ``YES`` by forgetting to
+    lowercase before comparing.
+    """
+    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes")
+
+
+def load_credential(env_var: str, config_path: Path) -> str:
+    """Load a credential from an env var, falling back to a config file.
+
+    Reads *env_var* through `clean_env` (which rejects unsubstituted ``${...}``
+    templates), then falls back to the contents of *config_path*.  Returns an
+    empty string when neither source supplies a value, so callers can treat
+    ``""`` as "run unauthenticated".
+
+    Callers pass their own path constant rather than a bare filename so the
+    constant stays a module-level test seam (tests monkeypatch it to redirect
+    the filesystem fallback).
+    """
+    if key := clean_env(env_var):
+        return key
+    if config_path.exists():
+        return config_path.read_text().strip()
+    return ""
 
 
 # Honest UA for structured API endpoints (MediaWiki, etc.) that expect
@@ -89,7 +150,7 @@ _LANGUAGE_MAP: dict[str, str] = {
 }
 
 
-def _classify_content_type(content_type: str) -> Optional[str]:
+def _classify_content_type(content_type: str) -> str | None:
     """Coarsely classify an HTTP Content-Type.
 
     Returns ``"html"``, ``"json"``, ``"xml"``, ``"plain text"``, or None
@@ -176,7 +237,7 @@ async def _depsdev_get(path: str) -> dict | str:
 _logger = logging.getLogger(__name__)
 
 # Set MCP_ALLOW_PRIVATE_IPS=1 to allow fetching from private/internal networks.
-_ALLOW_PRIVATE_IPS = os.environ.get("MCP_ALLOW_PRIVATE_IPS", "").strip() in ("1", "true", "yes")
+_ALLOW_PRIVATE_IPS = _parse_truthy_env("MCP_ALLOW_PRIVATE_IPS")
 
 
 def _is_private_ip(addr: str) -> bool:
@@ -208,11 +269,12 @@ def check_url_ssrf(url: str) -> str | None:
     # Fast check: if hostname is already an IP literal
     try:
         ip = ipaddress.ip_address(hostname)
+    except ValueError:
+        pass  # hostname is a DNS name, resolve it
+    else:
         if _is_private_ip(str(ip)):
             return f"Error: Blocked request to private/reserved address ({hostname})."
         return None
-    except ValueError:
-        pass  # hostname is a DNS name, resolve it
 
     # Resolve hostname and check all addresses
     try:
@@ -241,7 +303,6 @@ TOOL_NAMES: dict[str, dict[str, str]] = {
     "search": {"code": "KagiSearch", "desktop": "kagi_search"},
     "web_fetch_sections": {"code": "WebFetchSections", "desktop": "web_fetch_sections"},
     "web_fetch_direct": {"code": "WebFetchIncisive", "desktop": "web_fetch_incisive"},
-    "summarize": {"code": "KagiSummarize", "desktop": "kagi_summarize"},
     "semantic_scholar": {"code": "SemanticScholar", "desktop": "semantic_scholar"},
     "arxiv": {"code": "ArXiv", "desktop": "arxiv"},
     "research_shelf": {"code": "ResearchShelf", "desktop": "research_shelf"},
@@ -275,7 +336,7 @@ def init_tool_names(profile: str) -> None:
 # Semantic Scholar opt-in gate
 # ---------------------------------------------------------------------------
 
-_S2_TOS_CONFIG_PATH = Path.home() / ".config" / "parkour" / "s2_accept_tos"
+_S2_TOS_CONFIG_PATH = _CONFIG_DIR / "s2_accept_tos"
 
 
 def s2_enabled() -> bool:
@@ -285,11 +346,11 @@ def s2_enabled() -> bool:
     1. ``S2_ACCEPT_TOS`` environment variable (any truthy value: 1/true/yes)
     2. Presence of ``~/.config/parkour/s2_accept_tos`` file
 
-    The gate is intentionally separate from ``S2_API_KEY`` — having a key does
+    The gate is intentionally separate from ``S2_API_KEY``: having a key does
     not imply awareness of the license terms, and S2 functions without one
     (at reduced rate limits).
     """
-    if os.environ.get("S2_ACCEPT_TOS", "").strip().lower() in ("1", "true", "yes"):
+    if _parse_truthy_env("S2_ACCEPT_TOS"):
         return True
     return _S2_TOS_CONFIG_PATH.is_file()
 
@@ -341,9 +402,9 @@ class ResponseTooLarge(Exception):
 async def guarded_fetch(
     url: str,
     *,
-    headers: Optional[dict[str, str]] = None,
+    headers: dict[str, str] | None = None,
     timeout: float = 30.0,
-    max_bytes: Optional[int] = _MAX_RESPONSE_BYTES,
+    max_bytes: int | None = _MAX_RESPONSE_BYTES,
     deadline: float = _FETCH_DEADLINE_SECONDS,
     follow_redirects: bool = True,
 ) -> httpx.Response:
@@ -368,6 +429,15 @@ async def guarded_fetch(
     fast path, for example).  Layer 3 still defends against slow-drip
     firehoses that per-phase timeouts can't catch.
 
+    The request is issued over **HTTP/2** when the origin supports it (ALPN
+    negotiation, with automatic, transparent fallback to HTTP/1.1 for
+    HTTP/1.1-only origins).  Speaking HTTP/2 is required by some WAFs (e.g.
+    Akamai Bot Manager) that treat an HTTP/1.1 request carrying a modern-Chrome
+    User-Agent as internally inconsistent and 403 it.  If an origin negotiates
+    HTTP/2 and then violates the protocol — a rare server bug, or a stale
+    pooled connection — the fetch retries once on HTTP/1.1, the more
+    battle-hardened transport, before surfacing the error.
+
     Returns a fully-buffered ``httpx.Response`` (i.e. ``response.text`` works
     synchronously after this call).
 
@@ -380,46 +450,59 @@ async def guarded_fetch(
     if headers is None:
         headers = dict(_FETCH_HEADERS)
 
+    async def _attempt(http2: bool) -> httpx.Response:
+        async with httpx.AsyncClient(
+            follow_redirects=follow_redirects,
+            timeout=timeout,
+            http2=http2,
+        ) as client, client.stream("GET", url, headers=headers) as resp:
+            # Layer 1: Content-Length gate
+            if max_bytes is not None:
+                cl = resp.headers.get("content-length")
+                if cl is not None:
+                    try:
+                        if int(cl) > max_bytes:
+                            raise ResponseTooLarge(
+                                f"Content-Length {cl} exceeds "
+                                f"{max_bytes:,} byte limit"
+                            )
+                    except ValueError:
+                        pass  # malformed header — fall through to streaming
+
+            # Layer 2: streaming size cap
+            chunks: list[bytes] = []
+            total = 0
+            async for chunk in resp.aiter_bytes(chunk_size=65_536):
+                total += len(chunk)
+                if max_bytes is not None and total > max_bytes:
+                    raise ResponseTooLarge(
+                        f"Response body exceeded {max_bytes:,} "
+                        f"byte limit at {total:,} bytes"
+                    )
+                chunks.append(chunk)
+
+            # Populate _content so .text / .json() work after the
+            # stream context exits — same attr httpx uses internally.
+            resp._content = b"".join(chunks)
+        # The response object (headers, status_code, _content) survives the
+        # context-manager exit; only the transport is closed.
+        return resp
+
     try:
         async with asyncio.timeout(deadline):
-            async with httpx.AsyncClient(
-                follow_redirects=follow_redirects,
-                timeout=timeout,
-            ) as client:
-                async with client.stream("GET", url, headers=headers) as resp:
-                    # Layer 1: Content-Length gate
-                    if max_bytes is not None:
-                        cl = resp.headers.get("content-length")
-                        if cl is not None:
-                            try:
-                                if int(cl) > max_bytes:
-                                    raise ResponseTooLarge(
-                                        f"Content-Length {cl} exceeds "
-                                        f"{max_bytes:,} byte limit"
-                                    )
-                            except ValueError:
-                                pass  # malformed header — fall through to streaming
-
-                    # Layer 2: streaming size cap
-                    chunks: list[bytes] = []
-                    total = 0
-                    async for chunk in resp.aiter_bytes(chunk_size=65_536):
-                        total += len(chunk)
-                        if max_bytes is not None and total > max_bytes:
-                            raise ResponseTooLarge(
-                                f"Response body exceeded {max_bytes:,} "
-                                f"byte limit at {total:,} bytes"
-                            )
-                        chunks.append(chunk)
-
-                    # Populate _content so .text / .json() work after the
-                    # stream context exits — same attr httpx uses internally.
-                    resp._content = b"".join(chunks)
+            try:
+                return await _attempt(http2=True)
+            except httpx.RemoteProtocolError:
+                # The origin negotiated HTTP/2 via ALPN, then broke the
+                # protocol (a buggy server stack, or a stale pooled h2
+                # connection).  HTTP/1.1 is the more battle-hardened
+                # transport; retry once on it, sharing the same wall-clock
+                # deadline, before letting the error surface.
+                _logger.debug(
+                    "HTTP/2 RemoteProtocolError for %s; retrying on HTTP/1.1", url
+                )
+                return await _attempt(http2=False)
     except TimeoutError:
         raise httpx.ReadTimeout(
             f"Wall-clock deadline of {deadline}s exceeded for {url}"
         )
-
-    # The response object (headers, status_code, _content) survives the
-    # context-manager exit; only the transport is closed.
-    return resp

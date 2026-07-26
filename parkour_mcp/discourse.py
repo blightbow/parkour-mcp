@@ -9,11 +9,12 @@ Supports topic threads (with batch post fetching for >20 posts), search,
 and latest-topics listings.
 """
 
+import contextlib
 import logging
 import re
 from collections import defaultdict
 from datetime import datetime
-from typing import Annotated, Optional, Union
+from typing import Annotated
 from urllib.parse import urlparse
 
 import httpx
@@ -46,7 +47,7 @@ def _get_limiter(hostname: str) -> RateLimiter:
 _DISCOURSE_ROUTE_HEADER = "x-discourse-route"
 
 
-def _detect_discourse_headers(headers: httpx.Headers) -> Optional[str]:
+def _detect_discourse_headers(headers: httpx.Headers) -> str | None:
     """Check for Discourse ``x-discourse-route`` header.
 
     Returns the route value (e.g. ``topics/show``, ``list/latest``) or None.
@@ -58,7 +59,7 @@ def _detect_discourse_headers(headers: httpx.Headers) -> Optional[str]:
 _TOPIC_ID_RE = re.compile(r"/t/(?:[^/]*/)?(\d+)(?:/\d+)?/?$")
 
 
-def _extract_topic_id(url: str) -> Optional[int]:
+def _extract_topic_id(url: str) -> int | None:
     """Extract topic ID from a Discourse topic URL.
 
     Handles ``/t/slug/12345``, ``/t/12345``, ``/t/slug/12345/3``.
@@ -81,7 +82,7 @@ def _base_url_from(url: str) -> str:
 # ---------------------------------------------------------------------------
 
 async def _discourse_get(
-    url: str, hostname: str, params: Optional[dict] = None,
+    url: str, hostname: str, params: dict | None = None,
 ) -> httpx.Response:
     """Rate-limited GET request to a Discourse endpoint."""
     await _get_limiter(hostname).wait()
@@ -93,7 +94,7 @@ async def _discourse_get(
 
 async def _fetch_topic(
     base_url: str, topic_id: int, hostname: str,
-) -> Union[dict, str]:
+) -> dict | str:
     """Fetch ``/t/{id}.json?include_raw=true``.
 
     Returns parsed topic JSON or an error string.
@@ -112,7 +113,7 @@ async def _fetch_topic(
 
 async def _fetch_remaining_posts(
     base_url: str, topic_id: int, post_ids: list[int], hostname: str,
-) -> Union[list[dict], str]:
+) -> list[dict] | str:
     """Batch-fetch posts via ``/t/{id}/posts.json?post_ids[]=...``.
 
     Returns list of post dicts or an error string.
@@ -135,7 +136,7 @@ async def _fetch_remaining_posts(
 
 async def _fetch_search(
     base_url: str, query: str, hostname: str,
-) -> Union[dict, str]:
+) -> dict | str:
     """Fetch ``/search.json?q=...``."""
     url = f"{base_url}/search.json"
     try:
@@ -151,7 +152,7 @@ async def _fetch_search(
 
 async def _fetch_latest(
     base_url: str, hostname: str,
-) -> Union[dict, str]:
+) -> dict | str:
     """Fetch ``/latest.json``."""
     url = f"{base_url}/latest.json"
     try:
@@ -186,17 +187,15 @@ _TOC_DIV_RE = re.compile(r'<div[^>]*data-theme-toc[^>]*>.*?</div>', re.DOTALL)
 _IMAGE_SIZE_RE = re.compile(r"\|(\d+x\d+|\d+)(, \d+%)?(?=\])")
 
 
-def _parse_quote_attr(attr_str: str) -> tuple[str, Optional[int]]:
+def _parse_quote_attr(attr_str: str) -> tuple[str, int | None]:
     """Parse ``username, post:N, topic:T`` into (username, post_number)."""
     parts = [p.strip() for p in attr_str.split(",")]
     username = parts[0] if parts else "unknown"
     post_num = None
     for part in parts[1:]:
         if part.startswith("post:"):
-            try:
+            with contextlib.suppress(ValueError):
                 post_num = int(part[5:])
-            except ValueError:
-                pass
     return username, post_num
 
 
@@ -256,9 +255,10 @@ def _format_relative_time(post_iso: str, topic_iso: str) -> str:
         delta = max(0, int((post_dt - topic_dt).total_seconds()))
         hours, remainder = divmod(delta, 3600)
         minutes, seconds = divmod(remainder, 60)
-        return f"T+{hours:02d}:{minutes:02d}:{seconds:02d}"
     except (ValueError, AttributeError):
         return ""
+    else:
+        return f"T+{hours:02d}:{minutes:02d}:{seconds:02d}"
 
 
 # ---------------------------------------------------------------------------
@@ -550,7 +550,7 @@ async def discourse(
             "For latest: ignored (use base_url to identify the forum)."
         ),
     )],
-    base_url: Annotated[Optional[str], Field(
+    base_url: Annotated[str | None, Field(
         description=(
             "Base URL of the Discourse instance (e.g. 'https://meta.discourse.org'). "
             "Required for search and latest actions. For topic, inferred from the query URL."
@@ -600,7 +600,7 @@ async def discourse(
         })
         return fm + "\n\n" + _fence_content(full_md, title=None)
 
-    elif action == "search":
+    if action == "search":
         if not base_url:
             return "Error: base_url is required for search action."
         hostname = urlparse(base_url).hostname or ""
@@ -619,7 +619,7 @@ async def discourse(
         })
         return fm + "\n\n" + _fence_content(result)
 
-    elif action == "latest":
+    if action == "latest":
         if not base_url:
             return "Error: base_url is required for latest action."
         hostname = urlparse(base_url).hostname or ""
@@ -637,8 +637,7 @@ async def discourse(
         })
         return fm + "\n\n" + _fence_content(result)
 
-    else:
-        return (
-            f"Error: Unknown action '{action}'. "
-            "Valid actions: topic, search, latest"
-        )
+    return (
+        f"Error: Unknown action '{action}'. "
+        "Valid actions: topic, search, latest"
+    )

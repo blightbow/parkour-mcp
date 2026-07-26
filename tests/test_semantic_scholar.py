@@ -12,13 +12,13 @@ _s2_module = sys.modules["parkour_mcp.semantic_scholar"]
 
 from parkour_mcp.semantic_scholar import (  # noqa: E402
     S2_BASE_URL,
-    _detect_s2_url,
     _fetch_s2_paper,
     _format_paper_detail,
     _get_s2_api_key,
     _s2_request,
     semantic_scholar,
 )
+from parkour_mcp.detection import _detect_s2_url  # noqa: E402
 from parkour_mcp._pipeline import _s2_fast_path  # noqa: E402
 
 from .conftest import (  # noqa: E402
@@ -119,6 +119,30 @@ class TestS2Request:
         )
         result = await _s2_request("/paper/invalid")
         assert "Not found" in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_403_with_key(self, monkeypatch):
+        monkeypatch.setenv("S2_API_KEY", "my-key")
+        respx.get(f"{S2_BASE_URL}/paper/search").mock(
+            return_value=httpx.Response(403)
+        )
+        result = await _s2_request("/paper/search", {"query": "test"})
+        assert "rejected the configured API key" in result
+        assert "malformed, revoked, or deactivated" in result
+        assert "api-key-form" in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_403_without_key(self, monkeypatch):
+        monkeypatch.delenv("S2_API_KEY", raising=False)
+        monkeypatch.setattr(_s2_module, "S2_CONFIG_PATH", Path("/nonexistent/path"))
+        respx.get(f"{S2_BASE_URL}/paper/search").mock(
+            return_value=httpx.Response(403)
+        )
+        result = await _s2_request("/paper/search", {"query": "test"})
+        assert "403" in result
+        assert "rejected the configured API key" not in result
 
     @pytest.mark.asyncio
     @respx.mock

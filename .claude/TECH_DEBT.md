@@ -2,6 +2,35 @@
 
 Acknowledged warnings and deferred fixes. Each entry includes the source, the issue, and why it was deferred.
 
+## Reddit OAuth — deliberate deviations from redlib
+
+The Reddit fast path was rebuilt on `oauth.reddit.com` userless tokens after Reddit retired the unauthenticated `.json` endpoints on 2026-05-29. The implementation mirrors redlib (`redlib-org/redlib`, `src/oauth.rs` + `src/client.rs`), which we treat as the domain expert. A few intentional simplifications diverge from redlib; they are choices, not bugs.
+
+### Collapsed token-acquisition retry loop
+
+- **Location**: `parkour_mcp/reddit.py#_authenticate`.
+- **Deviation**: redlib's `Oauth::new` retries the mobile grant up to 5 times (5s apart), falls back to the web grant, and `process::exit`s after 10 total failures. We attempt each tier once and return a graceful error string on total failure.
+- **Why**: redlib is a long-running web server where a boot-time retry loop is appropriate. parkour mints inside an interactive tool call, where a 25s+ stall is worse UX than a fast, honest failure (the caller surfaces the error and can retry). The background daemon and the reactive 401 refresh still recover from transient failures after the first success.
+
+### No proactive `x-ratelimit-remaining` tracking
+
+- **Location**: `parkour_mcp/reddit.py#_reddit_api_get` (and the absence of redlib client.rs `OAUTH_RATELIMIT_REMAINING` accounting).
+- **Deviation**: redlib reads the `x-ratelimit-remaining` header on every response and spawns a token rollover when it drops below 10, to dodge per-IP limits across many concurrent users. We do not track it.
+- **Why**: parkour is a single-user sidecar gated by a 2s limiter (~30 req/min), comfortably under Reddit's userless ceiling (~100 req/min). The proactive accounting would add module state and complexity for a limit a single user does not approach. The daemon (proactive, time-based) plus 401-reactive refresh cover token freshness. Revisit if parkour ever fans out concurrent Reddit fetches.
+
+### redd.it short-link resolution is best-effort
+
+- **Location**: `parkour_mcp/reddit.py#_resolve_redd_it`.
+- **Deviation**: redlib resolves share/short links through a dedicated `canonical_path` HEAD-walk against multiple bases with full retry. We do a single authenticated HEAD on the `redd.it` URL (token attached when available, unauthenticated fallback otherwise) and read the redirect target.
+- **Why**: short links are a small fraction of Reddit traffic and the single HEAD currently resolves them. If Reddit starts gating `redd.it` redirects the way it gated `.json`, port redlib's `canonical_path` HEAD-walk.
+
+### Token cache ignores the requested page's quarantine state
+
+- **Location**: `parkour_mcp/reddit.py#_fetch_reddit_json` (no quarantine opt-in cookie).
+- **Deviation**: redlib sends a `_options` cookie opting into quarantined/gated content. We do not, so quarantined subreddits map to a `_check_reddit_json_error` error string rather than rendering.
+- **Why**: rendering quarantined content silently is a surprising default for a research sidecar; surfacing the quarantine status as an explicit error is the more PoLA-aligned behavior. Add the opt-in cookie behind a flag if a real use case needs quarantined threads.
+- **NSFW is treated oppositely, on purpose**: quarantine is Reddit's explicit *warning* state for rule-breaking communities, so gating it behind an error is the unsurprising default. Ordinary 18+ (NSFW) content is not that — it is everywhere on Reddit, and the rest of the toolkit (Kagi, the generic fetch) never filters adult content. So NSFW is *included* by default; search defaults to `include_over_18=1` (`detection.py#_detect_reddit_url`) and direct subreddit/thread fetches already surface it untouched. The astonishing thing would be Reddit search silently returning a SFW subset when a Kagi search beside it does not. A caller can still pass `include_over_18=0` for SFW search.
+
 ## Pyright warnings (opted not to fix)
 
 ### `fetch_direct.py` — `_matched_meta` not accessed
@@ -60,6 +89,24 @@ Acknowledged warnings and deferred fixes. Each entry includes the source, the is
 - **Why deferred**: `segment-any-text/wtpsplit`'s SaT model is the field's converged answer for sentence segmentation of unpunctuated text (~95ms per 1000 sentences on CPU, ONNX-deployable). But it adds an ONNX runtime dependency (~50MB model download) that we deferred until empirical evidence shows the pause-only branch actually produces visibly worse retrieval on auto-captions.
 - **How to evaluate**: Compare retrieval quality on a corpus of auto-captioned videos: BM25 search recall using time-window coalescing vs. the same content coalesced via SaT-derived sentence boundaries. If the difference is meaningful, wire SaT in as the unpunctuated branch's coalescer.
 
+## `fetch_direct.py` — deferred enhancements
+
+### Classifier rejects `text/markdown` and `application/yaml`
+
+- **Location**: `parkour_mcp/common.py#_classify_content_type` (whitelist), with the rejection emitted in `parkour_mcp/fetch_direct.py#web_fetch_direct` when the classifier returns `None`.
+- **Issue**: The classifier whitelists `text/html`, `application/json`, `application/xml`, and `text/plain`. Markdown (`text/markdown`) and YAML (`application/yaml`, `text/yaml`) return `None`, producing `Error: Unsupported content type '...'`. Both are machine-readable text formats, and the existing non-HTML branch in `web_fetch_direct` already renders raw text with frontmatter, so the data path could carry them trivially. Concrete affected target: Kagi's v1 API spec is served as `text/markdown` (`.md` flat pages) and `application/yaml` (bundle download); see the `kagi.py` bullet in `CLAUDE.md` for URLs. Sessions that need the source-of-truth Kagi spec currently have to shell out to `curl`.
+- **Why deferred**: Out of scope for the documentation-first turn that surfaced it. The fix is small (two added branches in `_classify_content_type` returning new classifier labels), and `_SOURCE_EXT_MAP` in `common.py` already maps `.md` to `markdown` and `.yaml`/`.yml` to `yaml`, so the syntax-tag plumbing is in place.
+- **Mitigation**: Fetch via `curl` until the classifier is extended.
+
+## `kagi.py` — v0 dormant island
+
+### kagiapi dep, summarize backing code, and balance-lockout helpers retained alongside unregistered tool
+
+- **Location**: `parkour_mcp/kagi.py` (top-level `from kagiapi import KagiClient`; `get_client`, `_extract_balance`, `_check_balance`, `_summarize_locked`, `_handle_v0_error`, and the unregistered `summarize`), `pyproject.toml` (`kagiapi` declared in `dependencies`), `tests/test_kagi.py` (`TestExtractBalance`, `TestCheckBalance`, `TestSummarizeLockout::test_summarize_*`, `TestHandleV0Error`).
+- **Issue**: `kagi_summarize` is unregistered on rc1 because v1 has no `/summarize` counterpart yet, but the backing code stays as scaffolding for re-registration. `summarize()` still calls `kagiapi.KagiClient.summarize()` against v0, so the dep, the balance-lockout helpers (`_extract_balance`, `_check_balance`, `_summarize_locked`), the v0 error parser (`_handle_v0_error`), and `get_client` all stay alive even though no registered tool exercises them. Tests preserve coverage on the dormant code so a future re-registration starts from a green suite.
+- **Why deferred**: When Kagi ships `/summarize` on v1, the natural follow-up is one focused commit: rewrite `summarize()` against the v1 endpoint, decide whether v1's new billing signal warrants a similar lockout (v1 dropped `meta.api_balance` and the replacement billing flow hasn't shipped), re-register the tool in `__init__.py`, and delete the entire v0 island (kagiapi import + dep, `get_client`, balance helpers, v0 error parser) in the same pass. Removing the island now would force a stub or skip-marker on the dormant function, churn we'd undo on re-registration.
+- **How to evaluate**: Watch the Kagi API changelog and the Kagi Discord `#api` forum for `/v1/summarize` landing. On landing, do the migration above and remove this entry.
+
 ## Structural tradeoffs
 
 ### `<header>` stripped from all pages — loses real h1s on spec docs
@@ -68,3 +115,10 @@ Acknowledged warnings and deferred fixes. Each entry includes the source, the is
 - **Issue**: `<header>` is decomposed on every page as site chrome. Spec documents (WHATWG HTML Living Standard and likely others) use `<header>` semantically for the document's primary h1 and metadata block, so the real title and subtitle are discarded along with the site-chrome content the strip targets on typical pages.
 - **Why deferred**: `<header>` is correctly site-chrome for ~99% of the open web; leaking nav/branding h1s into body output would be a worse default. Fixing the spec-doc case structurally needs either (a) context-sensitive stripping (strip `<header>` at nav depth but not at document root) or (b) a per-site escape hatch. Both are significantly more involved than the affected-page count justifies.
 - **Mitigation**: The title ladder falls through to `<title>` / `og:title` via `_extract_head_title` when no h1 survives outside fenced code (see `TestHtmlTitleExtraction`). For WHATWG this yields `"HTML Standard"` from `<title>`. The in-body visual subtitle ("Living Standard — Last Updated…") is still lost but has low information value.
+
+## Outbound fetch hardening — fast paths bypass `guarded_fetch`
+
+- **Location**: every API/fast-path module builds and calls its own client directly: `arxiv.py`, `doi.py`, `semantic_scholar.py`, `ietf.py`, `mediawiki.py`, `github.py`, `reddit.py` (`curl_cffi`), `discourse.py`, `youtube.py`, `packages.py`, `scorecard.py` (the latter two via the shared deps.dev client in `common.py#_depsdev_get`). Only `parkour_mcp/_pipeline.py` (generic HTTP), `fetch_direct.py`, and `fetch_js.py` route through `common.py#guarded_fetch`.
+- **Issue**: `guarded_fetch` layers three caps the fast paths therefore skip: the Content-Length gate, the streaming size cap, and the always-on `asyncio.timeout(60.0)` wall-clock deadline (see *Outbound request defenses* in `docs/frontmatter-standard.md`). A first-party API that hangs mid-stream or returns an unexpectedly large body is bounded only by each module's per-request `timeout=` (connect/read budget), not by a whole-request deadline or a size ceiling. SSRF is not in scope here — these hit fixed first-party hosts, not caller-supplied URLs — but the wall-clock deadline and size caps are generic robustness properties that currently apply unevenly across the codebase.
+- **Why deferred**: the fast paths target trusted, well-behaved first-party endpoints (arxiv.org, the GitHub / deps.dev / Datatracker / RFC Editor APIs, oauth.reddit.com), so practical exposure is low, and several modules need bespoke clients anyway (reddit's `curl_cffi` Safari impersonation to clear the JA3 filter, the shared deps.dev client and limiter). Threading `guarded_fetch` through eleven modules with differing client construction is a non-trivial refactor for a low-probability failure mode.
+- **How to evaluate**: revisit if a real hang / oversize incident surfaces from a first-party API, or when the shared HTTP-client-factory idea from the cross-cutting abstraction audit is picked up. The cheapest improvement is to give every outbound path the wall-clock deadline at minimum (it always applies in `guarded_fetch`, even when size caps are disabled); the fuller fix is a shared `_api_client` factory that wraps the caps so all paths inherit them uniformly.

@@ -95,25 +95,73 @@ jobs:
       - name: Install git-cliff
         uses: taiki-e/install-action@git-cliff
 
-      - name: Generate release notes from commits
-        # git-cliff is the single source of truth for changelog content
-        # (both local CHANGELOG.md assembly during /release and this CI
-        # step). It reads the [tool.git-cliff] config in pyproject.toml,
-        # extracts `Why:` trailers via the Tera template, and emits a
-        # Keep a Changelog section. --strip all removes the header /
-        # footer so the output feeds `gh release create --notes-file`.
+      - name: Assemble release notes
+        # CHANGELOG.md wins when it carries a section for this exact
+        # version; git-cliff fills in when it does not.
         #
-        # The range is anchored to the last FINAL tag, not --current /
-        # --latest: those cut at the adjacent git tag, so a release
-        # published after intervening rcN pre-release tags would report
-        # only the rc-period commits. Selecting the most recent vX.Y.Z
-        # ancestor makes both an RC and the final it precedes report the
-        # whole body of work since the previous final release.
+        # CHANGELOG-first is the correct precedence, not a workaround.
+        # For a final release, /release step 3 already wrote git-cliff's
+        # output INTO CHANGELOG.md, and step 4 explicitly invites the
+        # author to tighten the wording before committing. So the two
+        # sources agree except where a human deliberately improved one of
+        # them — and regenerating here would silently discard exactly
+        # those edits. Reading CHANGELOG.md makes the file in the repo and
+        # the GitHub Release body incapable of disagreeing.
+        #
+        # RCs take the git-cliff branch by construction: CHANGELOG.md
+        # tracks final releases only, so the lookup finds no
+        # `## [X.Y.ZrcN]` section and falls through.
         run: |
+          version="${{ steps.version.outputs.version }}"
           tag="${{ steps.version.outputs.tag }}"
-          last_final=$(git tag --list 'v*' --merged "$tag" --sort=-v:refname \
-            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | grep -vFx "$tag" | head -1)
-          git cliff "${last_final}..${tag}" --strip all -o release-notes.md
+
+          # Content = anything that is not a blank line or a `## [version]`
+          # section header. git-cliff emits that header even when every
+          # commit in range was filtered out, so a size check would read
+          # as "notes exist" and publish an empty release body.
+          has_content() {
+            grep -vE '^[[:space:]]*$|^## \[' "$1" | grep -q '[^[:space:]]'
+          }
+
+          awk -v v="## [$version]" '
+            index($0, v) == 1 { found = 1; next }
+            found && /^## \[/  { exit }
+            found              { print }
+          ' CHANGELOG.md > release-notes.md
+
+          if has_content release-notes.md; then
+            echo "::notice::Release notes sourced from CHANGELOG.md section ## [$version]"
+          else
+            echo "::notice::No CHANGELOG.md section for $version; assembling from commits"
+            # The range is anchored to the last FINAL tag, not --current /
+            # --latest: those cut at the adjacent git tag, so a release
+            # published after intervening rcN pre-release tags would report
+            # only the rc-period commits. Selecting the most recent vX.Y.Z
+            # ancestor makes an RC report the whole body of work since the
+            # previous final release.
+            last_final=$(git tag --list 'v*' --merged "$tag" --sort=-v:refname \
+              | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | grep -vFx "$tag" | head -1 || true)
+            # An absent prior final tag would build the malformed range
+            # "..$tag"; fall back to the whole history in that case.
+            #
+            # --tag "$tag" is REQUIRED, not cosmetic: pyproject's
+            # `ignore_tags` folds intermediate rcN tags so they don't open
+            # their own `## [rcN]` section inside this range. But a folded
+            # current tag would otherwise render as `## [unreleased]`, so
+            # --tag names the single section explicitly. --strip all drops
+            # the header/footer so the output feeds `--notes-file`.
+            if [ -n "$last_final" ]; then
+              git cliff --tag "$tag" "${last_final}..${tag}" --strip all -o release-notes.md
+            else
+              git cliff --tag "$tag" --strip all -o release-notes.md
+            fi
+          fi
+
+          if ! has_content release-notes.md; then
+            echo "::error::No release notes for $tag. A release needs either a '## [$version]' section in CHANGELOG.md or Conventional Commits in range that match a commit_parsers rule."
+            exit 1
+          fi
+          cat release-notes.md
 
       - name: Create GitHub Release
         env:

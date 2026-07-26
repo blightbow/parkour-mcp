@@ -4,36 +4,31 @@ import asyncio
 import logging
 import re
 import xml.etree.ElementTree as ET
-from typing import Annotated, Optional
+from typing import Annotated
 
+from defusedxml.ElementTree import fromstring as _safe_fromstring
 from pydantic import Field
 
 import httpx
 
 from .common import _API_HEADERS, _API_USER_AGENT, RateLimiter, s2_enabled, tool_name
-from .markdown import FMEntries, _append_frontmatter_entry, _build_frontmatter, _fence_content
+from .detection import _detect_ietf_url
+from .markdown import (
+    FMEntries,
+    _append_frontmatter_entry,
+    _build_frontmatter,
+    _fence_content,
+    _TRUST_ADVISORY,
+)
 
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# URL detection
+# Identifier-string classification
 # ---------------------------------------------------------------------------
-# Matches rfc-editor.org/rfc/rfc{N} only when the URL targets the canonical
-# metadata endpoint: bare path (with optional trailing slash) or `.json` suffix.
-# Body-text suffixes (.html/.txt/.xml/.pdf) intentionally fall through to the
-# generic HTTP+markdown pipeline so callers can use section= and search=
-# against the rendered text.  Does NOT match /info/ pages (used for subseries
-# resolution).
-_RFC_EDITOR_RE = re.compile(
-    r'https?://www\.rfc-editor\.org/rfc/rfc(\d+)(?:\.json)?(?=[/?#]|$)',
-    re.IGNORECASE,
-)
-
-# Matches datatracker.ietf.org/doc/{rfc{N}|draft-*}
-_DATATRACKER_RE = re.compile(
-    r'https?://datatracker\.ietf\.org/doc/(rfc(\d+)|draft-[\w.-]+)/?',
-    re.IGNORECASE,
-)
+# URL detection (_RFC_EDITOR_RE, _DATATRACKER_RE, _detect_ietf_url) lives in
+# detection.py.  The classifiers below match identifier *strings* (a DOI, a
+# subseries label) rather than URLs, and stay with the handlers that use them.
 
 # Matches RFC DOIs: 10.17487/RFC{N}
 _RFC_DOI_RE = re.compile(r'^10\.17487/RFC(\d+)$', re.IGNORECASE)
@@ -42,27 +37,6 @@ _RFC_DOI_RE = re.compile(r'^10\.17487/RFC(\d+)$', re.IGNORECASE)
 _SUBSERIES_ID_RE = re.compile(
     r'^(STD|BCP|FYI)\s*0*(\d+)$', re.IGNORECASE,
 )
-
-
-def _detect_ietf_url(url: str) -> Optional[dict]:
-    """Detect an IETF RFC or Internet-Draft URL.
-
-    Returns ``{"type": "rfc", "number": int}`` for RFC URLs,
-    ``{"type": "draft", "name": str}`` for I-D URLs, or None.
-    """
-    m = _RFC_EDITOR_RE.search(url)
-    if m:
-        return {"type": "rfc", "number": int(m.group(1))}
-
-    m = _DATATRACKER_RE.search(url)
-    if m:
-        if m.group(2):
-            # rfc{N}
-            return {"type": "rfc", "number": int(m.group(2))}
-        # draft-*
-        return {"type": "draft", "name": m.group(1)}
-
-    return None
 
 
 # ---------------------------------------------------------------------------
@@ -76,7 +50,7 @@ _datatracker_limiter = RateLimiter(1.0)
 # RFC Editor JSON fetch (metadata)
 # ---------------------------------------------------------------------------
 
-async def _fetch_rfc_metadata(number: int) -> Optional[dict]:
+async def _fetch_rfc_metadata(number: int) -> dict | None:
     """Fetch per-document JSON from the RFC Editor.
 
     Returns parsed JSON dict or None on failure.
@@ -98,7 +72,7 @@ async def _fetch_rfc_metadata(number: int) -> Optional[dict]:
 # Datatracker convenience fetch (denormalized metadata)
 # ---------------------------------------------------------------------------
 
-async def _fetch_datatracker_doc(name: str) -> Optional[dict]:
+async def _fetch_datatracker_doc(name: str) -> dict | None:
     """Fetch denormalized metadata from Datatracker /doc/{name}/doc.json.
 
     Args:
@@ -130,8 +104,8 @@ async def _search_rfcs(
     query: str,
     limit: int = 10,
     offset: int = 0,
-    status: Optional[str] = None,
-    wg: Optional[str] = None,
+    status: str | None = None,
+    wg: str | None = None,
 ) -> tuple[list[dict], int]:
     """Search RFCs via Datatracker REST API.
 
@@ -179,7 +153,7 @@ async def _search_rfcs(
 # Subseries resolution (STD, BCP, FYI)
 # ---------------------------------------------------------------------------
 
-async def _resolve_subseries(ref: str) -> Optional[str]:
+async def _resolve_subseries(ref: str) -> str | None:
     """Resolve a subseries identifier to its constituent RFCs.
 
     Uses the IETF BibXML service which returns a ``<referencegroup>``
@@ -215,7 +189,7 @@ async def _resolve_subseries(ref: str) -> Optional[str]:
 
     # Parse <referencegroup> → <reference anchor="RFC{N}"> children
     try:
-        root = ET.fromstring(xml_text)
+        root = _safe_fromstring(xml_text)
     except ET.ParseError:
         logger.debug("BibXML parse failed for %s", ref, exc_info=True)
         return None
@@ -284,6 +258,7 @@ async def _resolve_subseries(ref: str) -> Optional[str]:
     fm = _build_frontmatter({
         "source": info_url,
         "api": "IETF (BibXML)",
+        "trust": _TRUST_ADVISORY,
         "subseries": f"{series_type} {series_num}",
         "member_count": len(rfc_numbers),
         "see_also": "Use IETF tool with rfc action for details on any member RFC",
@@ -292,7 +267,7 @@ async def _resolve_subseries(ref: str) -> Optional[str]:
     return fm + "\n\n" + _fence_content(body)
 
 
-def _subseries_label(see_also: list[str]) -> Optional[str]:
+def _subseries_label(see_also: list[str]) -> str | None:
     """Build a compact subseries label from a ``see_also`` list.
 
     Returns e.g. ``"STD 97"`` or None if no subseries refs present.
@@ -418,8 +393,8 @@ async def _fetch_rfc_paper(number: int) -> str:
     Concurrent: RFC Editor JSON + formatted APA citation via DOI.
     Passive shelf tracking via CitationRecord.
     """
-    from .doi import fetch_formatted_citation
-    from .shelf import _track_on_shelf, CitationRecord
+    from .doi import fetch_formatted_citation  # noqa: PLC0415  # lazy: intra-package import, avoids import cycle
+    from .shelf import _track_on_shelf, CitationRecord  # noqa: PLC0415  # lazy: .shelf passive tracking, avoids import cycle
 
     rfc_doi = f"10.17487/RFC{number:04d}"
 
@@ -463,6 +438,7 @@ async def _fetch_rfc_paper(number: int) -> str:
         "title": title,
         "source": f"https://www.rfc-editor.org/rfc/rfc{number}",
         "api": "IETF (RFC Editor)",
+        "trust": _TRUST_ADVISORY,
         "status": status,
         "doi": rfc_doi,
         "shelf": shelf_result.status_line,
@@ -584,6 +560,7 @@ async def _fetch_draft(name: str) -> str:
         "title": title,
         "source": f"https://datatracker.ietf.org/doc/{name}/",
         "api": "IETF (Datatracker)",
+        "trust": _TRUST_ADVISORY,
         "state": state,
         "see_also": (
             f"Use {tool_name('web_fetch_direct')} with https://www.ietf.org/archive/id/{name}-{rev}.html "
@@ -623,14 +600,14 @@ async def ietf(
     offset: Annotated[int, Field(
         description="Starting position for search pagination.",
     )] = 0,
-    status: Annotated[Optional[str], Field(
+    status: Annotated[str | None, Field(
         description=(
             "Filter search by RFC status: ps (Proposed Standard), std (Internet Standard), "
             "bcp (Best Current Practice), inf (Informational), exp (Experimental), "
             "hist (Historic)."
         ),
     )] = None,
-    wg: Annotated[Optional[str], Field(
+    wg: Annotated[str | None, Field(
         description="Filter search by working group acronym (e.g. 'httpbis', 'tls').",
     )] = None,
 ) -> str:
@@ -650,7 +627,7 @@ async def ietf(
             return await _fetch_rfc_paper(int(doi_match.group(1)))
         return f"Error: Could not parse RFC identifier from: {query}"
 
-    elif action == "search":
+    if action == "search":
         results, total = await _search_rfcs(
             query, limit=limit, offset=offset, status=status, wg=wg,
         )
@@ -666,7 +643,7 @@ async def ietf(
         })
         return fm + "\n\n" + _format_rfc_list(results, total, offset)
 
-    elif action == "draft":
+    if action == "draft":
         # Accept draft name or URL
         detected = _detect_ietf_url(query)
         if detected and detected["type"] == "draft":
@@ -677,14 +654,13 @@ async def ietf(
             return await _fetch_draft(name)
         return f"Error: Could not parse Internet-Draft name from: {query}"
 
-    elif action == "subseries":
+    if action == "subseries":
         result = await _resolve_subseries(query)
         if result:
             return result
         return f"Error: Could not resolve subseries: {query}"
 
-    else:
-        return (
-            f"Error: Unknown action '{action}'. "
-            "Valid actions: rfc, search, draft, subseries"
-        )
+    return (
+        f"Error: Unknown action '{action}'. "
+        "Valid actions: rfc, search, draft, subseries"
+    )

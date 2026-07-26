@@ -2,70 +2,22 @@
 
 import asyncio
 import logging
-import re
 import xml.etree.ElementTree as ET
-from typing import Annotated, Optional
+from typing import Annotated
 
+from defusedxml.ElementTree import fromstring as _safe_fromstring
 from pydantic import Field
 
 import httpx
 
-from .common import _API_USER_AGENT, RateLimiter, tool_name
+from .common import _API_USER_AGENT, RateLimiter, s2_enabled, tool_name
+from .detection import _detect_arxiv_url, _strip_version
 from .markdown import FMEntries, _build_frontmatter
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# URL detection
-# ---------------------------------------------------------------------------
-# Matches arxiv.org/{abs,pdf}/<id> and export.arxiv.org variants.
-# Excludes /html/ — arXiv's HTML endpoint serves full rendered papers;
-# intercepting it would discard full text in favor of metadata-only.
-ARXIV_URL_RE = re.compile(
-    r'https?://(?:export\.)?arxiv\.org/(?:abs|pdf)/(\d{4}\.\d{4,5}(?:v\d+)?)',
-    re.IGNORECASE,
-)
-
-
-def _detect_arxiv_url(url: str) -> Optional[str]:
-    """Extract a bare arXiv ID from an arXiv URL, or None.
-
-    Matches /abs/ and /pdf/ paths. Does NOT match /html/ — those should
-    fall through to HTTP fetch for full paper text with BM25 slicing.
-    """
-    m = ARXIV_URL_RE.search(url)
-    return m.group(1) if m else None
-
-
-# Matches /html/ paths (full paper text — not intercepted by the fast path)
-_ARXIV_HTML_RE = re.compile(
-    r'https?://(?:export\.)?arxiv\.org/html/(\d{4}\.\d{4,5}(?:v\d+)?)',
-    re.IGNORECASE,
-)
-
-
-def _detect_arxiv_html_url(url: str) -> Optional[str]:
-    """Extract arXiv ID from an /html/ URL, or None."""
-    m = _ARXIV_HTML_RE.search(url)
-    return m.group(1) if m else None
-
-
-_VERSION_SUFFIX_RE = re.compile(r'v\d+$')
-
-
-def _strip_version(arxiv_id: str) -> str:
-    """Strip the version suffix from an arXiv ID for DOI synthesis.
-
-    DataCite registers one DOI per paper, always versionless:
-    ``10.48550/arXiv.2501.16496`` (not ``v1``).  The Atom API always
-    returns versioned IDs (e.g. ``2501.16496v1``), so this helper is
-    needed whenever constructing DOIs from API-returned IDs.
-
-    The versioned ID should still be used for arXiv URLs (abs, pdf, html)
-    and display — arXiv recommends citing with the specific version.
-    """
-    return _VERSION_SUFFIX_RE.sub('', arxiv_id)
-
+# URL/identifier detection (ARXIV_URL_RE, _detect_arxiv_html_url, etc.) lives
+# in detection.py; this module imports back only the helpers it uses directly.
 
 # ---------------------------------------------------------------------------
 # Rate limiter — 3 seconds between requests per arXiv API terms of use.
@@ -91,7 +43,7 @@ _ARXIV_RETRY_BACKOFF = 3.0  # seconds; doubles each retry
 
 def _parse_arxiv_entry(entry_el: ET.Element) -> dict:
     """Extract structured data from a single Atom <entry> element."""
-    def _text(tag: str, ns: str = _ATOM_NS) -> Optional[str]:
+    def _text(tag: str, ns: str = _ATOM_NS) -> str | None:
         el = entry_el.find(f"{{{ns}}}{tag}")
         return el.text.strip() if el is not None and el.text else None
 
@@ -203,7 +155,7 @@ async def _arxiv_request(params: dict) -> list[dict] | str:
 
     # Parse Atom XML
     try:
-        root = ET.fromstring(response.text)
+        root = _safe_fromstring(response.text)
     except ET.ParseError as e:
         return f"Error: Failed to parse arXiv API response - {e}"
 
@@ -239,9 +191,8 @@ def _format_arxiv_paper(data: dict, *, html_available: bool = True) -> str:
     meta_bits = []
     if published := data.get("published"):
         meta_bits.append(f"**Published:** {published}")
-    if updated := data.get("updated"):
-        if updated != data.get("published"):
-            meta_bits.append(f"**Updated:** {updated}")
+    if (updated := data.get("updated")) and updated != data.get("published"):
+        meta_bits.append(f"**Updated:** {updated}")
     if meta_bits:
         parts.append("  \n".join(meta_bits) + "\n")
 
@@ -283,17 +234,15 @@ def _format_arxiv_paper(data: dict, *, html_available: bool = True) -> str:
         parts.append("")
 
     # Cross-reference to Semantic Scholar (only when S2 is opted in)
-    if arxiv_id:
-        from .common import s2_enabled
-        if s2_enabled():
-            if html_available:
-                parts.append(
-                    f"*For citation data, use {tool_name('semantic_scholar')} with `ARXIV:{arxiv_id}`*\n"
-                )
-            else:
-                parts.append(
-                    f"*For citation data and body text snippets, use {tool_name('semantic_scholar')} with `ARXIV:{arxiv_id}`*\n"
-                )
+    if arxiv_id and s2_enabled():
+        if html_available:
+            parts.append(
+                f"*For citation data, use {tool_name('semantic_scholar')} with `ARXIV:{arxiv_id}`*\n"
+            )
+        else:
+            parts.append(
+                f"*For citation data and body text snippets, use {tool_name('semantic_scholar')} with `ARXIV:{arxiv_id}`*\n"
+            )
 
     # Abstract
     if abstract := data.get("abstract"):
@@ -326,7 +275,6 @@ def _format_arxiv_list(
             lines.append(f"   arXiv:{arxiv_id}")
 
     if include_hint:
-        from .common import s2_enabled
         if s2_enabled():
             hint = (
                 f"\n*Use `paper` action or {tool_name('semantic_scholar')} with `ARXIV:<id>` "
@@ -350,11 +298,9 @@ def _format_arxiv_list(
 # ---------------------------------------------------------------------------
 
 def _arxiv_see_also(
-    arxiv_id: str, html_available: bool, citation_text: Optional[str],
+    arxiv_id: str, html_available: bool, citation_text: str | None,
 ) -> list[str] | str | None:
     """Build see_also hints for an arXiv paper response."""
-    from .common import s2_enabled
-
     hints = []
     if s2_enabled():
         if html_available:
@@ -386,7 +332,7 @@ async def _fetch_arxiv_paper(arxiv_id: str, *, _pdf_url: bool = False) -> str:
         arxiv_id: Bare arXiv ID (e.g. "1706.03762" or "1706.03762v5")
         _pdf_url: If True, the original URL was a /pdf/ link — add a hint.
     """
-    from .doi import (
+    from .doi import (  # noqa: PLC0415  # lazy: intra-package import, avoids arxiv<->doi cycle
         _alt_dois_from_relations,
         _build_alert_message,
         _build_correction_note,
@@ -394,7 +340,7 @@ async def _fetch_arxiv_paper(arxiv_id: str, *, _pdf_url: bool = False) -> str:
         fetch_crossref_metadata,
         fetch_formatted_citation,
     )
-    from .markdown import _format_retraction_banner
+    from .markdown import _format_retraction_banner  # noqa: PLC0415  # lazy: intra-package import
 
     result = await _arxiv_request({"id_list": arxiv_id})
     if isinstance(result, str):
@@ -450,7 +396,7 @@ async def _fetch_arxiv_paper(arxiv_id: str, *, _pdf_url: bool = False) -> str:
 
     # Passive shelf tracking (fire-and-forget)
     # Prefer publisher DOI as primary when available; arXiv DOI becomes alt
-    from .shelf import _track_on_shelf, CitationRecord
+    from .shelf import _track_on_shelf, CitationRecord  # noqa: PLC0415  # lazy: .shelf passive tracking, avoids import cycle
     published = paper.get("published") or ""
     year = int(published[:4]) if len(published) >= 4 and published[:4].isdigit() else None
     publisher_doi = paper.get("doi")
@@ -522,10 +468,10 @@ async def arxiv(
     offset: Annotated[int, Field(
         description="Starting position for pagination.",
     )] = 0,
-    sort_by: Annotated[Optional[str], Field(
+    sort_by: Annotated[str | None, Field(
         description="Sort field: relevance, lastUpdatedDate, or submittedDate (default: relevance for search, submittedDate for category).",
     )] = None,
-    sort_order: Annotated[Optional[str], Field(
+    sort_order: Annotated[str | None, Field(
         description="Sort direction: ascending or descending (default: descending).",
     )] = None,
 ) -> str:
@@ -547,10 +493,9 @@ async def arxiv(
         if not result:
             return f"No papers found for: {query}"
 
-        from .common import s2_enabled as _s2_on
         _search_hint = (
             f"Use paper action for full details, or {tool_name('semantic_scholar')} with ARXIV:<id> for citation data"
-            if _s2_on() else "Use paper action for full details"
+            if s2_enabled() else "Use paper action for full details"
         )
         fm = _build_frontmatter(FMEntries({
             "api": "arXiv",
@@ -560,13 +505,13 @@ async def arxiv(
         }))
         return fm + "\n\n" + _format_arxiv_list(result, total=None, offset=offset, include_hint=False)
 
-    elif action == "paper":
+    if action == "paper":
         # Accept arXiv URLs — auto-detect and extract ID
         detected = _detect_arxiv_url(query)
         arxiv_id = detected if detected else query
         return await _fetch_arxiv_paper(arxiv_id)
 
-    elif action == "category":
+    if action == "category":
         params = {
             "search_query": f"cat:{query}",
             "start": offset,
@@ -581,10 +526,9 @@ async def arxiv(
         if not result:
             return f"No papers found in category: {query}"
 
-        from .common import s2_enabled as _s2_cat
         _cat_hint = (
             f"Use paper action for full details, or {tool_name('semantic_scholar')} with ARXIV:<id> for citation data"
-            if _s2_cat() else "Use paper action for full details"
+            if s2_enabled() else "Use paper action for full details"
         )
         fm = _build_frontmatter(FMEntries({
             "api": "arXiv",
@@ -594,8 +538,7 @@ async def arxiv(
         }))
         return fm + "\n\n" + _format_arxiv_list(result, total=None, offset=offset, include_hint=False)
 
-    else:
-        return (
-            f"Error: Unknown action '{action}'. "
-            "Valid actions: search, paper, category"
-        )
+    return (
+        f"Error: Unknown action '{action}'. "
+        "Valid actions: search, paper, category"
+    )

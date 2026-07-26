@@ -1478,7 +1478,6 @@ class TestTranscriptAction:
         # is exercised separately in TestYtDlpTranscriptFallback.
         async def _no_fallback(video_id, languages):
             del video_id, languages
-            return None
         monkeypatch.setattr(
             _yt_module, "_yt_dlp_transcript_fallback", _no_fallback,
         )
@@ -2929,10 +2928,10 @@ class TestYtDlpTranscriptFallback:
 
         async def fake_fetch(url):
             assert url == "https://example.com/foo.json3"
-            return tuple([
+            return (
                 _yt_module._FallbackSnippet(start=0.0, duration=2.0, text="hello"),
                 _yt_module._FallbackSnippet(start=2.0, duration=2.0, text="world"),
-            ])
+            )
         monkeypatch.setattr(_yt_module, "_fetch_and_parse_json3", fake_fetch)
 
         result = await _yt_module._yt_dlp_transcript_fallback("vid", ["en"])
@@ -3013,9 +3012,9 @@ class TestFallbackInDispatcher:
         async def fake_fallback(video_id, languages):
             del video_id, languages
             return _yt_module._FallbackTranscript(
-                snippets=tuple([
+                snippets=(
                     _yt_module._FallbackSnippet(0.0, 2.0, "Fallback content."),
-                ]),
+                ),
                 language_code="en",
                 is_generated=False,
             )
@@ -3043,9 +3042,9 @@ class TestFallbackInDispatcher:
         async def fake_fallback(video_id, languages):
             del video_id, languages
             return _yt_module._FallbackTranscript(
-                snippets=tuple([
+                snippets=(
                     _yt_module._FallbackSnippet(0.0, 2.0, "Captions via yt-dlp."),
-                ]),
+                ),
                 language_code="en",
                 is_generated=True,
             )
@@ -3077,9 +3076,9 @@ class TestFallbackInDispatcher:
         async def fake_fallback(video_id, languages):
             del video_id, languages
             return _yt_module._FallbackTranscript(
-                snippets=tuple([
+                snippets=(
                     _yt_module._FallbackSnippet(0.0, 2.0, "Recovered."),
-                ]),
+                ),
                 language_code="en",
                 is_generated=False,
             )
@@ -3107,7 +3106,6 @@ class TestFallbackInDispatcher:
 
         async def fake_fallback(video_id, languages):
             del video_id, languages
-            return None
         monkeypatch.setattr(
             _yt_module, "_yt_dlp_transcript_fallback", fake_fallback,
         )
@@ -3133,7 +3131,6 @@ class TestFallbackInDispatcher:
         async def fake_fallback(video_id, languages):
             del video_id, languages
             fallback_called["yes"] = True
-            return None
         monkeypatch.setattr(
             _yt_module, "_yt_dlp_transcript_fallback", fake_fallback,
         )

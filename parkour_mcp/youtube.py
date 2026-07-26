@@ -23,8 +23,9 @@ import re
 import threading
 from collections import OrderedDict
 from dataclasses import dataclass
-from typing import Annotated, Any, Literal, Optional
+from typing import Annotated, Any, Literal
 
+import httpx
 import tantivy
 from pydantic import Field
 
@@ -96,7 +97,7 @@ _YT_MUSIC_RE = re.compile(
 )
 
 
-def _detect_youtube_url(url: str) -> Optional[tuple[str, str]]:
+def _detect_youtube_url(url: str) -> tuple[str, str] | None:
     """Classify a YouTube URL.
 
     Returns ``(kind, identifier)`` on match, or ``None`` for non-YouTube
@@ -150,7 +151,7 @@ def _get_ydl_video() -> Any:
     """Return the lazily-constructed video-mode YoutubeDL singleton."""
     global _ydl_video
     if _ydl_video is None:
-        from yt_dlp import YoutubeDL  # type: ignore[import-not-found]
+        from yt_dlp import YoutubeDL  # type: ignore[import-not-found]  # noqa: PLC0415  # heavy optional dep, deferred
         _ydl_video = YoutubeDL(_YDL_OPTS_VIDEO)
     return _ydl_video
 
@@ -168,7 +169,7 @@ def _map_yt_dlp_error(exc: Exception) -> str:
     with the relevant text in the message. Match on substrings.
     """
     try:
-        from yt_dlp.utils import (  # type: ignore[import-not-found]
+        from yt_dlp.utils import (  # type: ignore[import-not-found]  # noqa: PLC0415  # heavy optional dep, deferred
             DownloadError,
             ExtractorError,
             GeoRestrictedError,
@@ -208,7 +209,7 @@ def _map_yt_dlp_error(exc: Exception) -> str:
 # Format helpers
 # ---------------------------------------------------------------------------
 
-def _format_duration(seconds: Optional[float]) -> Optional[str]:
+def _format_duration(seconds: float | None) -> str | None:
     """Render a seconds count as ``M:SS`` or ``H:MM:SS``."""
     if seconds is None:
         return None
@@ -218,7 +219,7 @@ def _format_duration(seconds: Optional[float]) -> Optional[str]:
     return f"{h}:{m:02d}:{sec:02d}" if h else f"{m}:{sec:02d}"
 
 
-def _format_upload_date(yyyymmdd: Optional[str]) -> Optional[str]:
+def _format_upload_date(yyyymmdd: str | None) -> str | None:
     """Convert yt-dlp's ``YYYYMMDD`` date format to ISO ``YYYY-MM-DD``."""
     if not yyyymmdd or len(yyyymmdd) != 8 or not yyyymmdd.isdigit():
         return yyyymmdd
@@ -309,7 +310,7 @@ def _extract_video_with_comments_sync(
     include ``getcomments`` or the ``extractor_args`` overrides — and
     mutating singleton params across calls would race.
     """
-    from yt_dlp import YoutubeDL  # type: ignore[import-not-found]
+    from yt_dlp import YoutubeDL  # type: ignore[import-not-found]  # noqa: PLC0415  # heavy optional dep, deferred
     opts = {
         **_YDL_OPTS_VIDEO,
         "getcomments": True,
@@ -447,7 +448,7 @@ async def _video(url: str) -> str:
     # author-curated and outrank auto-generated transcripts. Surface
     # whenever any manual track exists, even when it overlaps with
     # captions_source, so the LLM can pick the highest-quality track.
-    captions_uploaded_field: Optional[list[str]] = (
+    captions_uploaded_field: list[str] | None = (
         captions.uploaded if captions.uploaded else None
     )
 
@@ -841,7 +842,7 @@ def _render_compact(
 
 def _render_structured(windows: list[Window]) -> str:
     """YAML list of segments with start/duration/text, for machine consumers."""
-    import yaml
+    import yaml  # noqa: PLC0415  # optional dep, lazy by convention
     data = []
     for w in windows:
         for s in w.segments:
@@ -940,9 +941,9 @@ class _TranscriptEntry:
         segments: tuple[Segment, ...],
         windows: tuple[Window, ...],
         chunking_strategy: str,
-        group: Optional[str] = None,
+        group: str | None = None,
         fetcher: str = "youtube-transcript-api",
-        fallback_from: Optional[str] = None,
+        fallback_from: str | None = None,
         chapters: tuple[Chapter, ...] = (),
     ):
         self.url = url
@@ -997,11 +998,11 @@ class _TranscriptEntry:
 
     def search(
         self,
-        query_str: Optional[str] = None,
+        query_str: str | None = None,
         *,
-        start_seconds: Optional[float] = None,
-        end_seconds: Optional[float] = None,
-        chapter: Optional[str] = None,
+        start_seconds: float | None = None,
+        end_seconds: float | None = None,
+        chapter: str | None = None,
         order: str = "score",
         limit: int = 50,
     ) -> tuple[list[int], list[str]]:
@@ -1120,7 +1121,7 @@ class _TranscriptCache:
     def _total(self) -> int:
         return len(self._probation) + len(self._protected)
 
-    def get(self, url: str) -> Optional[_TranscriptEntry]:
+    def get(self, url: str) -> _TranscriptEntry | None:
         entry = self._protected.get(url)
         if entry is not None:
             self._protected.move_to_end(url)
@@ -1150,7 +1151,7 @@ class _TranscriptCache:
         # Local import dodges the circular pull at module-load time
         # (this module already imports register_group_cache from _pipeline,
         # but _evict_group is only needed inside this method).
-        from ._pipeline import _evict_group
+        from ._pipeline import _evict_group  # noqa: PLC0415  # intra-package, lazy to avoid import cycle
         victim_queue = self._probation if self._probation else self._protected
         if not victim_queue:
             return
@@ -1203,7 +1204,7 @@ def _map_transcript_error(exc: Exception) -> str:
     we already exhausted.
     """
     try:
-        from youtube_transcript_api import (
+        from youtube_transcript_api import (  # noqa: PLC0415  # heavy optional dep, deferred
             AgeRestricted,
             CouldNotRetrieveTranscript,
             InvalidVideoId,
@@ -1340,7 +1341,7 @@ def _fetch_transcript_sync(video_id: str, languages: list[str]):
     Lives at module scope so ``asyncio.to_thread`` can pickle it cleanly
     on platforms that need it. The library itself is sync-only.
     """
-    from youtube_transcript_api import YouTubeTranscriptApi
+    from youtube_transcript_api import YouTubeTranscriptApi  # noqa: PLC0415  # heavy optional dep, deferred
     api = YouTubeTranscriptApi()
     return api.fetch(video_id, languages=languages)
 
@@ -1489,7 +1490,7 @@ def _extract_video_info_sync(url: str) -> Any:
 
 def _pick_caption_track(
     subs: dict, auto: dict, languages: list[str],
-) -> tuple[Optional[list[dict]], Optional[str], bool]:
+) -> tuple[list[dict] | None, str | None, bool]:
     """Pick the best track for the requested language preference list.
 
     Manual captions win over auto-generated. Returns
@@ -1513,7 +1514,6 @@ async def _fetch_and_parse_json3(url: str) -> tuple[_FallbackSnippet, ...]:
     fragments; concatenation rebuilds the cue. Empty cues (no segs or
     blank text) are skipped so they don't pollute the segment list.
     """
-    import httpx
     async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as c:
         resp = await c.get(url)
         resp.raise_for_status()
@@ -1533,7 +1533,7 @@ async def _fetch_and_parse_json3(url: str) -> tuple[_FallbackSnippet, ...]:
 
 async def _yt_dlp_transcript_fallback(
     video_id: str, languages: list[str],
-) -> Optional[_FallbackTranscript]:
+) -> _FallbackTranscript | None:
     """Best-effort caption fetch via yt-dlp + raw HTTP.
 
     Returns ``None`` when any link in the chain fails: yt-dlp couldn't
@@ -1582,7 +1582,7 @@ def _build_transcript_entry(
     video_id: str,
     fetched,
     fetcher: str = "youtube-transcript-api",
-    fallback_from: Optional[str] = None,
+    fallback_from: str | None = None,
     chapters: tuple[Chapter, ...] = (),
 ) -> _TranscriptEntry:
     """Construct an entry from a fetched-transcript object.
@@ -1776,10 +1776,10 @@ def _build_context_hint(matched: list[int], total: int) -> str:
 
 def _render_search_response(
     entry: _TranscriptEntry,
-    query: Optional[str],
-    start_seconds: Optional[float],
-    end_seconds: Optional[float],
-    chapter: Optional[str],
+    query: str | None,
+    start_seconds: float | None,
+    end_seconds: float | None,
+    chapter: str | None,
     order: str,
     timestamps: TimestampMode,
 ) -> str:
@@ -1842,11 +1842,11 @@ async def _transcript(
     languages: list[str],
     timestamps: TimestampMode,
     *,
-    search: Optional[str] = None,
-    windows: Optional[list[int]] = None,
-    start_seconds: Optional[float] = None,
-    end_seconds: Optional[float] = None,
-    chapter: Optional[str] = None,
+    search: str | None = None,
+    windows: list[int] | None = None,
+    start_seconds: float | None = None,
+    end_seconds: float | None = None,
+    chapter: str | None = None,
     order: str = "score",
 ) -> str:
     """Fetch / cache / render a YouTube transcript per the requested shape."""
@@ -1868,7 +1868,7 @@ async def _transcript(
     entry = _transcript_cache.get(canonical_url)
     if entry is None:
         fetcher_name = "youtube-transcript-api"
-        fallback_from: Optional[str] = None
+        fallback_from: str | None = None
         # Chapter fetch runs concurrently with the transcript fetch — both
         # are I/O-bound and independent. Chapters degrade silently on any
         # failure (returns []), so the chapter task itself shouldn't raise.
@@ -1886,7 +1886,7 @@ async def _transcript(
             # content-side failures (TranscriptsDisabled, NoTranscriptFound,
             # AgeRestricted, VideoUnavailable, InvalidVideoId) surface as-is.
             try:
-                from youtube_transcript_api import (
+                from youtube_transcript_api import (  # noqa: PLC0415  # heavy optional dep, deferred
                     NoTranscriptFound, PoTokenRequired, RequestBlocked,
                 )
             except ImportError:
@@ -1964,7 +1964,7 @@ def _extract_flat_sync(url: str, limit: int) -> Any:
     formatter caps client-side too as a defense-in-depth in case yt-dlp
     over-delivers.
     """
-    from yt_dlp import YoutubeDL  # type: ignore[import-not-found]
+    from yt_dlp import YoutubeDL  # type: ignore[import-not-found]  # noqa: PLC0415  # heavy optional dep, deferred
     opts = {
         "quiet": True,
         "no_warnings": True,
@@ -2234,7 +2234,7 @@ async def youtube(
             "search: search YouTube for videos matching a free-text query."
         ),
     )],
-    url: Annotated[Optional[str], Field(
+    url: Annotated[str | None, Field(
         description=(
             "YouTube URL for video / transcript / channel / playlist actions. "
             "video / transcript: watch, youtu.be, shorts, clip, embed, v/. "
@@ -2244,13 +2244,13 @@ async def youtube(
             "Not used for action='search' (use 'query=' instead)."
         ),
     )] = None,
-    query: Annotated[Optional[str], Field(
+    query: Annotated[str | None, Field(
         description=(
             "For action='search': free-text query string. yt-dlp's "
             "ytsearch{N}: routing handles URL encoding."
         ),
     )] = None,
-    languages: Annotated[Optional[list[str]], Field(
+    languages: Annotated[list[str] | None, Field(
         description=(
             "For 'transcript': caption language preference list, tried in "
             "order (e.g. ['en', 'en-US']). Defaults to ['en']."
@@ -2267,14 +2267,14 @@ async def youtube(
             "machine consumers."
         ),
     )] = "compact",
-    search: Annotated[Optional[str], Field(
+    search: Annotated[str | None, Field(
         description=(
             "For 'transcript': BM25 query over window text. Mutually "
             "exclusive with 'windows='. Combine with start_seconds / "
             "end_seconds to restrict by time range."
         ),
     )] = None,
-    windows: Annotated[Optional[list[int]], Field(
+    windows: Annotated[list[int] | None, Field(
         description=(
             "For 'transcript': retrieve specific window indices "
             "(0-based). Mutually exclusive with 'search=' and "
@@ -2282,7 +2282,7 @@ async def youtube(
             "are reported in frontmatter rather than erroring."
         ),
     )] = None,
-    start_seconds: Annotated[Optional[float], Field(
+    start_seconds: Annotated[float | None, Field(
         description=(
             "For 'transcript': lower bound on a time-range filter, in "
             "seconds. Windows whose interval overlaps [start_seconds, "
@@ -2290,14 +2290,14 @@ async def youtube(
             "time-restricted query."
         ),
     )] = None,
-    end_seconds: Annotated[Optional[float], Field(
+    end_seconds: Annotated[float | None, Field(
         description=(
             "For 'transcript': upper bound on a time-range filter, in "
             "seconds. Half-open: a window starting exactly at "
             "end_seconds does not match."
         ),
     )] = None,
-    chapter: Annotated[Optional[str], Field(
+    chapter: Annotated[str | None, Field(
         description=(
             "For 'transcript': scope search to a chapter by title. "
             "Parsed via the same query syntax as 'search=' so partial "
@@ -2441,7 +2441,7 @@ async def youtube_comments(
             "action: watch?v=, youtu.be/, shorts/, clip/, embed/, v/."
         ),
     )],
-    comment_id: Annotated[Optional[str], Field(
+    comment_id: Annotated[str | None, Field(
         description=(
             "Drill into a specific top-level comment's thread. The id "
             "comes from the overview view's id= field on each entry. "
