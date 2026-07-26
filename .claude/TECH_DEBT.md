@@ -36,9 +36,9 @@ The Reddit fast path was rebuilt on `oauth.reddit.com` userless tokens after Red
 Which checker is authoritative, so this section is not read as covering more
 than it does:
 
-- **ruff** is the only gate. CI runs `uv run pytest`, and `pytest-ruff` lints
-  every file in `testpaths` as part of that run, so a ruff finding fails the
-  build. Config lives in `[tool.ruff.lint]`.
+- **ruff** gates in CI. The tag-push job runs `uv run pytest`, and `pytest-ruff`
+  lints every file in `testpaths` as part of that run, so a ruff finding fails
+  the build. Config lives in `[tool.ruff.lint]`.
 - **ty** gates too, via `pytest-ty` in the same `addopts`, so a type error
   fails the build exactly like a lint error. Suppressions use
   `# ty: ignore[rule]` and must carry a reason. The editor/agent LSP is a
