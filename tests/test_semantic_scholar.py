@@ -122,6 +122,30 @@ class TestS2Request:
 
     @pytest.mark.asyncio
     @respx.mock
+    async def test_403_with_key(self, monkeypatch):
+        monkeypatch.setenv("S2_API_KEY", "my-key")
+        respx.get(f"{S2_BASE_URL}/paper/search").mock(
+            return_value=httpx.Response(403)
+        )
+        result = await _s2_request("/paper/search", {"query": "test"})
+        assert "rejected the configured API key" in result
+        assert "malformed, revoked, or deactivated" in result
+        assert "api-key-form" in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_403_without_key(self, monkeypatch):
+        monkeypatch.delenv("S2_API_KEY", raising=False)
+        monkeypatch.setattr(_s2_module, "S2_CONFIG_PATH", Path("/nonexistent/path"))
+        respx.get(f"{S2_BASE_URL}/paper/search").mock(
+            return_value=httpx.Response(403)
+        )
+        result = await _s2_request("/paper/search", {"query": "test"})
+        assert "403" in result
+        assert "rejected the configured API key" not in result
+
+    @pytest.mark.asyncio
+    @respx.mock
     async def test_429_without_key(self, monkeypatch):
         monkeypatch.delenv("S2_API_KEY", raising=False)
         monkeypatch.setattr(_s2_module, "S2_CONFIG_PATH", Path("/nonexistent/path"))

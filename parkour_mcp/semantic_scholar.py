@@ -35,6 +35,16 @@ _NO_KEY_MSG = (
     "https://www.semanticscholar.org/product/api#api-key-form"
 )
 
+_KEY_REJECTED_MSG = (
+    "Semantic Scholar rejected the configured API key (HTTP 403 Forbidden). "
+    "This means the key itself is invalid — malformed, revoked, or deactivated — "
+    "not a request problem; Semantic Scholar has no endpoint to check a key's "
+    "status ahead of time. This requires the user's attention: they should "
+    "double-check the key value, then resubmit "
+    "https://www.semanticscholar.org/product/api#api-key-form (the same form "
+    "used to request a key) to reactivate it."
+)
+
 # Field sets for different query types
 _SEARCH_FIELDS = (
     "paperId,title,year,authors,citationCount,referenceCount,"
@@ -99,6 +109,10 @@ async def _s2_request(path: str, params: dict | None = None) -> dict | str:
             return response.json()
         if response.status_code == 404:
             return "Error: Not found on Semantic Scholar."
+        if response.status_code == 403:
+            if _get_s2_api_key():
+                return f"Error: {_KEY_REJECTED_MSG}"
+            return "Error: Semantic Scholar API returned HTTP 403 (Forbidden)."
         if response.status_code == 429:
             if attempt < _S2_MAX_RETRIES:
                 backoff = _S2_RETRY_BACKOFF * (2 ** attempt)
