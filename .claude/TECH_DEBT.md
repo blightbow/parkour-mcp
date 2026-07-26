@@ -31,12 +31,37 @@ The Reddit fast path was rebuilt on `oauth.reddit.com` userless tokens after Red
 - **Why**: rendering quarantined content silently is a surprising default for a research sidecar; surfacing the quarantine status as an explicit error is the more PoLA-aligned behavior. Add the opt-in cookie behind a flag if a real use case needs quarantined threads.
 - **NSFW is treated oppositely, on purpose**: quarantine is Reddit's explicit *warning* state for rule-breaking communities, so gating it behind an error is the unsurprising default. Ordinary 18+ (NSFW) content is not that — it is everywhere on Reddit, and the rest of the toolkit (Kagi, the generic fetch) never filters adult content. So NSFW is *included* by default; search defaults to `include_over_18=1` (`detection.py#_detect_reddit_url`) and direct subreddit/thread fetches already surface it untouched. The astonishing thing would be Reddit search silently returning a SFW subset when a Kagi search beside it does not. A caller can still pass `include_over_18=0` for SFW search.
 
-## Pyright warnings (opted not to fix)
+## Static-analysis findings (opted not to fix)
+
+Which checker is authoritative, so this section is not read as covering more
+than it does:
+
+- **ruff** is the only gate. CI runs `uv run pytest`, and `pytest-ruff` lints
+  every file in `testpaths` as part of that run, so a ruff finding fails the
+  build. Config lives in `[tool.ruff.lint]`.
+- **ty** is configured (`[tool.ty.src]`) and expected to stay clean, but is
+  **not** wired into CI — run `uv run ty check parkour_mcp/ scripts/ tests/`
+  by hand. Suppressions use `# ty: ignore[rule]` and must carry a reason.
+- **vulture** (`just lint-deep`) is **not** in any pipeline — see the entry
+  below before trusting its "hard gate" comment.
+
+Suppressions therefore use `# noqa: RULE` for ruff and `# ty: ignore[rule]`
+for ty, each with a reason. A suppression in any other checker's dialect is
+inert — nothing here consumes it.
+
+### `just lint-deep` is a hard gate that nothing runs
+
+- **Location**: `justfile#lint-deep`, `.github/workflows/release.yml`, `scripts/git-hooks/pre-push`.
+- **Issue**: the recipe's comment calls it a "Hard gate — vulture exits 3 on findings, which fails the recipe and any wrapping pipeline." That describes the recipe's own exit code, not its participation in anything: CI runs `uv run pytest` and nothing else, and the pre-push hook runs the mocked and live pytest suites. No workflow, hook, or other recipe invokes `lint-deep`. It is a manual command whose comment reads as though it were automated.
+- **Consequence**: 11 findings accumulated between vulture's adoption (6421446, 2026-04-10) and v2.0.0 without ever failing a release. The lockfile pin has not moved in that window, so this is missing automation rather than a tool-behavior change.
+- **Current backlog** (all pre-existing at v2.0.0): two `@mcp.resource` handlers in `__init__.py` and `hermes_plugin.py#register`, all three registered by decorator or entry-point side effect; `common.py:487` `_content`; the five `htmd.Options` field assignments in `markdown.py`; and two test-only reset hooks (`github.py#_reset_repo_metadata_cache`, `scorecard.py#_reset_cache`) that are the same false-positive shape as the `_reset_shelf` and `_reset_hf_state` entries already in `.vulture_whitelist.py`.
+- **Why deferred**: wiring `lint-deep` into the pre-push hook today would block every version-tag push until that backlog is triaged, and the triage is a judgement call per finding (whitelist as a vulture blind spot vs. delete as genuinely dead). Doing it as an undiscussed side effect of an unrelated change would be the wrong order.
+- **How to evaluate**: triage the 11, then add `just lint-deep` to the pre-push hook beside the mocked suite. Until then, run it by hand before a release and keep new findings out — the whitelist rule stands, false positives only.
 
 ### `fetch_direct.py` — `_matched_meta` not accessed
 
-- **Location**: `_sections_response()`, line ~458
-- **Issue**: `_matched_meta` is destructured from the return of `_filter_markdown_by_sections()` but never used.
+- **Location**: `fetch_direct.py#_sections_response`
+- **Issue**: `_matched_meta` is destructured from the return of `_filter_markdown_by_sections()` but never used. No checker currently reports it — ruff's unused-variable rules permit the underscore prefix, and ty treats it as an intentional discard — so this entry exists to keep the observation from being rediscovered as if it were new.
 - **Why deferred**: The variable captures section match metadata (ancestry paths, fragment matches) that may be useful in frontmatter enrichment later. Removing it would discard structured data we'll likely want when section responses gain richer diagnostics. Low-risk dead code in a display-only path.
 
 ## Performance bottlenecks to investigate

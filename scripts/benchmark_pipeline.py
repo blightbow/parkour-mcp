@@ -288,7 +288,7 @@ def _install_capture_hook(sink: list[bytes]) -> None:
             )
         return resp
 
-    httpx.AsyncClient.send = _wrapped  # ty: ignore[invalid-assignment]
+    httpx.AsyncClient.send = _wrapped
 
 
 def _remove_capture_hook() -> None:

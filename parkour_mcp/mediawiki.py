@@ -229,15 +229,19 @@ def _extract_citations(html: str) -> list[dict]:
             entry["title"] = ext_link.get_text(strip=True)
 
         # Resolve author-date shorthand via #CITEREF links
-        citeref_links = ref_text_el.find_all(
-            "a", href=lambda h: h and h.startswith("#CITEREF")  # type: ignore[reportArgumentType]
+        # bs4 models the `href=<callable>` filter only through **kwargs on
+        # overloads that both type-checkers decline to match; the call is
+        # supported and documented, so the filter form stays.
+        citeref_links = ref_text_el.find_all(  # ty: ignore[no-matching-overload]
+            "a",
+            href=lambda h: h and h.startswith("#CITEREF"),
         )
         sources = []
         for citeref_link in citeref_links:
             # BS4 types Tag["href"] as str | AttributeValueList; href is a
             # single-valued attribute, and the find_all filter above already
             # proved it is a "#CITEREF"-prefixed str.
-            target_id = citeref_link["href"].lstrip("#")  # ty: ignore[unresolved-attribute]
+            target_id = citeref_link["href"].lstrip("#")
             resolved = _resolve_citeref_target(soup, target_id)
             if resolved is not None:
                 sources.append(resolved)
@@ -288,8 +292,10 @@ def _extract_inline_citations(html: str) -> list[dict]:
     seen: set[str] = set()
     entries: list[dict] = []
 
-    for a in soup.find_all(
-        "a", href=lambda h: h and h.startswith("#CITEREF")  # type: ignore[reportArgumentType]
+    # Same bs4 kwarg-filter typing gap as the call in _parse_reference_entry.
+    for a in soup.find_all(  # ty: ignore[no-matching-overload]
+        "a",
+        href=lambda h: h and h.startswith("#CITEREF"),
     ):
         href_attr = a["href"]
         # BeautifulSoup returns a list for multi-valued attrs; href is

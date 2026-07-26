@@ -10,6 +10,7 @@ the rest of the package imports — so call sites are unchanged.
 
 import re
 from collections.abc import Mapping
+from typing import NotRequired, TypedDict
 from urllib.parse import unquote
 
 import htmd
@@ -522,11 +523,31 @@ def _strip_section_number(name: str) -> str:
     return _SECTION_NUMBER_PREFIX_RE.sub("", name, count=1)
 
 
-def _extract_sections_from_markdown(markdown: str) -> list[dict]:
+class MarkdownSection(TypedDict):
+    """One heading and the span of markdown it owns.
+
+    A plain ``dict`` here infers its value type as the union of everything
+    stored (``str | int | bool``), so every positional use of ``start_pos`` /
+    ``end_pos`` reads as possibly-``str`` and has to be re-narrowed at each
+    call site.  Naming the shape once keeps the offsets typed as the integers
+    they always were.
+    """
+    name: str
+    level: int
+    start_pos: int
+    end_pos: int
+    # NotRequired because it is derived metadata, not part of the span: every
+    # consumer reads it through ``.get()``, and callers doing pure offset math
+    # (ancestry breadcrumbs, slice mapping) build sections without it.
+    header_only: NotRequired[bool]
+
+
+def _extract_sections_from_markdown(markdown: str) -> list[MarkdownSection]:
     """Extract section headings from markdown text.
 
-    Returns list of {name, level, start_pos, end_pos} dicts.
-    Skips headings inside fenced code blocks (``` or ~~~).
+    Each section spans from its own heading to the next heading of any level,
+    or to EOF for the last one.  Headings inside fenced code blocks (``` or
+    ~~~) are skipped.
     """
     # Build set of character ranges inside fenced code blocks
     code_ranges = _find_fenced_code_ranges(markdown)
@@ -534,7 +555,9 @@ def _extract_sections_from_markdown(markdown: str) -> list[dict]:
     def _inside_code(pos: int) -> bool:
         return any(start <= pos < end for start, end in code_ranges)
 
-    sections = []
+    # (name, level, start_pos) — end_pos needs the *next* heading's start, so
+    # the full entries are assembled in the second pass below.
+    found: list[tuple[str, int, int]] = []
 
     for match in _HEADING_RE.finditer(markdown):
         if _inside_code(match.start()):
@@ -545,33 +568,30 @@ def _extract_sections_from_markdown(markdown: str) -> list[dict]:
         # characters that could inject structure into output labels.
         name = _sanitize_label(_normalize_whitespace(name)).strip()
         if name and len(name) > 1:
-            sections.append({
-                "name": name,
-                "level": level,
-                "start_pos": match.start(),
-            })
+            found.append((name, level, match.start()))
 
-    # Compute end positions (each section ends where the next begins, or at EOF)
-    for i, sec in enumerate(sections):
-        if i + 1 < len(sections):
-            sec["end_pos"] = sections[i + 1]["start_pos"]
-        else:
-            sec["end_pos"] = len(markdown)
-
-    # Tag sections whose body is empty (heading only, content lives in
-    # child subsections).  The body is the text after the heading line
-    # up to end_pos; if it is pure whitespace the section is header-only.
-    for sec in sections:
-        heading_line_end = markdown.find('\n', sec["start_pos"])
+    sections: list[MarkdownSection] = []
+    for i, (name, level, start_pos) in enumerate(found):
+        end_pos = found[i + 1][2] if i + 1 < len(found) else len(markdown)
+        # A section is header-only when everything after its heading line and
+        # before the next heading is whitespace — its content lives in child
+        # subsections rather than under the heading itself.
+        heading_line_end = markdown.find("\n", start_pos)
         if heading_line_end == -1:
             heading_line_end = len(markdown)
-        body = markdown[heading_line_end:sec["end_pos"]]
-        sec["header_only"] = not body.strip()
+        entry: MarkdownSection = {
+            "name": name,
+            "level": level,
+            "start_pos": start_pos,
+            "end_pos": end_pos,
+            "header_only": not markdown[heading_line_end:end_pos].strip(),
+        }
+        sections.append(entry)
 
     return sections
 
 
-def _find_parent_idx(sections: list[dict], idx: int) -> int | None:
+def _find_parent_idx(sections: list[MarkdownSection], idx: int) -> int | None:
     """Find the index of the nearest ancestor section (lower heading level)."""
     target_level = sections[idx]["level"]
     for j in range(idx - 1, -1, -1):
@@ -580,7 +600,7 @@ def _find_parent_idx(sections: list[dict], idx: int) -> int | None:
     return None
 
 
-def _name_counts(sections: list[dict]) -> dict[str, int]:
+def _name_counts(sections: list[MarkdownSection]) -> dict[str, int]:
     """Count occurrences of each section name for disambiguation."""
     counts: dict[str, int] = {}
     for s in sections:
@@ -597,7 +617,7 @@ _TOC_SLICE_SIZE = 100
 
 
 def _build_section_list(
-    sections: list[dict],
+    sections: list[MarkdownSection],
     max_sections: int = 100,
     include_slugs: bool = False,
     *,
@@ -701,7 +721,7 @@ def _resolve_toc_slice(
 
 
 def _compute_slice_ancestry(
-    sections: list[dict], chunk_offsets: list[int],
+    sections: list[MarkdownSection], chunk_offsets: list[int],
 ) -> list[str]:
     """Map each chunk's character offset to a section ancestry breadcrumb.
 
@@ -764,7 +784,7 @@ def _compute_slice_ancestry(
 def _filter_markdown_by_sections(
     markdown: str,
     section_names: list[str],
-    sections: list[dict],
+    sections: list[MarkdownSection],
 ) -> tuple[str, list[dict], list[str]]:
     """Filter markdown to only include requested sections.
 
@@ -950,7 +970,17 @@ class FMEntries(_BetamatterFMEntries):
 
     tip_ledger = _tip_ledger
 
-    def set_tip(self, tip_id: str, *, url: str | None = None) -> None:
+    # Deliberately narrows the base's ``scope=`` keyword to ``url=``: in
+    # parkour every tip scope *is* a URL, and the domain spelling is what
+    # call sites read better as.  That is a real Liskov violation — code
+    # holding a ``betamatter.FMEntries`` reference and passing ``scope=``
+    # would fail on this subclass — so it is suppressed rather than
+    # unexplained.  Safe today because no call site outside the ``super()``
+    # delegation below passes ``scope=``; if one ever needs to, accept both
+    # spellings here rather than silencing a second checker.
+    def set_tip(  # ty: ignore[invalid-method-override]
+        self, tip_id: str, *, url: str | None = None,
+    ) -> None:
         """Emit a single educational tip on this frontmatter build.
 
         Unlike the protected keys (which append), ``tip`` is single-write

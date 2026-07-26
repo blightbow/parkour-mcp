@@ -6,6 +6,7 @@ import respx
 
 from parkour_mcp.fetch_direct import web_fetch_direct
 from parkour_mcp.markdown import (
+    MarkdownSection,
     _compute_slice_ancestry,
 )
 from parkour_mcp._pipeline import _page_cache, _wiki_cache
@@ -78,17 +79,17 @@ class TestComputeSliceAncestry:
         assert result == ["", "", ""]
 
     def test_no_offsets_returns_empty_list(self):
-        sections = [{"name": "Intro", "level": 2, "start_pos": 0, "end_pos": 100}]
+        sections: list[MarkdownSection] = [{"name": "Intro", "level": 2, "start_pos": 0, "end_pos": 100}]
         result = _compute_slice_ancestry(sections, [])
         assert result == []
 
     def test_single_section_single_slice(self):
-        sections = [{"name": "Intro", "level": 2, "start_pos": 0, "end_pos": 500}]
+        sections: list[MarkdownSection] = [{"name": "Intro", "level": 2, "start_pos": 0, "end_pos": 500}]
         result = _compute_slice_ancestry(sections, [10])
         assert result == ["Intro"]
 
     def test_nested_sections(self):
-        sections = [
+        sections: list[MarkdownSection] = [
             {"name": "Main", "level": 1, "start_pos": 0, "end_pos": 500},
             {"name": "Sub", "level": 2, "start_pos": 100, "end_pos": 500},
         ]
@@ -96,14 +97,14 @@ class TestComputeSliceAncestry:
         assert result == ["Main > Sub"]
 
     def test_chunk_before_first_heading(self):
-        sections = [
+        sections: list[MarkdownSection] = [
             {"name": "First", "level": 2, "start_pos": 200, "end_pos": 500},
         ]
         result = _compute_slice_ancestry(sections, [50])
         assert result == [""]
 
     def test_multi_slice_section_gets_positional_hint(self):
-        sections = [
+        sections: list[MarkdownSection] = [
             {"name": "Long Section", "level": 2, "start_pos": 0, "end_pos": 1000},
         ]
         # Three consecutive chunks all within the same section
@@ -115,7 +116,7 @@ class TestComputeSliceAncestry:
         ]
 
     def test_single_slice_section_no_hint(self):
-        sections = [
+        sections: list[MarkdownSection] = [
             {"name": "A", "level": 2, "start_pos": 0, "end_pos": 100},
             {"name": "B", "level": 2, "start_pos": 100, "end_pos": 200},
         ]
@@ -123,7 +124,7 @@ class TestComputeSliceAncestry:
         assert result == ["A", "B"]
 
     def test_mixed_single_and_multi_slice(self):
-        sections = [
+        sections: list[MarkdownSection] = [
             {"name": "Short", "level": 2, "start_pos": 0, "end_pos": 100},
             {"name": "Long", "level": 2, "start_pos": 100, "end_pos": 500},
         ]
@@ -132,7 +133,7 @@ class TestComputeSliceAncestry:
         assert result == ["Short", "Long (1/2)", "Long (2/2)"]
 
     def test_deep_nesting_with_positional_hint(self):
-        sections = [
+        sections: list[MarkdownSection] = [
             {"name": "Top", "level": 1, "start_pos": 0, "end_pos": 1000},
             {"name": "Mid", "level": 2, "start_pos": 50, "end_pos": 1000},
             {"name": "Deep", "level": 3, "start_pos": 100, "end_pos": 1000},

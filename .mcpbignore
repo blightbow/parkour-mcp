@@ -13,7 +13,6 @@ tmp/
 tests/
 scripts/
 docs/
-pyrightconfig.json
 CLAUDE.md
 .gitignore
 server.py

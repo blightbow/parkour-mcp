@@ -809,11 +809,17 @@ def _apply_quant_steering(
         )
 
     if report.duplicate_labels:
+        # Naming the naive total is the point of the note, not decoration: it
+        # is the number a caller would have reached by summing every
+        # .safetensors themselves, and the gap between the two is the whole
+        # reason the canonical set has to be picked rather than assumed.
         fm.append(
             "note",
-            f"repo ships more than one checkpoint set; sizes and bits-per-weight "
-            f"are measured against {report.canonical_label}, ignoring "
-            f"{', '.join(report.duplicate_labels)}",
+            f"repo ships more than one checkpoint set; sizes and "
+            f"bits-per-weight are measured against {report.canonical_label}, "
+            f"ignoring {', '.join(report.duplicate_labels)} — summing every "
+            f".safetensors instead would report "
+            f"{_humanize_bytes(report.all_safetensors_bytes)}",
         )
 
     if report.bpw_suppressed:

@@ -96,10 +96,6 @@ markers = [
 ]
 addopts = "-m 'not live and not perf' --ruff"
 
-[tool.pyright]
-venvPath = "."
-venv = ".venv"
-
 [tool.ty.src]
 # Vulture whitelist uses bare name references that don't resolve at parse
 # time; vulture only parses the file, never imports it.

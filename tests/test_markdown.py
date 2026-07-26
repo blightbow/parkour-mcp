@@ -3,6 +3,7 @@
 import pytest
 
 from parkour_mcp.markdown import (
+    MarkdownSection,
     md,
     html_to_markdown,
     _slugify,
@@ -408,7 +409,7 @@ class TestBuildSectionListPagination:
     coherent.  Sentinel lines flag truncation in either direction.
     """
 
-    def _build(self, n: int) -> list[dict]:
+    def _build(self, n: int) -> list[MarkdownSection]:
         # Synthesise n flat H1 sections — no wrapper, so sections[i]
         # corresponds 1:1 to "Section {i:03d}".  Keeps the pagination
         # math obvious in test assertions.

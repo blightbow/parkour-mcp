@@ -1,11 +1,15 @@
 """Tests for the MCP server entry point's startup-time invariants.
 
-The full ``main()`` flow runs ``mcp.run(transport='stdio')`` which blocks
-on the protocol loop and isn't unit-testable directly. Anything that
-must not crash at startup needs an explicit test here — pre-existing
-test files exercise individual tool modules but not the registration
-glue, which is where this commit's bug shipped past pyright/ty/ruff
-and the existing 1249-test suite.
+The full ``main()`` flow runs ``mcp.run(transport='stdio')``, which blocks on
+the protocol loop and so is not unit-testable directly. Anything that must not
+crash at startup needs an explicit test here.
+
+This file exists because the registration glue is the one place neither the
+linters nor the per-module test files cover: static analysis cannot see that a
+tool name, icon key, and profile mapping have to agree, and the tool-module
+suites exercise their own module in isolation without ever importing the
+server. A startup crash therefore reaches the user through a gap both layers
+consider someone else's job.
 """
 
 import pytest

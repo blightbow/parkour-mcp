@@ -30,3 +30,15 @@ _reset_shelf  # parkour_mcp/shelf.py:541
 # "tip_ledger", ...). Vulture scans parkour_mcp/ only and cannot see
 # the cross-package getattr consumption.
 _.tip_ledger  # parkour_mcp/markdown.py#FMEntries
+
+# MarkdownSection TypedDict field. Declaring a key in a TypedDict is not a
+# use of it, and every consumer reads this one through the string literal
+# .get("header_only") — in _build_section_list, _filter_markdown_by_sections,
+# and _pipeline's header-only section note. Vulture resolves neither side.
+header_only  # parkour_mcp/markdown.py#MarkdownSection
+
+# Test-only reset hook for the module-global HF token and rate-limit state,
+# called by the autouse _hf_state fixture in tests/conftest.py. Same shape as
+# _reset_shelf above: vulture scans parkour_mcp/ only, so the test usage is
+# invisible to it.
+_reset_hf_state  # parkour_mcp/huggingface.py:166
