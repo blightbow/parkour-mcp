@@ -13,6 +13,16 @@ import httpx
 from .common import _API_USER_AGENT, RateLimiter, s2_enabled, tool_name
 from .detection import _detect_arxiv_url, _strip_version
 from .markdown import FMEntries, _build_frontmatter
+from .doi import (
+    _alt_dois_from_relations,
+    _build_alert_message,
+    _build_correction_note,
+    _relations_fm_entry,
+    fetch_crossref_metadata,
+    fetch_formatted_citation,
+)
+from .markdown import _format_retraction_banner
+from .shelf import _track_on_shelf, CitationRecord
 
 logger = logging.getLogger(__name__)
 
@@ -332,15 +342,6 @@ async def _fetch_arxiv_paper(arxiv_id: str, *, _pdf_url: bool = False) -> str:
         arxiv_id: Bare arXiv ID (e.g. "1706.03762" or "1706.03762v5")
         _pdf_url: If True, the original URL was a /pdf/ link — add a hint.
     """
-    from .doi import (  # noqa: PLC0415  # lazy: intra-package import, avoids arxiv<->doi cycle
-        _alt_dois_from_relations,
-        _build_alert_message,
-        _build_correction_note,
-        _relations_fm_entry,
-        fetch_crossref_metadata,
-        fetch_formatted_citation,
-    )
-    from .markdown import _format_retraction_banner  # noqa: PLC0415  # lazy: intra-package import
 
     result = await _arxiv_request({"id_list": arxiv_id})
     if isinstance(result, str):
@@ -396,7 +397,6 @@ async def _fetch_arxiv_paper(arxiv_id: str, *, _pdf_url: bool = False) -> str:
 
     # Passive shelf tracking (fire-and-forget)
     # Prefer publisher DOI as primary when available; arXiv DOI becomes alt
-    from .shelf import _track_on_shelf, CitationRecord  # noqa: PLC0415  # lazy: .shelf passive tracking, avoids import cycle
     published = paper.get("published") or ""
     year = int(published[:4]) if len(published) >= 4 and published[:4].isdigit() else None
     publisher_doi = paper.get("doi")

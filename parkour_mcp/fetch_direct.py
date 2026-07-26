@@ -49,6 +49,22 @@ from .detection import (
     _strip_version,
 )
 from .huggingface import _hf_fast_path
+from .github import (
+    extract_code_definitions, format_code_sections,
+    _build_issue_markdown, _build_pr_markdown, _detect_github_url,
+    _get_github_token, _blob_presplit, _split_github_comments,
+)
+from .reddit import (
+    _fetch_reddit_json,
+    _resolve_redd_it, _build_comment_section_tree, _format_comment_thread,
+    _split_by_comments,
+)
+from .discourse import (
+    _detect_discourse_headers, _extract_topic_id,
+    _build_post_section_tree, _format_topic, _split_by_posts,
+    _base_url_from, _fetch_topic, _fetch_remaining_posts,
+)
+from .shelf import CitationRecord, _track_on_shelf
 
 logger = logging.getLogger(__name__)
 
@@ -289,7 +305,6 @@ async def web_fetch_direct(
 
     # --- GitHub fast path (after Reddit, before MediaWiki) ---
     try:
-        from .github import _detect_github_url  # noqa: PLC0415  # intra-package, breaks cycle
         if _detect_github_url(url):
             result = await _github_fast_path(url, max_tokens, line_range=line_range)
             if result is not None:
@@ -380,7 +395,7 @@ async def web_fetch_direct(
             and url not in _page_cache
             and url not in _JS_SHELL_SEEN
         )
-        from .fetch_js import _render_js  # noqa: PLC0415  # intra-package, breaks cycle
+        from .fetch_js import _render_js
         return await _render_js(
             url, source_url, fragment_warning, section_names,
             search, slices, slices_list,
@@ -414,7 +429,6 @@ async def web_fetch_direct(
 
     # --- Discourse post-fetch detection (header-based) ---
     try:
-        from .discourse import _detect_discourse_headers  # noqa: PLC0415  # intra-package, breaks cycle
         if _detect_discourse_headers(response.headers):
             result = await _discourse_fast_path(url, response.headers, max_tokens)
             if result is not None:
@@ -497,7 +511,6 @@ async def web_fetch_direct(
     try:
         arxiv_id = _detect_arxiv_html_url(url)
         if arxiv_id:
-            from .shelf import CitationRecord, _track_on_shelf  # noqa: PLC0415  # intra-package, breaks cycle
             arxiv_doi = f"10.48550/arXiv.{_strip_version(arxiv_id)}"
             _shelf_result = await _track_on_shelf(CitationRecord(
                 doi=arxiv_doi,
@@ -536,11 +549,6 @@ async def _github_sections(
     Returns a formatted section list, or None if the URL kind
     isn't supported for section listing.
     """
-    from .github import (  # noqa: PLC0415  # intra-package, breaks cycle
-        extract_code_definitions, format_code_sections,
-        _build_issue_markdown, _build_pr_markdown,
-        _get_github_token, _blob_presplit, _split_github_comments,
-    )
 
     # --- Blob: code definition tree via tree-sitter ---
     if match.kind == "blob" and match.ref and match.path:
@@ -797,11 +805,6 @@ async def web_fetch_sections(url: str, slice: int = 0) -> str:
         })
 
     # --- Reddit fast path (comment tree as sections) ---
-    from .reddit import (  # noqa: PLC0415  # intra-package, breaks cycle
-        _fetch_reddit_json,
-        _resolve_redd_it, _build_comment_section_tree, _format_comment_thread,
-        _split_by_comments,
-    )
     reddit_url = _detect_reddit_url(url)
     if reddit_url:
         try:
@@ -846,7 +849,6 @@ async def web_fetch_sections(url: str, slice: int = 0) -> str:
             })
 
     # --- GitHub fast path ---
-    from .github import _detect_github_url  # noqa: PLC0415  # intra-package, breaks cycle
     gh_match = _detect_github_url(url)
     if gh_match is not None:
         result = await _github_sections(gh_match, original_url, section_names)
@@ -884,11 +886,6 @@ async def web_fetch_sections(url: str, slice: int = 0) -> str:
 
     # --- Discourse post-fetch detection (section tree) ---
     try:
-        from .discourse import (  # noqa: PLC0415  # intra-package, breaks cycle
-            _detect_discourse_headers, _extract_topic_id,
-            _build_post_section_tree, _format_topic, _split_by_posts,
-            _base_url_from, _fetch_topic, _fetch_remaining_posts,
-        )
         route = _detect_discourse_headers(response.headers)
         if route and route.startswith("topics/"):
             topic_id = _extract_topic_id(url)

@@ -29,6 +29,7 @@ from bs4 import BeautifulSoup
 from markdownify import MarkdownConverter
 
 from .common import tool_name
+from semantic_text_splitter import MarkdownSplitter
 
 
 class TextOnlyConverter(MarkdownConverter):
@@ -311,7 +312,6 @@ def _apply_semantic_truncation(
 
     Returns (possibly_truncated_content, truncation_hint_or_none).
     """
-    from semantic_text_splitter import MarkdownSplitter  # noqa: PLC0415  # heavy optional Rust dep, kept lazy
 
     char_limit = max_tokens * 4
     if len(content) <= char_limit:

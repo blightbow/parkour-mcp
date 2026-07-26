@@ -20,6 +20,7 @@ from .markdown import (
     _fence_content,
     _TRUST_ADVISORY,
 )
+from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
 
@@ -199,7 +200,6 @@ def _extract_citations(html: str) -> list[dict]:
     the #CITEREF link to the full bibliography entry and includes it as
     "source" with its own url/title if available.
     """
-    from bs4 import BeautifulSoup  # noqa: PLC0415  # heavy parser dep, kept lazy
 
     soup = BeautifulSoup(html, "html.parser")
 
@@ -279,7 +279,6 @@ def _extract_inline_citations(html: str) -> list[dict]:
     shortcuts embedded directly in prose (``Franzén (2005)``), which the
     markdown pass preserves verbatim as ``[Franzén (2005)](#CITEREFFranzén2005)``.
     """
-    from bs4 import BeautifulSoup  # noqa: PLC0415  # heavy parser dep, kept lazy
 
     soup = BeautifulSoup(html, "html.parser")
 
@@ -388,7 +387,6 @@ def _mediawiki_html_to_markdown(html: str) -> str:
 
     Removes TOC, scripts, and styles; cleans headings before conversion.
     """
-    from bs4 import BeautifulSoup  # noqa: PLC0415  # heavy parser dep, kept lazy
 
     soup = BeautifulSoup(html, "html.parser")
 
@@ -660,7 +658,9 @@ async def _handle_page(
     work the handler does itself.
     """
     # Function-scope import to avoid fetch_direct ↔ mediawiki cycle.
-    from .fetch_direct import web_fetch_direct  # noqa: PLC0415  # lazy to break fetch_direct ↔ mediawiki cycle
+    # fetch_direct.py imports .mediawiki at module top, so hoisting this
+    # closes the loop. Verified: raises ImportError on `import parkour_mcp`.
+    from .fetch_direct import web_fetch_direct  # noqa: PLC0415  # hoisting closes a fetch_direct->mediawiki->fetch_direct loop
 
     if _URL_SCHEME_RE.match(title):
         url = title
@@ -737,7 +737,9 @@ async def _handle_references(
     markers (downstream code may key off either).
     """
     # Function-scope import to avoid _pipeline ↔ mediawiki cycle.
-    from ._pipeline import _cached_mediawiki_fetch  # noqa: PLC0415  # lazy to break _pipeline ↔ mediawiki cycle
+    # _pipeline.py imports .mediawiki at module top, so hoisting this closes
+    # the loop. Verified: raises ImportError on `import parkour_mcp`.
+    from ._pipeline import _cached_mediawiki_fetch  # noqa: PLC0415  # hoisting closes a _pipeline->mediawiki->_pipeline loop
 
     if footnotes is None and citations is None:
         return (

@@ -29,7 +29,9 @@ import httpx
 import tantivy
 from pydantic import Field
 
-from ._pipeline import register_group_cache
+from ._pipeline import _evict_group, register_group_cache
+from youtube_transcript_api import YouTubeTranscriptApi
+
 from .common import tool_name
 from .markdown import (
     FMEntries,
@@ -151,7 +153,7 @@ def _get_ydl_video() -> Any:
     """Return the lazily-constructed video-mode YoutubeDL singleton."""
     global _ydl_video
     if _ydl_video is None:
-        from yt_dlp import YoutubeDL  # type: ignore[import-not-found]  # noqa: PLC0415  # heavy optional dep, deferred
+        from yt_dlp import YoutubeDL  # type: ignore[import-not-found]
         _ydl_video = YoutubeDL(_YDL_OPTS_VIDEO)
     return _ydl_video
 
@@ -169,7 +171,7 @@ def _map_yt_dlp_error(exc: Exception) -> str:
     with the relevant text in the message. Match on substrings.
     """
     try:
-        from yt_dlp.utils import (  # type: ignore[import-not-found]  # noqa: PLC0415  # heavy optional dep, deferred
+        from yt_dlp.utils import (  # type: ignore[import-not-found]
             DownloadError,
             ExtractorError,
             GeoRestrictedError,
@@ -310,7 +312,7 @@ def _extract_video_with_comments_sync(
     include ``getcomments`` or the ``extractor_args`` overrides — and
     mutating singleton params across calls would race.
     """
-    from yt_dlp import YoutubeDL  # type: ignore[import-not-found]  # noqa: PLC0415  # heavy optional dep, deferred
+    from yt_dlp import YoutubeDL  # type: ignore[import-not-found]
     opts = {
         **_YDL_OPTS_VIDEO,
         "getcomments": True,
@@ -842,7 +844,7 @@ def _render_compact(
 
 def _render_structured(windows: list[Window]) -> str:
     """YAML list of segments with start/duration/text, for machine consumers."""
-    import yaml  # noqa: PLC0415  # optional dep, lazy by convention
+    import yaml
     data = []
     for w in windows:
         for s in w.segments:
@@ -1151,7 +1153,6 @@ class _TranscriptCache:
         # Local import dodges the circular pull at module-load time
         # (this module already imports register_group_cache from _pipeline,
         # but _evict_group is only needed inside this method).
-        from ._pipeline import _evict_group  # noqa: PLC0415  # intra-package, lazy to avoid import cycle
         victim_queue = self._probation if self._probation else self._protected
         if not victim_queue:
             return
@@ -1204,7 +1205,10 @@ def _map_transcript_error(exc: Exception) -> str:
     we already exhausted.
     """
     try:
-        from youtube_transcript_api import (  # noqa: PLC0415  # heavy optional dep, deferred
+        # Guarded by the except-ImportError below, which is now dead: the
+        # package is a required dependency and imported at module top.
+        # Deleting the guard is a behavior change — see TECH_DEBT.
+        from youtube_transcript_api import (  # noqa: PLC0415  # sole statement of a dead except-ImportError guard
             AgeRestricted,
             CouldNotRetrieveTranscript,
             InvalidVideoId,
@@ -1341,7 +1345,6 @@ def _fetch_transcript_sync(video_id: str, languages: list[str]):
     Lives at module scope so ``asyncio.to_thread`` can pickle it cleanly
     on platforms that need it. The library itself is sync-only.
     """
-    from youtube_transcript_api import YouTubeTranscriptApi  # noqa: PLC0415  # heavy optional dep, deferred
     api = YouTubeTranscriptApi()
     return api.fetch(video_id, languages=languages)
 
@@ -1886,7 +1889,10 @@ async def _transcript(
             # content-side failures (TranscriptsDisabled, NoTranscriptFound,
             # AgeRestricted, VideoUnavailable, InvalidVideoId) surface as-is.
             try:
-                from youtube_transcript_api import (  # noqa: PLC0415  # heavy optional dep, deferred
+                # Guarded by the except-ImportError below, which is now dead: the
+                # package is a required dependency and imported at module top.
+                # Deleting the guard is a behavior change — see TECH_DEBT.
+                from youtube_transcript_api import (  # noqa: PLC0415  # sole statement of a dead except-ImportError guard
                     NoTranscriptFound, PoTokenRequired, RequestBlocked,
                 )
             except ImportError:
@@ -1964,7 +1970,7 @@ def _extract_flat_sync(url: str, limit: int) -> Any:
     formatter caps client-side too as a defense-in-depth in case yt-dlp
     over-delivers.
     """
-    from yt_dlp import YoutubeDL  # type: ignore[import-not-found]  # noqa: PLC0415  # heavy optional dep, deferred
+    from yt_dlp import YoutubeDL  # type: ignore[import-not-found]
     opts = {
         "quiet": True,
         "no_warnings": True,

@@ -160,7 +160,7 @@ def _read_override_flags() -> tuple[bool, bool]:
     """
     try:
         # Hermes-runtime-only module; absent in parkour's own environment.
-        from hermes_cli.config import cfg_get, load_config  # type: ignore  # noqa: PLC0415  # optional runtime-only dep, absent in parkour's own env
+        from hermes_cli.config import cfg_get, load_config  # type: ignore
     except ImportError:
         return False, False
     config = load_config() or {}

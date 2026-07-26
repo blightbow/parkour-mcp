@@ -20,6 +20,8 @@ from .markdown import (
     _fence_content,
     _TRUST_ADVISORY,
 )
+from .doi import fetch_formatted_citation
+from .shelf import _track_on_shelf, CitationRecord
 
 logger = logging.getLogger(__name__)
 
@@ -393,8 +395,6 @@ async def _fetch_rfc_paper(number: int) -> str:
     Concurrent: RFC Editor JSON + formatted APA citation via DOI.
     Passive shelf tracking via CitationRecord.
     """
-    from .doi import fetch_formatted_citation  # noqa: PLC0415  # lazy: intra-package import, avoids import cycle
-    from .shelf import _track_on_shelf, CitationRecord  # noqa: PLC0415  # lazy: .shelf passive tracking, avoids import cycle
 
     rfc_doi = f"10.17487/RFC{number:04d}"
 

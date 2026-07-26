@@ -25,6 +25,7 @@ from .markdown import (
 from ._pipeline import (
     _discourse_fast_path, _process_markdown_sections, _dispatch_slicing,
 )
+from .discourse import _detect_discourse_headers
 
 # Per-operation budget for navigation, actions, and selector waits.  Not
 # caller-tunable: an agent has no basis to pick a millisecond value, and a
@@ -275,7 +276,6 @@ async def _render_js(
 
                 # Discourse detection — avoid launching Playwright
                 try:
-                    from .discourse import _detect_discourse_headers  # noqa: PLC0415  # intra-package, breaks cycle
                     if _detect_discourse_headers(head_resp.headers):
                         result = await _discourse_fast_path(url, head_resp.headers, max_tokens)
                         if result is not None:

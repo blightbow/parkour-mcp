@@ -22,6 +22,7 @@ from .markdown import (
     _format_retraction_banner,
     _TRUST_ADVISORY,
 )
+from .shelf import _track_on_shelf, CitationRecord
 
 logger = logging.getLogger(__name__)
 
@@ -688,14 +689,20 @@ async def _fetch_doi_paper(doi: str) -> str:
     # Delegate arXiv DOIs to the arXiv handler
     arxiv_match = ARXIV_DOI_RE.match(doi)
     if arxiv_match:
-        from .arxiv import _fetch_arxiv_paper  # noqa: PLC0415  # lazy: intra-package import, avoids doi<->arxiv cycle
+        # arxiv.py:16 imports .doi at module top, so hoisting this closes the
+        # loop. Verified: raises ImportError on `import parkour_mcp`. Either
+        # direction may be the lazy one, not both — this side was chosen
+        # because doi is the lower-level module of the two.
+        from .arxiv import _fetch_arxiv_paper  # noqa: PLC0415  # hoisting closes an arxiv->doi->arxiv loop
         arxiv_id = arxiv_match.group(1)
         return await _fetch_arxiv_paper(arxiv_id)
 
     # Delegate RFC DOIs to the IETF handler
     rfc_match = re.match(r'^10\.17487/RFC(\d+)$', doi, re.IGNORECASE)
     if rfc_match:
-        from .ietf import _fetch_rfc_paper  # noqa: PLC0415  # lazy: intra-package import, avoids doi<->ietf cycle
+        # ietf.py:23 imports .doi at module top, so hoisting this closes the
+        # loop. Verified: raises ImportError on `import parkour_mcp`.
+        from .ietf import _fetch_rfc_paper  # noqa: PLC0415  # hoisting closes an ietf->doi->ietf loop
         return await _fetch_rfc_paper(int(rfc_match.group(1)))
 
     # Concurrent: CSL-JSON metadata + formatted APA citation + RA detection
@@ -739,7 +746,6 @@ async def _fetch_doi_paper(doi: str) -> str:
         body += f"\n## Citation\n\n{citation_text}\n"
 
     # Passive shelf tracking
-    from .shelf import _track_on_shelf, CitationRecord  # noqa: PLC0415  # lazy: .shelf passive tracking, avoids import cycle
     authors = [_format_csl_author(a) for a in (csl_data or {}).get("author", [])]
     year = None
     if issued := (csl_data or {}).get("issued"):

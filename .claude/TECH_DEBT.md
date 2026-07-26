@@ -52,10 +52,34 @@ Suppressions therefore use `# noqa: RULE` for ruff and `# ty: ignore[rule]`
 for ty, each with a reason. A suppression in any other checker's dialect is
 inert — nothing here consumes it.
 
+**Lazy imports have a declarative home; prefer it to a `noqa`.** PLC0415's own
+docs recognise exactly three grounds for a function-scope import: avoiding a
+circular dependency, deferring a costly module load, or skipping a dependency
+entirely in some runtime environment. The last two are expressed centrally in
+`[tool.ruff.lint.flake8-tidy-imports] banned-module-level-imports`, which
+PLC0415 defers to, so those sites need no per-site suppression at all — and
+TID253 enforces the converse, rejecting a top-level import of a listed module.
+That bidirectionality is why the list cannot rot the way a comment can.
+
+Only the first ground needs a `noqa`, because a module that must be lazy *in
+one file* is legitimately top-level elsewhere and the ban list cannot express
+that. Such a comment must name the specific line that closes the loop and be
+reproducible: hoist the import, and `import parkour_mcp` must raise. Anything
+weaker is a claim nobody will re-check. This convention exists because 55
+suppressions were once added in the same commit that adopted the rule, with
+templated rationales; an audit found 51 of them false.
+
 **The hook is opt-in.** It only runs for developers who have run
 `just install-hooks` (it sets `core.hooksPath`), so a fresh clone pushing a
 tag is ungated. Moving the vulture and ty scans into CI would close that,
 at the cost of failing a tag push after the tag already exists.
+
+### `youtube.py` — two dead `except ImportError` guards
+
+- **Location**: `youtube.py#_map_transcript_error` and the transcript fallback branch in `youtube.py#_youtube_transcript` (the two remaining `# noqa: PLC0415` sites in that file).
+- **Issue**: each is `try: from youtube_transcript_api import (...) / except ImportError: <degrade>`. The handler cannot fire: `youtube-transcript-api` is a required dependency, and since the PLC0415 sweep the package is imported at module top anyway, so a missing install fails at `import parkour_mcp` long before either branch runs. The imports stay function-scope only because they are the sole statement of the `try`, so removing the `noqa` means removing the guard.
+- **Why deferred**: deleting a `try/except` changes behavior in the broken-install case (hard `ImportError` at startup instead of a readable message at call time). That is defensible — PLC0415's own docs cite catching invalid imports regardless of whether a function runs as a benefit — but it is an error-handling decision, not the mechanical import cleanup the sweep was scoped to, and no test exercises either branch.
+- **How to evaluate**: decide whether a missing required dependency should fail loudly at startup. If yes, delete both guards, hoist the imports, and the last two `noqa: PLC0415` in the file disappear with them.
 
 ### `fetch_direct.py` — `_matched_meta` not accessed
 

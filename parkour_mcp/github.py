@@ -45,6 +45,9 @@ from .markdown import (
 from .scorecard import fetch_overall as _fetch_scorecard_overall
 from .scorecard import format_score as _format_scorecard
 from datetime import UTC, datetime
+from semantic_text_splitter import CodeSplitter
+from .shelf import _track_on_shelf, CitationRecord
+import tree_sitter
 
 logger = logging.getLogger(__name__)
 
@@ -565,7 +568,6 @@ def _get_code_splitter(ext: str):
     Lazily imports the tree-sitter grammar package. Returns None if the
     grammar is not installed.
     """
-    from semantic_text_splitter import CodeSplitter  # noqa: PLC0415  # heavy optional dep
 
     grammar_info = _EXT_TO_GRAMMAR.get(ext)
     if not grammar_info:
@@ -649,7 +651,6 @@ def extract_code_definitions(
 
     module_name, func_name = grammar_info
     try:
-        import tree_sitter  # noqa: PLC0415  # heavy optional dep
         mod = importlib.import_module(module_name)
         lang_fn = getattr(mod, func_name)
         lang = tree_sitter.Language(lang_fn())
@@ -1144,7 +1145,7 @@ async def _fetch_citation_cff(
     owner: str, repo: str, default_branch: str,
 ) -> dict | None:
     """Fetch and parse CITATION.cff from the repo root. Returns parsed YAML or None."""
-    import yaml  # noqa: PLC0415  # optional dep, lazy by convention
+    import yaml
 
     raw_url = (
         f"https://raw.githubusercontent.com/{owner}/{repo}/{default_branch}/CITATION.cff"
@@ -1205,7 +1206,7 @@ async def _fetch_issue_form_yaml(
     entries are the form's field definitions, too verbose for advisory
     output. Returns ``None`` on any failure. Cached.
     """
-    import yaml  # noqa: PLC0415  # optional dep, lazy by convention
+    import yaml
 
     api_path = (
         f"/repos/{owner}/{repo}/contents/{_ISSUE_TEMPLATE_DIR}/{filename}"
@@ -1243,7 +1244,7 @@ async def _fetch_issue_template_config_yml(
     Returns the parsed YAML dict, or ``None`` on any failure (404, parse
     error, network error). Cached.
     """
-    import yaml  # noqa: PLC0415  # optional dep, lazy by convention
+    import yaml
 
     api_path = f"/repos/{owner}/{repo}/contents/{_ISSUE_TEMPLATE_DIR}/config.yml"
 
@@ -1572,7 +1573,6 @@ async def _track_repo_on_shelf(
     Returns the compact shelf status line for the frontmatter ``shelf:``
     field, or None on any error.
     """
-    from .shelf import _track_on_shelf, CitationRecord  # noqa: PLC0415  # intra-package, lazy to avoid import cycle
 
     if citation_cff:
         doi, title, authors, year = _parse_citation_cff(citation_cff)

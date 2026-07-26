@@ -51,6 +51,18 @@ from .common import (
     s2_enabled,
     tool_name,
 )
+from .ietf import _fetch_rfc_paper, _fetch_draft
+from .discourse import (
+    _detect_discourse_headers, _extract_topic_id,
+    _fetch_discourse_content, _split_by_posts,
+)
+from .github import (
+    _detect_github_url, _action_repo, _action_tree,
+    _build_issue_markdown, _build_pr_markdown,
+    _blob_presplit, _split_github_comments,
+    _rate_limit_warning, _get_github_token,
+)
+from .github import _github_request
 
 logger = logging.getLogger(__name__)
 
@@ -812,7 +824,7 @@ async def _s2_fast_path(url: str) -> str | None:
     if not s2_enabled():
         return None
 
-    from .semantic_scholar import _fetch_s2_paper  # noqa: PLC0415  # lazy fast-path sibling to avoid heavy deps / cycle
+    from .semantic_scholar import _fetch_s2_paper
 
     paper_id = _detect_s2_url(url)
     if not paper_id:
@@ -832,7 +844,6 @@ async def _ietf_fast_path(url: str) -> str | None:
     Once matched, always returns a string (even errors) to prevent
     fallback to generic HTTP fetch.
     """
-    from .ietf import _fetch_rfc_paper, _fetch_draft  # noqa: PLC0415  # lazy fast-path sibling to avoid heavy deps / cycle
 
     match = _detect_ietf_url(url)
     if not match:
@@ -915,10 +926,6 @@ async def _discourse_fast_path(
 
     Populates ``_page_cache`` so the caller can dispatch slicing.
     """
-    from .discourse import (  # noqa: PLC0415  # lazy fast-path sibling to avoid heavy deps / cycle
-        _detect_discourse_headers, _extract_topic_id,
-        _fetch_discourse_content, _split_by_posts,
-    )
 
     route = _detect_discourse_headers(headers)
     if not route or not route.startswith("topics/"):
@@ -972,12 +979,6 @@ async def _github_fast_path(
         line_range: Optional (start, end) 1-based inclusive line range for
             blob URLs.  Extracted from ``#L45`` or ``#L45-L100`` fragments.
     """
-    from .github import (  # noqa: PLC0415  # lazy fast-path sibling to avoid heavy deps / cycle
-        _detect_github_url, _action_repo, _action_tree,
-        _build_issue_markdown, _build_pr_markdown,
-        _blob_presplit, _split_github_comments,
-        _rate_limit_warning, _get_github_token,
-    )
 
     match = _detect_github_url(url)
     if match is None:
@@ -1191,7 +1192,6 @@ async def _github_fast_path(
 
     # --- Gist ---
     if match.kind == "gist" and match.gist_id:
-        from .github import _github_request  # noqa: PLC0415  # lazy fast-path sibling to avoid heavy deps / cycle
         gist_result = await _github_request("GET", f"/gists/{match.gist_id}")
         if isinstance(gist_result, str):
             return gist_result
@@ -1219,7 +1219,6 @@ async def _github_fast_path(
 
     # --- Org/user profile ---
     if match.kind == "org":
-        from .github import _github_request  # noqa: PLC0415  # lazy fast-path sibling to avoid heavy deps / cycle
 
         org_result = await _github_request("GET", f"/orgs/{match.owner}")
         # Fall back to user endpoint if orgs/ returns error (personal accounts)
@@ -1318,7 +1317,6 @@ async def _github_fast_path(
 
     # --- Commit ---
     if match.kind == "commit" and match.ref:
-        from .github import _github_request  # noqa: PLC0415  # lazy fast-path sibling to avoid heavy deps / cycle
 
         result = await _github_request(
             "GET", f"/repos/{match.owner}/{match.repo}/commits/{match.ref}",
@@ -1368,7 +1366,6 @@ async def _github_fast_path(
 
     # --- Compare ---
     if match.kind == "compare" and match.path:
-        from .github import _github_request  # noqa: PLC0415  # lazy fast-path sibling to avoid heavy deps / cycle
 
         result = await _github_request(
             "GET", f"/repos/{match.owner}/{match.repo}/compare/{match.path}",
@@ -1420,7 +1417,6 @@ async def _github_fast_path(
 
     # --- Releases ---
     if match.kind == "releases":
-        from .github import _github_request  # noqa: PLC0415  # lazy fast-path sibling to avoid heavy deps / cycle
 
         # Check if this is a specific tag release
         rest = match.path

@@ -13,6 +13,16 @@ import httpx
 from .common import _API_HEADERS, RateLimiter, load_credential, tool_name
 from .detection import _detect_s2_url
 from .markdown import _build_frontmatter
+from .doi import (
+    _alt_dois_from_relations,
+    _build_alert_message,
+    _build_correction_note,
+    _relations_fm_entry,
+    fetch_crossref_metadata,
+    fetch_formatted_citation,
+)
+from .markdown import _format_retraction_banner
+from .shelf import _track_on_shelf, CitationRecord
 
 logger = logging.getLogger(__name__)
 
@@ -316,15 +326,6 @@ def _s2_see_also(
 
 async def _fetch_s2_paper(paper_id: str) -> str:
     """Fetch a single paper and return formatted markdown with frontmatter."""
-    from .doi import (  # noqa: PLC0415  # lazy: intra-package import, avoids s2<->doi cycle
-        _alt_dois_from_relations,
-        _build_alert_message,
-        _build_correction_note,
-        _relations_fm_entry,
-        fetch_crossref_metadata,
-        fetch_formatted_citation,
-    )
-    from .markdown import _format_retraction_banner  # noqa: PLC0415  # lazy: intra-package import
 
     result = await _s2_request(f"/paper/{paper_id}", {"fields": _DETAIL_FIELDS})
     if isinstance(result, str):
@@ -377,7 +378,6 @@ async def _fetch_s2_paper(paper_id: str) -> str:
     if not doi:
         fm_shelf = "not tracked — paper has no DOI in Semantic Scholar"
     else:
-        from .shelf import _track_on_shelf, CitationRecord  # noqa: PLC0415  # lazy: .shelf passive tracking, avoids import cycle
         authors = result.get("authors") or []
         author_names = [a.get("name", "Unknown") for a in authors]
         citation_styles = result.get("citationStyles") or {}
