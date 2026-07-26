@@ -9,6 +9,7 @@ authors = [
   { name = "blightbow" }
 ]
 dependencies = [
+    "betamatter>=0.1.0",
     "mcp[cli]",
     "kagiapi",
     "beautifulsoup4",

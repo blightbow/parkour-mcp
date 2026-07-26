@@ -56,6 +56,15 @@ wheels = [
 ]
 
 [[package]]
+name = "betamatter"
+version = "0.1.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/8e/b6/e039bf853fa93232c2c136c6de358d9409bb2128274b02bcbd459ada9597/betamatter-0.1.0.tar.gz", hash = "sha256:a7e4a6578ed8758a7794e01b9a69770cb6383ec38a588a131d011c248aef84e5", size = 13775, upload-time = "2026-07-26T06:37:58.74Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/1b/f5/1e11eb8011b1825325016d506b4e7b163eac7458b48c43766c044ad08967/betamatter-0.1.0-py3-none-any.whl", hash = "sha256:92d17fcf32c4acada355149b809ceb6c2033dcf1ef274b9c5a52668175e8d753", size = 12500, upload-time = "2026-07-26T06:37:57.754Z" },
+]
+
+[[package]]
 name = "boltons"
 version = "21.0.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1013,6 +1022,7 @@ version = "2.0.0rc3"
 source = { editable = "." }
 dependencies = [
     { name = "beautifulsoup4" },
+    { name = "betamatter" },
     { name = "curl-cffi" },
     { name = "defusedxml" },
     { name = "htmd-py" },
@@ -1061,6 +1071,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "beautifulsoup4" },
+    { name = "betamatter", specifier = ">=0.1.0" },
     { name = "curl-cffi", specifier = ">=0.15.0" },
     { name = "defusedxml", specifier = ">=0.7.1" },
     { name = "htmd-py", specifier = ">=0.1.2" },

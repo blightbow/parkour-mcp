@@ -3,19 +3,19 @@ version = 1
 [[bindings]]
 doc = "docs/frontmatter-standard.md"
 target = "parkour_mcp/markdown.py#FMEntries"
-sig = "d5a954afd3e36c90"
+sig = "09f972f94e3a2660"
 
 [[bindings]]
 doc = "docs/frontmatter-standard.md"
 target = "parkour_mcp/markdown.py#_append_frontmatter_entry"
-sig = "7076cdace4b288b3"
+sig = "3af3d01888876553"
 
 [[bindings]]
 doc = "docs/frontmatter-standard.md"
 target = "parkour_mcp/markdown.py#_build_frontmatter"
-sig = "8e40266239da37f5"
+sig = "9994f6a5c7d60e00"
 
 [[bindings]]
 doc = "docs/frontmatter-standard.md"
 target = "parkour_mcp/markdown.py#_fence_content"
-sig = "2c6bdff56a35adef"
+sig = "38850cf37525c084"
