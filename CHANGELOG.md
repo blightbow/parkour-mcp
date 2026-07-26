@@ -5,6 +5,96 @@ All notable changes to parkour-mcp will be documented in this file.
 Format: https://keepachangelog.com/en/1.1.0/
 Versioning: https://semver.org/spec/v2.0.0.html
 
+## [2.0.0] 2026-07-26
+
+### Added
+- viewing a GitHub repo or reading a file through parkour now reports the OpenSSF Scorecard rating in frontmatter, giving agents an at-a-glance trust signal before consuming third-party code.
+- YouTube video URLs now resolve to structured metadata and the video description through the toolkit, surfacing channel, duration, view counts, captions availability, language, and upload date as frontmatter alongside fenced description content, instead of forcing callers through a Kagi summarizer or a generic HTTP fetch that YouTube blocks.
+- transcripts now resolve to coalesced ~30s windows in one of four output shapes (compact / absolute / none / structured), surfacing caption text alongside timing in a form an LLM can both reason over and cite, with the chunking strategy adapting to caption quality so unpunctuated auto-captions degrade gracefully instead of being forced through prose-shaped splitting.
+- YouTube transcripts are now queryable like a document. Callers can find specific phrases without reading the whole transcript, restrict to a time range when they know roughly when something was said, retrieve adjacent windows for context, and choose between score-ordered and chronological hits — all backed by a per-video Tantivy index that builds lazily, so the basic transcript-fetch path pays no indexing cost.
+- callers can now orient themselves on a YouTube channel without manually navigating tabs, list a channel's recent uploads in a single tool call, and walk a playlist's items, all returning a structured frontmatter + numbered entry list shape that downstream agents can paginate or follow into individual videos via the existing ``video`` and ``transcript`` actions.
+- callers can run YouTube-wide searches without leaving the toolkit, with results matching the website's search-page ordering and feeding directly into the existing video/transcript actions for follow-up.
+- PoTokenRequired and IP-block failures from youtube-transcript-api can now recover automatically when yt-dlp's caption code path is reachable, instead of forcing the caller to switch tools or wait the rate-limit out, and the recovery is transparent — the frontmatter's ``api:`` line declares which path produced the transcript so downstream agents can adapt.
+- video metadata, description, and comments now compose cleanly: the metadata frontmatter is constant and the body block is one of three independent artifacts (description, transcript via the dedicated action, or comments via the boolean pivot), so a caller's investigation of one doesn't pull in the cost of the others.
+- the Youtube tool's schema stays focused on video metadata, transcripts, and channel/playlist/search investigations; comment exploration lives behind one dedicated tool whose three parameters are all directly relevant to its purpose, with a frontmatter pivot from the video action so callers starting from a watch URL can discover the comments path without reading the tool registry themselves.
+- a YouTube video's chapters are exactly the section structure the toolkit's existing search methodology builds around — surfacing them as both a navigation aid in frontmatter and a filter dimension on the Tantivy index lets an LLM use the natural unit a creator already chose to partition the content with, instead of having to derive structure from time-window boundaries.
+- the YouTube tools now ship with the same visual identity the rest of the toolkit maintains, and no future tool can land without an icon — the test gate fails CI when ``_ICON_FILES`` lacks an entry, when the SVG is missing, or when the regeneration registry drifts from the runtime registry.
+- Claude Desktop now sees a clear path to fetch a transcript on non-English videos, picks the right language code shape on the first try, and doesn't spend tokens on YouTube's auto-translation matrix unless an explicit miss makes it relevant.
+- an LLM that requests an unfetchable language now sees the full browser-visible auto-translate menu alongside the directly-fetchable subset and a clear note that auto-translations are rate-limited, so the next retry converges on a source-language code instead of looping on entries pulled from a misleadingly-narrowed list.
+- tools that previously emitted no follow-up steering (KagiSearch, KagiSummarize, ResearchShelf, IETF subseries and obsoleted-by) now point the LLM at the right next action, and existing hint phrasing no longer leaks engine internals (BM25, tantivy, tree-sitter grammar) into the dashboard the agent reads to decide what to do next.
+- tool responses can now surface a once-per-session educational tip that fires a single time and never repeats, giving the calling agent a lightweight teaching channel distinct from per-result hints.
+- the first time an agent pulls a whole uninspected page, the response now teaches it once that WebFetchSections can map the heading layout first, so later fetches can target a section instead of spending context on the full page.
+- parkour can now be installed as a first-class Hermes Agent plugin whose carefully formatted, unsummarized tool output reaches the model intact instead of being JSON-escaped by the MCP transport.
+- a Hermes user can now route the model's web fetch and search through parkour's unsummarized, frontmatter-steered tools by setting two config flags, instead of parkour competing with the built-ins as extra prefixed alternatives.
+- a single kagi_search call can now target images, videos, news, or podcasts directly, apply a Kagi Lens to scope the search, paginate through results, and constrain by region or date.
+- callers that need to enumerate Kagi's accepted region codes now consult kagi://regions instead of getting a partial list from the parameter prose, and maintainers refresh the set with one script invocation when upstream changes.
+- callers that need to apply a built-in Kagi lens can now consult kagi://lenses to discover the 11 documented lens slugs and their activation status, instead of being told "built-in lens slug" with no examples.
+- a driver that runs region=de on workflow=images now sees a warning naming the no-op the moment the response returns; a driver that runs a query with filters and gets nothing back is told exactly which filters were active and which one to drop first, rather than being sent down a query-syntax rabbit hole.
+- Reddit comment threads, subreddit listings, and user pages work again through web_fetch_incisive and web_fetch_sections after Reddit's 2026-05-29 shutdown of the anonymous .json endpoints, with no account or API key required.
+
+
+### Changed
+- GitHub repo and file views now carry the same fresh, dated OpenSSF Scorecard rating that the Packages project action does, fed by deps.dev's weekly cron feed rather than the stale ossf/scorecard-action upload registry, so agents get an accurate trust signal they can weigh against the assessment date.
+- commits and their `Why:` trailers are now the single source of truth for changelog content in both CHANGELOG.md (local assembly during /release) and GitHub Release bodies (CI regeneration on tag push), eliminating the prior split where git-cliff assembled and a separate Python script sliced.
+- a sixth protected key now updates three doc places automatically via cog -r, and a behavioral change to FMEntries surfaces the relink-gate prompt instead of silently desyncing the prose.
+- cog'd tables now read cleanly in source — each row ends at its content rather than 200+ trailing spaces — while still rendering as a clean GFM table on GitHub.
+- a narrow cog-derived table now reads as a sharp grid, while a wide one stays compact at the longest row, so neither aesthetic suffers the artifact of the other style being applied uniformly.
+- a new always-on tool now triggers CI failure if its manifest entry is forgotten, instead of silently shipping a build where Claude Desktop can't see the tool.
+- visiting a video's metadata, transcript, and any chapter-aware retrieval on the same URL is a common workflow, and the response now amortizes the cost of yt-dlp's full info-dict extraction across all three paths instead of paying for it once per path.
+- WebFetchJS is gone; JavaScript-rendered pages are now reached through WebFetchIncisive's requires_js parameter, with actions for ReAct interaction, so callers no longer pick between two fetch tools and the frontmatter steers static-first, browser-on-demand.
+- content-type handling is now defined once, so a new supported type or a fixed misclassification lands in a single place instead of three.
+- no behavior change; the renderer no longer takes a parameter that restates two others it already has.
+- no behavior change for the MCP server; this is groundwork that lets parkour expose its tools through a second entrypoint without duplicating the description and Semantic Scholar gating logic.
+- the summarize tool now describes the host's built-in web fetch in host-neutral terms instead of asserting Claude-specific behavior that does not hold under other agent runtimes.
+- the Hermes plugin and MCP server register the same tools as before, with less duplicated and indirect wiring behind them.
+- search calls the v1 endpoint with Bearer auth and parses the new category-keyed response, surfaces v1 error codes as readable messages, and stops reporting balance state that the v1 surface no longer exposes.
+- kagi_summarize is no longer a callable MCP tool on this release; trying to invoke it returns "unknown tool" until Kagi ships /summarize on v1 and a future release re-registers it against the new endpoint.
+- each search parameter now publishes its enum, format, and constraints into the MCP tool schema, so LLM clients see lens_id's discovery URL, the page/limit relationship, the ISO 8601 date format, the ISO 3166 region code, and the workflow enum without having to dig into the tool-level prose.
+- parameter docs now match v1's verified region case sensitivity, lens capability set, and cross-workflow filter applicability, and the prose is trimmed to what the LLM driver needs at invocation time rather than what we logged while debugging.
+- a caller now reads either parameter and gets the full page-size and pagination-reach picture without having to cross-reference the other one.
+- in clients that cannot autonomously read MCP resources, kagi_search's parameter prose now stands on its own — the always-on lens slugs are inline and the tool description does not steer the LLM toward URIs it has no way to dereference.
+- in the default 'search' workflow nothing changes; on a non-default workflow with a lens set, the response now carries a frontmatter warning naming the unreliable combination and pointing at the retry, so an LLM that didn't read the schema prose still gets actionable guidance the moment the call returns.
+- a consumer of multiple paginated pages now knows to deduplicate, a consumer of date filters now knows undated content drops out, and same-page repeatability is stated explicitly so the LLM doesn't have to assume.
+- the driver now knows region errors loudly and lens fails silently, knows region's effect weakens on images, and won't confuse the news 360 lens with the news workflow — three failure modes UAT had to discover empirically because the docs were silent on them.
+- limit and page no longer appear to contradict each other; a driver passing 'MM-DD-YYYY' learns immediately that strict ISO is required; an LLM that capitalized a slug gets a runtime warning naming the lowercase form to retry with; the images workflow's filter degradation is documented once, not three times.
+- every tool response that carries untrusted web or API content now declares it as untrusted so downstream agents treat it with the right suspicion, and Reddit links in Kagi results now point at the tools that can actually fetch them.
+- frontmatter behavior is unchanged for callers, and the container, builder, fence, and tip ledger are now an independently versioned library that other MCP servers can adopt instead of copying parkour's implementation.
+
+
+### Fixed
+- the LLM caller now sees what was bypassed, why recovery was possible at all, and (when both paths fail) a precise account of what was tried so the obvious workaround isn't repeatedly suggested.
+- server startup once again completes cleanly, and the regression test catches any future tool description that accidentally introduces a brace literal that ``str.format()`` would treat as a placeholder.
+- chapters were silently disappearing from rendered transcript output when a creator placed two chapter markers within the same ~30s span — common on educational videos with rapid-fire section transitions — and the chapters that did render carried timestamps that didn't match the chapter list above the fence, breaking the LLM's ability to cite a moment by chapter name.
+- insufficient-credit failures now surface the actionable "add funds at https://kagi.com/settings/billing_api" message to the calling LLM instead of the raw HTTPError string, which never named the underlying cause.
+- section= queries against heading-only dividers now explain why the body is empty and direct the caller to the section tree, instead of returning a silent empty fence.
+- tool responses are no longer transmitted twice per call, cutting wire payload roughly in half for clients that render both MCP content channels.
+- web_fetch_direct now retrieves pages behind Akamai-class bot managers, which 403 an HTTP/1.1 request that claims to be Chrome, by speaking HTTP/2 and sending the browser-consistent Sec-Fetch and Client-Hint headers a real Chrome emits.
+- setting MCP_ALLOW_PRIVATE_IPS to True or YES (not only 1) now correctly allows fetching private and internal addresses, matching the other opt-in gates.
+- Reddit search URLs (global, subreddit-scoped, and the type=sr / type=user variants) now return real results with fetchable permalinks through web_fetch_incisive, instead of a misleading empty listing or an HTTP 400.
+- Reddit search no longer hides adult results by default, so it behaves consistently with Kagi and direct Reddit fetches; callers wanting a SFW search can pass include_over_18=0.
+- an S2 call that fails because the configured API key is invalid now names that as the cause and links the reactivation form, instead of surfacing a bare HTTP 403 that reads like a transient outage.
+
+
+### Security
+- every YouTube tool response now respects the frontmatter trust boundary the standard documents — user-uploaded titles, channel names, uploader handles, and chapter titles all render only inside the fenced content zone where the per-line ``│`` prefix and label sanitization neutralize injection vectors.
+- a requires_js fetch of a raw JSON or XML endpoint now gets the same 5 MiB size cap and 60-second wall-clock deadline as a plain fetch, instead of an unbounded read that a slow-drip endpoint could stall indefinitely.
+- lint exemptions for tooling no longer create a permanent security blind spot for future scripts and tests — a new urlopen-on-untrusted-input or unsafe XML parse is still rejected at the gate.
+
+
+### Documentation
+- CHANGELOG.md and GitHub Release bodies render in web browsers where GitHub's GFM pipeline translates source newlines inside paragraphs to <br> elements (in the Releases rendering context, distinct from README.md which does not). Hard wrapping at 72-79 cols therefore produced a narrow ragged column in wide browser windows. Flowing prose lets the renderer wrap to the container width as intended. This commit aligns historical entries with the going-forward git-cliff output (which never wraps), and gh release edit was run against v1.0.0, v1.1.0, v1.1.2, and v1.2.0 to push the flowed slices to their published Release bodies (v1.0.1 left untouched; its original "Minor bugfix release" prose remains).
+- Document protected multi-contributor keys
+- Cite code by path#Symbol, not path:line
+- Synthesize session-derived patterns and anti-patterns
+- Record YouTube tool deferrals from the v1 implementation
+- Record v1 spec URLs and content-type rejection gap
+- Document v1 cutover state and dormant summarize island
+
+
+### Miscellaneous
+- Reset content caches between tests
+- Stabilize test_full_pipeline with best_of timing
+
 ## [1.2.0] 2026-04-19
 
 ### Added
