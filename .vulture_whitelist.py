@@ -42,3 +42,36 @@ header_only  # parkour_mcp/markdown.py#MarkdownSection
 # _reset_shelf above: vulture scans parkour_mcp/ only, so the test usage is
 # invisible to it.
 _reset_hf_state  # parkour_mcp/huggingface.py:166
+
+# The remaining two test-only reset hooks, same shape as _reset_shelf and
+# _reset_hf_state: _reset_repo_metadata_cache is called from test_github.py,
+# _reset_cache from the autouse _stub_scorecard_for_github fixture in
+# tests/conftest.py. Both invisible because vulture scans parkour_mcp/ only.
+_reset_repo_metadata_cache  # parkour_mcp/github.py#_reset_repo_metadata_cache
+_reset_cache  # parkour_mcp/scorecard.py#_reset_cache
+
+# MCP resource handlers registered via @mcp.resource("kagi://...") inside
+# main(). Identical decorator side-effect registration to shelf_resource
+# above — nothing references the function names directly, by design.
+kagi_regions_resource  # parkour_mcp/__init__.py#main
+kagi_lenses_resource  # parkour_mcp/__init__.py#main
+
+# Hermes plugin entrypoint. Declared in pyproject.toml under
+# [project.entry-points."hermes_agent.plugins"] and called by the Hermes host
+# at startup; vulture reads neither entry-point metadata nor the test suite,
+# where tests/test_hermes_plugin.py drives it against a fake ctx.
+register  # parkour_mcp/hermes_plugin.py#register
+
+# Written so .text / .json() keep working after guarded_fetch's streaming
+# context exits — it is httpx's own private cache attribute, read back inside
+# httpx rather than here. Vulture sees the write with no local read.
+_._content  # parkour_mcp/common.py#guarded_fetch
+
+# htmd.Options fields. htmd is a compiled PyO3 extension, so these writes are
+# consumed by Rust on the convert call and never read from Python. Vulture
+# sees five assignments that nothing in this codebase reads back.
+_.heading_style  # parkour_mcp/markdown.py#_build_htmd_options
+_.skip_tags  # parkour_mcp/markdown.py#_build_htmd_options
+_.image_placeholder  # parkour_mcp/markdown.py#_build_htmd_options
+_.drop_empty_alt_images  # parkour_mcp/markdown.py#_build_htmd_options
+_.drop_image_only_links  # parkour_mcp/markdown.py#_build_htmd_options

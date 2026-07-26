@@ -1,11 +1,16 @@
 #!/usr/bin/env bash
-# Pre-push hook: block version tag pushes unless both the mocked and live
-# test suites pass.
+# Pre-push hook: block version tag pushes unless the dead-code scan and both
+# the mocked and live test suites pass.
 #
 # The mocked suite (default `pytest` run) covers pytest-ruff lint across
 # parkour_mcp/, tests/, and scripts/, plus the offline unit suite.  It's
 # the exact step CI runs on tag push — skipping it locally let a ruff E402
 # regression in scripts/regenerate_readme_examples.py escape to v1.1.1.
+#
+# The vulture scan runs here because it runs nowhere else: CI's tag-push job
+# is `uv run pytest` and nothing more, so between vulture's adoption and
+# v2.0.0 its findings accumulated without ever failing a gate.  It is the
+# cheapest of the three (no network, sub-second), so it goes first.
 #
 # Live tests hit real endpoints, so they can't run unattended in CI without
 # credentials.  Running them at tag-push time is our stand-in: format drift
@@ -41,7 +46,21 @@ echo
 
 repo_root="$(git rev-parse --show-toplevel)"
 
-# Mocked suite runs first — fast (~15 s), catches ruff/format regressions
+# Dead-code scan runs first — sub-second, and the only place it runs at all.
+echo "pre-push: running vulture dead-code scan..."
+if ! uv run --directory "$repo_root" vulture parkour_mcp/ .vulture_whitelist.py; then
+    echo
+    echo "pre-push: DEAD-CODE SCAN FAILED — refusing to push version tag"
+    echo "pre-push:"
+    echo "pre-push: Fix each finding at the source.  Only add a name to"
+    echo "pre-push: .vulture_whitelist.py when vulture genuinely cannot see"
+    echo "pre-push: the use (decorator registration, entry point, compiled"
+    echo "pre-push: extension, or test-only hook), with a comment saying which."
+    exit 1
+fi
+
+echo
+# Mocked suite runs second — fast (~15 s), catches ruff/format regressions
 # that CI's default `uv run pytest` would also fail on.
 echo "pre-push: running mocked test suite (incl. ruff lint)..."
 if ! uv run --directory "$repo_root" pytest --tb=short; then

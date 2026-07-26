@@ -48,10 +48,12 @@ docs-drift-fix:
     @echo "Cog regenerated. Run 'drift check' next; if anchors are stale, follow the relink workflow."
 
 # Run vulture dead-code scan on production code (honors .vulture_whitelist.py).
-# Hard gate — vulture exits 3 on findings, which fails the recipe and
-# any wrapping pipeline. Real findings should be fixed at the source
-# (or, for genuine vulture blind spots, added to .vulture_whitelist.py
-# with a comment explaining why the finding is unreachable to vulture).
+# Vulture exits 3 on findings, which fails this recipe. The same scan gates
+# version-tag pushes from scripts/git-hooks/pre-push, so a finding left here
+# blocks a release for anyone who has run `just install-hooks`. Real findings
+# should be fixed at the source (or, for genuine vulture blind spots, added
+# to .vulture_whitelist.py with a comment explaining why the finding is
+# unreachable to vulture).
 lint-deep:
     uv run vulture parkour_mcp/ .vulture_whitelist.py
 

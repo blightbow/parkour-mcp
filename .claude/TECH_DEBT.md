@@ -42,21 +42,20 @@ than it does:
 - **ty** is configured (`[tool.ty.src]`) and expected to stay clean, but is
   **not** wired into CI — run `uv run ty check parkour_mcp/ scripts/ tests/`
   by hand. Suppressions use `# ty: ignore[rule]` and must carry a reason.
-- **vulture** (`just lint-deep`) is **not** in any pipeline — see the entry
-  below before trusting its "hard gate" comment.
+- **vulture** (`just lint-deep`) gates version-tag pushes via
+  `scripts/git-hooks/pre-push`, which is the only place it runs — CI's
+  tag-push job is `uv run pytest` and nothing more. Findings are fixed at the
+  source; `.vulture_whitelist.py` takes false positives only, each with a
+  comment naming what vulture cannot see.
 
 Suppressions therefore use `# noqa: RULE` for ruff and `# ty: ignore[rule]`
 for ty, each with a reason. A suppression in any other checker's dialect is
 inert — nothing here consumes it.
 
-### `just lint-deep` is a hard gate that nothing runs
-
-- **Location**: `justfile#lint-deep`, `.github/workflows/release.yml`, `scripts/git-hooks/pre-push`.
-- **Issue**: the recipe's comment calls it a "Hard gate — vulture exits 3 on findings, which fails the recipe and any wrapping pipeline." That describes the recipe's own exit code, not its participation in anything: CI runs `uv run pytest` and nothing else, and the pre-push hook runs the mocked and live pytest suites. No workflow, hook, or other recipe invokes `lint-deep`. It is a manual command whose comment reads as though it were automated.
-- **Consequence**: 11 findings accumulated between vulture's adoption (6421446, 2026-04-10) and v2.0.0 without ever failing a release. The lockfile pin has not moved in that window, so this is missing automation rather than a tool-behavior change.
-- **Current backlog** (all pre-existing at v2.0.0): two `@mcp.resource` handlers in `__init__.py` and `hermes_plugin.py#register`, all three registered by decorator or entry-point side effect; `common.py:487` `_content`; the five `htmd.Options` field assignments in `markdown.py`; and two test-only reset hooks (`github.py#_reset_repo_metadata_cache`, `scorecard.py#_reset_cache`) that are the same false-positive shape as the `_reset_shelf` and `_reset_hf_state` entries already in `.vulture_whitelist.py`.
-- **Why deferred**: wiring `lint-deep` into the pre-push hook today would block every version-tag push until that backlog is triaged, and the triage is a judgement call per finding (whitelist as a vulture blind spot vs. delete as genuinely dead). Doing it as an undiscussed side effect of an unrelated change would be the wrong order.
-- **How to evaluate**: triage the 11, then add `just lint-deep` to the pre-push hook beside the mocked suite. Until then, run it by hand before a release and keep new findings out — the whitelist rule stands, false positives only.
+**The hook is opt-in.** It only runs for developers who have run
+`just install-hooks` (it sets `core.hooksPath`), so a fresh clone pushing a
+tag is ungated. Moving the vulture and ty scans into CI would close that,
+at the cost of failing a tag push after the tag already exists.
 
 ### `fetch_direct.py` — `_matched_meta` not accessed
 
