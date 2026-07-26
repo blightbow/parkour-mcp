@@ -727,7 +727,9 @@ async def _handle_references(
     wiki: str,
     footnotes: list[int] | None,
     citations: list[str] | None,
-    max_tokens: int,  # noqa: ARG001 — reserved for future truncation gating
+    # Unused today; kept in the signature because the caller already threads a
+    # budget through and reference resolution is the next thing to gate on it.
+    max_tokens: int,
 ) -> str:
     """Resolve footnotes and/or inline citations for a MediaWiki page.
 

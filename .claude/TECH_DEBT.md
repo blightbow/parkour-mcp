@@ -39,9 +39,16 @@ than it does:
 - **ruff** is the only gate. CI runs `uv run pytest`, and `pytest-ruff` lints
   every file in `testpaths` as part of that run, so a ruff finding fails the
   build. Config lives in `[tool.ruff.lint]`.
-- **ty** is configured (`[tool.ty.src]`) and expected to stay clean, but is
-  **not** wired into CI — run `uv run ty check parkour_mcp/ scripts/ tests/`
-  by hand. Suppressions use `# ty: ignore[rule]` and must carry a reason.
+- **ty** gates too, via `pytest-ty` in the same `addopts`, so a type error
+  fails the build exactly like a lint error. Suppressions use
+  `# ty: ignore[rule]` and must carry a reason. The editor/agent LSP is a
+  separate, faster, and *less reliable* signal — it is edit-scoped and can go
+  stale or misreport under concurrent worktree activity — so the suite run,
+  not the LSP, is authoritative when they disagree.
+- **RUF100** (unused-noqa) is selected, which makes a `noqa` self-expiring: one
+  that stops suppressing anything becomes an error. Note its autofix deletes
+  the *whole* trailing comment, prose included, so re-home any explanation as
+  a plain comment rather than losing it.
 - **vulture** (`just lint-deep`) gates version-tag pushes via
   `scripts/git-hooks/pre-push`, which is the only place it runs — CI's
   tag-push job is `uv run pytest` and nothing more. Findings are fixed at the

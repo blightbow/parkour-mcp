@@ -131,7 +131,9 @@ def _make_handler(func: _ToolFunc, name: str) -> Callable[..., str]:
             return _run(func(**args))
         except concurrent.futures.TimeoutError:
             return f"Error: parkour tool '{name}' timed out after {_CALL_TIMEOUT:.0f}s."
-        except Exception as exc:  # noqa: BLE001 — a tool handler must never raise
+        # Deliberately broad: a tool handler must never raise into the Hermes
+        # host, so every failure becomes a returned error string.
+        except Exception as exc:
             logger.warning("parkour tool '%s' failed: %s", name, exc, exc_info=True)
             return f"Error: parkour tool '{name}' failed: {type(exc).__name__}: {exc}"
 
