@@ -115,14 +115,54 @@ exclude = [".vulture_whitelist.py"]
 # rejects a change. Cosmetic groups (C4, RET, SIM, UP) are meant to be
 # auto-applied; the others gate at review.
 #
-# Some groups are intentionally absent:
-#   TC  moves imports into `if TYPE_CHECKING:`, which breaks the runtime
-#       pydantic annotations on the tool signatures.
+# This is `extend-select`, so ruff's own default rule set is the floor and this
+# list only adds to it. Two properties follow, and both are the reason for the
+# choice.
+#
+# Declining a rule costs something. To switch off anything ruff enables by
+# default you have to write an `ignore` entry below, with a reason, where a
+# reviewer can find it and check it. Under `select` the same outcome is reached
+# by leaving a rule off a list, which leaves no trace, needs no reason, and no
+# checker will ever flag. RUF100 expires a stale `noqa`; nothing expires a
+# silent omission. Given how much of this repo is written by an LLM working from
+# partial context, the posture that makes "just don't enforce it" the expensive
+# option is the correct one.
+#
+# Upstream stays the floor, and upstream improves. Ruff's curation is imperfect
+# (0.16.0 dropped F406 by its maintainer's own account as an oversight, tracked
+# in astral-sh/ruff#27213) but it is maintained against the whole ecosystem and
+# it self-corrects. Inheriting it means those corrections arrive on a version
+# bump instead of requiring someone here to notice.
+#
+# Version drift is handled by the dependency, not by this list: the dev group
+# pins `ruff>=0.16.0,<0.17.0`, and upstream only changes defaults on a minor
+# release. So the default set cannot move underneath this file without a
+# deliberate edit to the ceiling.
+#
+# Some groups are deliberately not added on top of the default:
+#   TC001-TC003 move imports into `if TYPE_CHECKING:`. The MCP SDK resolves tool
+#       signatures with `inspect.signature(..., eval_str=True)`, so a
+#       TYPE_CHECKING-only name is absent from `__globals__` at registration and
+#       raises InvalidSignature. Ruff does not enable them by default, so there
+#       is nothing to switch off; this note exists to stop a future session
+#       adding them. TC004, which catches the converse (a TYPE_CHECKING import
+#       that is needed at runtime), is default-enabled and welcome.
 #   TID252 (parent-relative imports) finds nothing here: this package uses
 #       sibling imports (`from .x`), which it permits. TID253 *is* selected
-#       below — it is a different rule and the escape hatch PLC0415 defers to.
-#   ANN is unselected, so ANN401 needs no entry below.
+#       below, a different rule and the escape hatch PLC0415 defers to.
+#   ANN is not enabled by default and is not added, so ANN401 needs no entry.
 extend-select = [
+    # Ruff's pre-0.16 default set, restored. 0.16.0 dropped 18 of these and
+    # describes them as "more opinionated" pycodestyle and pyflakes rules, which
+    # fits most of them and not all: F406 flags `import *` inside a function and
+    # F722 a malformed forward annotation, both of which CPython rejects with
+    # SyntaxError. Upstream has since conceded F406 as an oversight. E402 is
+    # load-bearing in tests/conftest.py, where imports must follow
+    # init_tool_names().
+    "E4",       # imports: one-per-line, placement
+    "E7",       # statement-level: comparisons, ambiguous names, lambda assign
+    "E9",       # runtime: syntax and IO errors
+    "F",        # pyflakes: undefined names, unused imports, format strings
     "BLE",      # blind-except: catching Exception naked
     "TRY",      # tryceratops: error-handling anti-patterns
     "PLC0415",  # import-outside-top-level: lazy imports masking cycles/deps
@@ -224,6 +264,13 @@ dev = [
     "fonttools>=4.62",
     "pytest>=9.0.2",
     "pytest-asyncio>=1.3.0",
+    # Declared directly, not inherited from pytest-ruff, and capped below the
+    # next minor. Ruff's default rule set is not a stable interface: 0.16.0
+    # both added 354 rules and silently withdrew 18 that had been on since
+    # 0.1.0. `[tool.ruff.lint] select` pins which rules run, but only a version
+    # bound decides *when* this repo absorbs the next such change. The ceiling
+    # makes that a commit rather than a resolver outcome.
+    "ruff>=0.16.0,<0.17.0",
     "pytest-ruff>=0.5",
     "pytest-ty>=0.2.1",
     "respx>=0.22.0",
