@@ -838,7 +838,7 @@ def _render_compact(
             # Inline pause marker only between segments WITHIN this window
             if si < n - 1 and outlier_at.get((wi, si), False):
                 gap = w.segments[si + 1].start - seg.end
-                lines.append(f"[+{int(round(gap))}s]")
+                lines.append(f"[+{round(gap)}s]")
     return "\n".join(lines)
 
 

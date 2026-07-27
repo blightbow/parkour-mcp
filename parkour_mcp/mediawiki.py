@@ -98,7 +98,7 @@ async def _detect_mediawiki(url: str) -> dict | None:
 
                 # Check that we got a valid page (not a missing page with id=-1)
                 page_data = None
-                for _pid, pdata in pages.items():
+                for pdata in pages.values():
                     if "missing" not in pdata:
                         page_data = pdata
                         break
@@ -525,8 +525,7 @@ async def _resolve_wiki_base(wiki: str) -> tuple[str, str]:
     # ``"commons.wikimedia.org"`` instead of a language code.
     if (
         host in {"wikipedia.org", "wikimedia.org"}
-        or host.endswith(".wikipedia.org")
-        or host.endswith(".wikimedia.org")
+        or host.endswith((".wikipedia.org", ".wikimedia.org"))
     ):
         return host, f"https://{host}/w/api.php"
 

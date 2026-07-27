@@ -409,10 +409,7 @@ def _pick_canonical_set(sets: list[_CheckpointSet]) -> _CheckpointSet | None:
     """
     if not sets:
         return None
-    return sorted(
-        sets,
-        key=lambda s: (s.directory != "", s.group == "singles", -len(s.files)),
-    )[0]
+    return min(sets, key=lambda s: (s.directory != "", s.group == "singles", -len(s.files)))
 
 
 @dataclass

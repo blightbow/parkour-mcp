@@ -599,8 +599,8 @@ class TestBuildCommentSectionTree:
         data = _make_thread_json(comments=[parent])
         _, body = _build_comment_section_tree(data)
         lines = body.split("\n")
-        parent_line = [line for line in lines if "#parent" in line][0]
-        child_line = [line for line in lines if "#child" in line][0]
+        parent_line = next(line for line in lines if "#parent" in line)
+        child_line = next(line for line in lines if "#child" in line)
         # Child should be indented more than parent
         assert len(child_line) - len(child_line.lstrip()) > len(parent_line) - len(parent_line.lstrip())
 

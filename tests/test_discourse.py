@@ -339,8 +339,8 @@ class TestBuildPostSectionTree:
         _, body = _build_post_section_tree(SAMPLE_TOPIC_RESPONSE, SAMPLE_POSTS)
         lines = body.split("\n")
         # bob (reply to #1) should be indented under alice
-        bob_line = [ln for ln in lines if "#2 — @bob" in ln][0]
-        alice_line = [ln for ln in lines if "#1 — @alice" in ln][0]
+        bob_line = next(ln for ln in lines if "#2 — @bob" in ln)
+        alice_line = next(ln for ln in lines if "#1 — @alice" in ln)
         assert bob_line.startswith("  -")  # indented
         assert alice_line.startswith("-")   # root level
 
