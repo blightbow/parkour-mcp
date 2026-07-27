@@ -234,7 +234,11 @@ banned-module-level-imports = [
 # Vulture whitelist: bare name references are the format vulture requires
 # to count a symbol as "used". Those references are undefined at parse
 # time by design — ruff's F821 would otherwise flag every entry.
-".vulture_whitelist.py" = ["F821"]
+# B018 (useless expression) is the same fact seen from the other side: a bare
+# name with no effect is precisely what this file is made of, and what makes it
+# work. Both rules describe the format correctly and neither is actionable here,
+# because the alternative is a file vulture cannot read.
+".vulture_whitelist.py" = ["F821", "B018"]
 # Tests use asserts (S101), fixture credentials (S105/S106), unused fixture
 # arguments (ARG), and lazy respx-style imports (PLC0415). A security finding
 # inside a test (unsafe XML, a bind-all literal, a subprocess call) is fixed or
