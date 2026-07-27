@@ -167,8 +167,8 @@ async def _mint_mobile_token() -> tuple[str, float, dict[str, str]] | None:
                 if val:
                     replay[h] = val
             return token, time.monotonic() + float(expires_in), replay
-    except Exception as exc:
-        logger.debug("Reddit mobile token mint error: %s", exc)
+    except Exception:
+        logger.debug("Reddit mobile token mint error", exc_info=True)
         return None
 
 
@@ -206,8 +206,8 @@ async def _mint_web_token() -> tuple[str, float, dict[str, str]] | None:
                 if val:
                     replay[h] = val
             return token, time.monotonic() + float(expires_in), replay
-    except Exception as exc:
-        logger.debug("Reddit web token mint error: %s", exc)
+    except Exception:
+        logger.debug("Reddit web token mint error", exc_info=True)
         return None
 
 
@@ -324,8 +324,8 @@ async def _resolve_redd_it(url: str) -> str | None:
             )
             final = str(resp.url)
             return _detect_reddit_url(final)
-    except Exception as exc:
-        logger.debug("redd.it redirect failed for %s: %s", url, exc)
+    except Exception:
+        logger.debug("redd.it redirect failed for %s", url, exc_info=True)
         return None
 
 
@@ -459,7 +459,7 @@ async def _fetch_reddit_content(url: str) -> tuple[str, str]:
             return _format_listing(data, kind="search", query=query)
         return _format_listing(data, kind="subreddit")
     except Exception as exc:
-        logger.debug("Reddit formatting error: %s", exc)
+        logger.debug("Reddit formatting error", exc_info=True)
         return "Reddit", f"Error: Failed to parse Reddit response — {type(exc).__name__}"
 
 

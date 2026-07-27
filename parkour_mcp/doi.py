@@ -74,8 +74,8 @@ async def _detect_ra(doi: str, *, timeout: float = 5.0) -> str | None:
                     ra = data[0].get("RA", "")
                     _ra_cache[prefix] = ra
                     return ra
-    except Exception as e:
-        logger.debug("RA detection failed for %s: %s", prefix, e)
+    except Exception:
+        logger.debug("RA detection failed for %s", prefix, exc_info=True)
     return None
 
 
@@ -148,8 +148,8 @@ async def fetch_datacite_metadata(
                 "related": related,
                 "resource_type": attrs.get("types", {}).get("resourceTypeGeneral"),
             }
-    except Exception as e:
-        logger.debug("DataCite fetch failed for %s: %s", doi, e)
+    except Exception:
+        logger.debug("DataCite fetch failed for %s", doi, exc_info=True)
         return None
 
 
@@ -391,8 +391,8 @@ async def fetch_crossref_metadata(
                 )
                 return None
             raw = resp.json()
-    except Exception as e:
-        logger.debug("CrossRef REST fetch failed for %s: %s", doi, e)
+    except Exception:
+        logger.debug("CrossRef REST fetch failed for %s", doi, exc_info=True)
         return None
 
     if not isinstance(raw, dict):
@@ -543,8 +543,8 @@ async def _doi_content_negotiate(
                 return resp
             logger.debug("DOI content negotiation HTTP %d for %s (%s)", resp.status_code, doi, accept)
             return None
-    except Exception as e:
-        logger.debug("DOI content negotiation failed for %s: %s", doi, e)
+    except Exception:
+        logger.debug("DOI content negotiation failed for %s", doi, exc_info=True)
         return None
 
 

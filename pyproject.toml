@@ -156,9 +156,9 @@ extend-select = [
     # describes them as "more opinionated" pycodestyle and pyflakes rules, which
     # fits most of them and not all: F406 flags `import *` inside a function and
     # F722 a malformed forward annotation, both of which CPython rejects with
-    # SyntaxError. Upstream has since conceded F406 as an oversight. E402 is
-    # load-bearing in tests/conftest.py, where imports must follow
-    # init_tool_names().
+    # SyntaxError; upstream concedes F406 was an oversight
+    # (astral-sh/ruff#27213). E402 is load-bearing in tests/conftest.py, where
+    # imports must follow init_tool_names().
     "E4",       # imports: one-per-line, placement
     "E7",       # statement-level: comparisons, ambiguous names, lambda assign
     "E9",       # runtime: syntax and IO errors
@@ -186,15 +186,6 @@ ignore = [
     "PLR2004",  # magic value — HTTP status codes and timeouts are domain constants
     "S101",     # assert — invariants in source, and the idiom in tests
     "TRY003",   # long exception messages — informative here
-    # Exception handling: a broad `except` may catch widely but must not swallow
-    # silently. S110 (try-except-pass) and SIM105 flag silent swallows; record a
-    # best-effort fall-through at debug level rather than a bare `pass`:
-    #     except Exception:
-    #         logger.debug("<what failed> for %s", x, exc_info=True)
-    # BLE001 is unused: it accepts only re-raise or error-level logging, but the
-    # right level for an expected fall-through (the detection/enrichment paths)
-    # is debug, and logging those at error would bury genuine errors in noise.
-    "BLE001",
     # Complexity gates are unused: several fast-path dispatchers are large by
     # design, where the rule pushes fragmentation over a single clear flow.
     "PLR0911",  # too-many-return-statements
@@ -253,9 +244,13 @@ banned-module-level-imports = [
 # top level is doing exactly what it should — it is not a server startup path.
 "tests/**/*.py" = ["S101", "S105", "S106", "ARG", "PLC0415", "TID253"]
 # Build and CLI scripts print by design (T201) and lazy-import build-only
-# dependencies (PLC0415). Security and quality findings are fixed on the line,
-# not waived here.
-"scripts/**/*.py" = ["T201", "PLC0415", "TID253"]
+# dependencies (PLC0415). BLE001 is a category exemption of the same kind, not a
+# waived finding: a script's failure path reports to the operator running it via
+# `print` or `sys.exit`, so a broad catch there terminates or annotates one
+# invocation rather than silently degrading a long-lived server. In the package
+# the opposite holds and BLE001 is enforced. Security and quality findings are
+# still fixed on the line, not waived here.
+"scripts/**/*.py" = ["T201", "PLC0415", "TID253", "BLE001"]
 
 [dependency-groups]
 dev = [
