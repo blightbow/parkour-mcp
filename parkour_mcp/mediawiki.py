@@ -660,7 +660,7 @@ async def _handle_page(
     # Function-scope import to avoid fetch_direct ↔ mediawiki cycle.
     # fetch_direct.py imports .mediawiki at module top, so hoisting this
     # closes the loop. Verified: raises ImportError on `import parkour_mcp`.
-    from .fetch_direct import web_fetch_direct  # noqa: PLC0415  # hoisting closes a fetch_direct->mediawiki->fetch_direct loop
+    from .fetch_direct import web_fetch_direct  # noqa: PLC0415
 
     if _URL_SCHEME_RE.match(title):
         url = title
@@ -741,7 +741,7 @@ async def _handle_references(
     # Function-scope import to avoid _pipeline ↔ mediawiki cycle.
     # _pipeline.py imports .mediawiki at module top, so hoisting this closes
     # the loop. Verified: raises ImportError on `import parkour_mcp`.
-    from ._pipeline import _cached_mediawiki_fetch  # noqa: PLC0415  # hoisting closes a _pipeline->mediawiki->_pipeline loop
+    from ._pipeline import _cached_mediawiki_fetch  # noqa: PLC0415
 
     if footnotes is None and citations is None:
         return (

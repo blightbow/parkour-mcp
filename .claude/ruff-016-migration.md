@@ -491,15 +491,15 @@ generator produced them.
   `logger.debug(..., exc_info=True)`. Ruff 0.16 accepts exactly that idiom, so
   the premise was void. The ignore is deleted; see "The `BLE001` audit".
 
-## Hazard: the isort autofix destroys `noqa: PLC0415` directives
+## Hazard: the isort autofix silently inactivates `noqa: PLC0415`
 
-This is the sharpest trap in the migration and it must be handled before the
-mechanical phase, not after.
+Handled in Phase 2. Recorded because the failure is quiet in a way that defeats
+the obvious check.
 
 `I001` is newly enabled by default and fires 81 times. Its autofix rewraps
-imports to the 88-character default line length. Four function-scope imports
-carry a `# noqa: PLC0415` plus a prose reason and run 102 to 127 characters, so
-the fix wraps them into parenthesized form:
+imports to the 88-character line length. Four function-scope imports carried a
+`# noqa: PLC0415` *plus* a prose reason, running 102 to 127 characters, so the
+fix wrapped them:
 
 ```python
 # before (107 chars)
@@ -507,34 +507,39 @@ from .arxiv import _fetch_arxiv_paper  # noqa: PLC0415  # hoisting closes an arx
 
 # after ruff check --fix
 from .arxiv import (
-    _fetch_arxiv_paper,  # hoisting closes an arxiv->doi->arxiv loop
+    _fetch_arxiv_paper,  # noqa: PLC0415  # hoisting closes an arxiv->doi->arxiv loop
 )
 ```
 
-**The `# noqa: PLC0415` is silently dropped.** Only the prose survives, relocated
-onto the imported name. `PLC0415` then fires at all four sites, which is exactly
-where the 4 phantom `PLC0415` findings in a naive `--fix` run come from.
+The directive is **not deleted**. It is relocated onto the imported-name line,
+and `PLC0415` reports on the *statement* line, so the comment survives intact
+and stops suppressing anything. Measured: 0 `PLC0415` findings before a naive
+autofix, 8 after.
+
+That is worse than deletion for anyone auditing suppressions. A `grep` for
+`noqa: PLC0415` returns the same six hits before and after, so the file looks
+healthy while ruff reports violations. **A count-based gate does not catch this**,
+which matters because an earlier draft of this document proposed exactly that
+gate. The check that works is the finding count: `PLC0415` must be 0 after the
+autofix, not merely the directive count unchanged.
 
 These four are the genuine circular-import suppressions, the survivors of the
 `ec1a81a` audit that replaced 51 false `noqa` with the declarative ban list.
-They are the most carefully verified suppressions in the repo, and a careless
-`--fix` deletes them while leaving a comment that still *claims* the site is
-suppressed. That is the confabulation failure mode reintroduced by tooling.
+They are the most carefully verified suppressions in the repo.
 
-Affected sites: `doi.py:696`, `doi.py:707`, `mediawiki.py:663`, `mediawiki.py:746`.
+### The fix
 
-Mitigation, in preference order:
-1. Before running any autofix, restructure the four sites so the directive
-   survives: move the prose to a preceding plain comment and leave a short
-   `from .arxiv import _fetch_arxiv_paper  # noqa: PLC0415` under 88 chars.
-   This also matches the repo's reader-posture comment convention.
-2. Alternatively, adopt 0.16's preceding-line form,
-   `# ruff: ignore[PLC0415]`, which is not attached to the wrapped line.
-   0.15 also added block suppression, `# ruff: disable[PLC0415]` /
-   `# ruff: enable[PLC0415]`, which survives rewrapping for the same reason.
-   Both are worth weighing against option 1, which keeps the existing spelling.
-3. Either way, gate the phase on a diff check: after autofix, assert the count
-   of `noqa: PLC0415` directives is unchanged.
+Each of the four already carried a full explanatory block comment immediately
+above the import. The trailing prose on the directive line was duplicating it,
+and that duplication is what pushed the lines over the wrap threshold. Deleting
+the redundant half brings them to 60-68 characters, well under 88, so isort
+leaves them alone. The reason still lives in the block comment above, which is
+where this repo's convention puts it.
+
+The two `youtube.py` sites are 115 and 123 characters but are already in
+parenthesized form with the directive on the statement line, which is where the
+rule reports, so they are unaffected. Verified: they survive the autofix
+untouched.
 
 Note for any future suppression audit: 0.16 accepts both `# noqa: RULE` and
 `# ruff: ignore[RULE]`, inline or on the preceding line. Verified that `RUF100`
@@ -606,8 +611,8 @@ framework constraint, not a blanket group waiver.
 
 ## Phased implementation
 
-**Status: Phase 1 done, plus the `BLE001` audit. 160 findings outstanding,
-Phases 2 through 7 remain.**
+**Status: Phases 1 and 2 done, plus the `BLE001` audit. 160 findings
+outstanding, Phases 3 through 7 remain.**
 
 Findings decrease monotonically; the full `uv run pytest` only goes green at the
 end, because `pytest-ruff` fails on any outstanding finding. The gate at each
@@ -622,9 +627,9 @@ retires the 24 `RUF100` findings by making those directives live again. Rewrite
 the `TC` comment and the `extend-select` rationale. Expect 184 to 160.
 
 **Phase 2: defuse the `PLC0415` hazard.** Restructure the four over-long
-suppressed imports so the directive survives isort rewrapping. Verify: the four
-sites still carry `noqa: PLC0415`, each line is under 88 chars, and `PLC0415`
-reports nothing. No autofix has run yet at this point.
+suppressed imports so the directive survives isort rewrapping. Verify by running
+the autofix on a throwaway copy and asserting `PLC0415` still reports 0, not by
+counting directives, which stays constant either way. No autofix is kept.
 
 **Phase 3: config-level false positive.** Add `B018` to `.vulture_whitelist.py`
 per-file-ignores, with a comment naming what vulture requires. Expect 160 to 143.

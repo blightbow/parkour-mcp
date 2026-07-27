@@ -693,7 +693,7 @@ async def _fetch_doi_paper(doi: str) -> str:
         # loop. Verified: raises ImportError on `import parkour_mcp`. Either
         # direction may be the lazy one, not both — this side was chosen
         # because doi is the lower-level module of the two.
-        from .arxiv import _fetch_arxiv_paper  # noqa: PLC0415  # hoisting closes an arxiv->doi->arxiv loop
+        from .arxiv import _fetch_arxiv_paper  # noqa: PLC0415
         arxiv_id = arxiv_match.group(1)
         return await _fetch_arxiv_paper(arxiv_id)
 
@@ -702,7 +702,7 @@ async def _fetch_doi_paper(doi: str) -> str:
     if rfc_match:
         # ietf.py:23 imports .doi at module top, so hoisting this closes the
         # loop. Verified: raises ImportError on `import parkour_mcp`.
-        from .ietf import _fetch_rfc_paper  # noqa: PLC0415  # hoisting closes an ietf->doi->ietf loop
+        from .ietf import _fetch_rfc_paper  # noqa: PLC0415
         return await _fetch_rfc_paper(int(rfc_match.group(1)))
 
     # Concurrent: CSL-JSON metadata + formatted APA citation + RA detection
