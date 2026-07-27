@@ -1742,6 +1742,7 @@ async def huggingface(
             "Any huggingface.co URL is also accepted and routed automatically."
         ),
     )],
+    *,
     ref: Annotated[str | None, Field(
         description="Git revision (branch, tag, or commit SHA) for file/tree. Defaults to main.",
     )] = None,

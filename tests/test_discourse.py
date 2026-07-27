@@ -23,6 +23,7 @@ from parkour_mcp.discourse import (
 
 def _make_post(
     post_id: int, post_number: int, username: str, raw: str,
+    *,
     created_at: str = "2026-04-01T12:00:00.000Z",
     reply_to: int | None = None,
 ) -> dict:

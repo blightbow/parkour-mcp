@@ -449,6 +449,7 @@ async def arxiv(
             "category: browse recent papers in an arXiv category."
         ),
     )],
+    *,
     query: Annotated[str, Field(
         description=(
             "For search: arXiv query syntax with field prefixes and boolean operators. "

@@ -110,6 +110,7 @@ _JS_SHELL_SEEN: set[str] = set()
 
 async def web_fetch_direct(
     url: str,
+    *,
     max_tokens: int = 5000,
     section: str | list[str] | None = None,
     search: str | None = None,
@@ -985,6 +986,7 @@ def _sections_response(
     url: str,
     markdown_content: str,
     section_names: list[str] | None,
+    *,
     cache_url: str | None = None,
     renderer: str | None = None,
     slice_index: int = 0,

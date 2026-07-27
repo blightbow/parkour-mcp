@@ -947,6 +947,7 @@ class _TranscriptEntry:
         self,
         url: str,
         video_id: str,
+        *,
         language_code: str,
         is_generated: bool,
         segments: tuple[Segment, ...],
@@ -1597,6 +1598,7 @@ def _build_transcript_entry(
     canonical_url: str,
     video_id: str,
     fetched,
+    *,
     fetcher: str = "youtube-transcript-api",
     fallback_from: str | None = None,
     chapters: tuple[Chapter, ...] = (),
@@ -2260,6 +2262,7 @@ async def youtube(
             "search: search YouTube for videos matching a free-text query."
         ),
     )],
+    *,
     url: Annotated[str | None, Field(
         description=(
             "YouTube URL for video / transcript / channel / playlist actions. "

@@ -500,6 +500,7 @@ async def semantic_scholar(
     query: Annotated[str, Field(
         description="Search terms for BM25 keyword matching (search/snippets), paper ID or DOI/ARXIV/PMID prefix (paper/references), or author ID/name (author/author_search).",
     )],
+    *,
     limit: Annotated[int, Field(
         description="Maximum results to return (default 10, max 100 for most actions, max 1000 for snippets).",
     )] = 10,

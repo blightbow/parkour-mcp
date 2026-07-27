@@ -585,6 +585,7 @@ async def ietf(
             "subseries: resolve a subseries (STD, BCP, FYI) to its constituent RFCs."
         ),
     )],
+    *,
     query: Annotated[str, Field(
         description=(
             "For rfc: RFC number (e.g. '9110') or RFC URL. "

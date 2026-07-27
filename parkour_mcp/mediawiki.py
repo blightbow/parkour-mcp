@@ -843,6 +843,7 @@ async def mediawiki(
             "author-date citations on a specific article."
         ),
     )],
+    *,
     title: Annotated[str | None, Field(
         description=(
             "Page identifier — article title "
