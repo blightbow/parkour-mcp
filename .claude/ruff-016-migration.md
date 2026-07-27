@@ -117,13 +117,12 @@ full: "Ruff now enables a much larger set of rules by default (413, up from
 59)." No withdrawal is mentioned, and no impact statement is offered for `select`
 or `extend-select` users, who this time genuinely are affected.
 
-So the 18 drops are undocumented in all four canonical places: `BREAKING_CHANGES.md`,
-the release notes, the migration blog, and the Default Rules page. The gap is a
-deviation from ruff's own established practice, not merely an omission.
-
-> **Partly resolved upstream on 2026-07-27.** `BREAKING_CHANGES.md` and the
-> 0.16.0 release notes now name all 18. See "Upstream outcome" below. The
-> paragraph above is retained as the state that justified filing.
+At the time of filing the 18 drops were undocumented in all four canonical
+places: `BREAKING_CHANGES.md`, the release notes, the migration blog, and the
+Default Rules page. That was a deviation from ruff's own established practice
+rather than a simple omission, which is what made it worth reporting.
+`BREAKING_CHANGES.md` and the release notes now name all 18; see "Upstream
+outcome".
 
 ### Narrowing is rare, so this is not a pedantic complaint
 
@@ -232,7 +231,7 @@ decision to pin stands either way.
 
 ### Upstream outcome
 
-Closed on 2026-07-27 with no comment, two upvotes, and a documentation fix. Both
+Closed on 2026-07-27 with a documentation fix. Both
 `BREAKING_CHANGES.md` and the 0.16.0 release notes now carry the same amended
 sentence, which names every one of the 18:
 
@@ -276,11 +275,11 @@ reasoning rather than cite ruff's. `F722` and `F406` in particular are worth
 keeping on the grounds that they catch invalid Python, which is a stronger and
 more durable justification than "the old default had them."
 
-### Follow-up: upstream conceded both, and named its actual method
+### What upstream said about `F406` and `F722`
 
-A clarification request on the two mischaracterized rules drew a substantive
-reply from `ntBre` and a new tracking issue, [Issue #27213] (labels:
-`rule-selection`, `tracking`).
+A clarification request on the two mischaracterized rules drew a reply from
+`ntBre` and a new tracking issue, [Issue #27213] (labels: `rule-selection`,
+`tracking`).
 
 - **`F406` is conceded as an oversight.** It now sits under "Add to defaults"
   in #27213, annotated "This is actually a syntax error and should be documented
@@ -406,8 +405,7 @@ migration: the single biggest reduction in the finding count comes from turning
 **Recommendation: keep `extend-select`, restore the 18 inside it, and let the
 dependency ceiling be the drift guard.**
 
-This reverses an earlier recommendation in this document, which argued for
-replacing `extend-select` with an explicit `select`. That argument rested on one
+An explicit `select` was considered and rejected. The case for it rested on one
 premise: the enforced rule set is defined by subtraction from a *moving* upstream
 default, so upstream can withdraw a rule and nothing notices. The premise was
 true when ruff floated in transitively via `pytest-ruff`. It is no longer true.
@@ -472,39 +470,26 @@ and `–`) never needed to exist. `select` forced a from-scratch re-derivation o
 upstream's entire curation, and manufacturing 260 justifications is exactly the
 pressure that produces confident, plausible, false ones.
 
-## Config comments that have gone stale
+## Comments that were false, and what replaced them
 
-The `[tool.ruff.lint]` comment block documents deliberate exclusions. Three were
-false or expired.
+The `[tool.ruff.lint]` comment block documented deliberate exclusions. Two of its
+claims did not survive checking, and both are worth recording because the same
+generator produced them.
 
-- **`TC`**: the comment said `TC` is absent because it "moves imports into
+- **`TC`** was said to be absent because it "moves imports into
   `if TYPE_CHECKING:`, which breaks the runtime pydantic annotations on the tool
-  signatures". The hazard is real and better evidenced than the comment claimed:
-  the MCP SDK resolves signatures with `inspect.signature(..., eval_str=True)`,
-  so a TYPE_CHECKING-only name is missing from `__globals__` and registration
-  raises `InvalidSignature`. But the blanket phrasing is wrong. `TC004` is the
-  inverse rule and catches exactly that breakage; it is default-enabled and
-  welcome. Fixed.
-- **`ANN`**: still correctly absent, not in the 0.16 defaults. Verified, no
-  change needed.
-- **`BLE001`**: **the reason expired in the release this migration adopts.** The
-  comment justifies the ignore on the grounds that the rule "accepts only
-  re-raise or error-level logging" while this repo's idiom is
-  `logger.debug(..., exc_info=True)`. Ruff 0.16.0 stabilized an exemption for
-  exactly that idiom. Verified by running both versions on the documented
-  pattern: 0.15.8 flags it, 0.16.0 does not.
-
-  Worse, the surviving findings do not match the comment's description at all.
-  Across `parkour_mcp/`, **zero** flagged handlers use the `exc_info` idiom the
-  comment defends, and the large majority log nothing whatever
-  (`except Exception: return None`). The comment's backstop claim is also false:
-  it asserts S110 and SIM105 catch silent swallows, and both report zero
-  findings here, because S110 matches only `except: pass`.
-
-  So the ignore is not protecting a documented idiom. It is concealing a few
-  dozen silent exception swallows in an async network client. This is the
-  highest-severity finding in the migration and it is not a lint preference; see
-  Phase 6.
+  signatures", and separately because the group "cannot be split by prefix". The
+  second is simply false: `ignore` operates at rule-code granularity. The first
+  is true but was stated without evidence; the mechanism is that the MCP SDK
+  resolves signatures with `inspect.signature(..., eval_str=True)`, so a
+  TYPE_CHECKING-only name is missing from `__globals__` and registration raises
+  `InvalidSignature`. The comment now says that, and notes that `TC004` catches
+  the converse and is welcome.
+- **`ANN`** is correctly absent and not in the 0.16 defaults. No change.
+- **`BLE001`** justified its ignore on the grounds that the rule "accepts only
+  re-raise or error-level logging" while the house idiom is
+  `logger.debug(..., exc_info=True)`. Ruff 0.16 accepts exactly that idiom, so
+  the premise was void. The ignore is deleted; see "The `BLE001` audit".
 
 ## Hazard: the isort autofix destroys `noqa: PLC0415` directives
 
@@ -621,6 +606,9 @@ framework constraint, not a blanket group waiver.
 
 ## Phased implementation
 
+**Status: Phase 1 done, plus the `BLE001` audit. 160 findings outstanding,
+Phases 2 through 7 remain.**
+
 Findings decrease monotonically; the full `uv run pytest` only goes green at the
 end, because `pytest-ruff` fails on any outstanding finding. The gate at each
 intermediate boundary is therefore the *functional* suite
@@ -660,16 +648,30 @@ delete the migration entry, keep the `_matched_meta` entry (unaffected), and
 refresh the checker-authority section to mention the `# ruff: ignore` spelling.
 Full `uv run pytest` green here.
 
-### Out of band: the `BLE001` audit
+### The `BLE001` audit
 
-Not a phase, because it is not a lint migration. Dropping the `BLE001` ignore
-exposes a few dozen `except Exception` handlers that swallow silently in an
-async network client, concentrated in `youtube.py`. Some resolve by adding
-`exc_info=True` to an existing `logger.debug`; the rest are genuine
-error-handling decisions about what should propagate. That is its own branch
-with its own review, and it should not be smuggled into a lint sweep. What
-belongs in *this* branch is deleting the false comment, since its stated
-premise is contradicted by the pinned ruff version.
+Done, in `ada22ab` and `dfd82c6`. Recorded because the shape of it is the
+argument for the whole posture change.
+
+Dropping the ignore exposed 33 handlers. An AST classification of every one
+found **zero** using the `exc_info` idiom the config comment claimed to be
+protecting. Ten logged the exception but interpolated only `str(exc)`, losing
+the frame. Twenty-three recorded nothing at all: no log, no re-raise, just a
+fallback value, so a failure was indistinguishable from a legitimate empty
+result. The comment's asserted backstop was also wrong, since `S110` matches
+only `except: pass` and both it and `SIM105` report nothing here.
+
+Ruff 0.16 accepts a broad catch whose exception is logged with a traceback below
+error level, which is precisely the documented idiom. So the fix was for the
+codebase to adopt its own stated pattern: `exc_info=True` on the ten, a debug
+line before the fallback on the twenty-two in the package, and a category
+exemption for the three in `scripts/`, where a broad catch reports to the
+operator via `print` or `sys.exit` rather than degrading a long-lived server.
+
+The ignore is now deleted rather than re-explained. That is the difference the
+posture makes: under `select` this would have been 33 rules' worth of silence
+with no entry to audit, and the twenty-line comment drafted to justify keeping
+the ignore was longer than the fix turned out to be.
 
 ### Deferred: adopting beyond the default
 
