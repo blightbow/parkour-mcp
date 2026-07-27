@@ -142,7 +142,23 @@ Why: queries with unsupported operators now report the parse error in the respon
 
 Write `Why:` as a single logical line (wrap in your editor, but no hard newlines in the value). git-cliff preserves multi-line trailers verbatim and the Tera template flattens them, but single-line is the path of least resistance.
 
-`chore:`, `docs:`, `test:`, `style:`, `build:`, `ci:`, `revert:`, `release:` do not need `Why:`. `docs:` and `test:` still appear in the changelog (under Documentation / Miscellaneous) using their commit subject as the bullet text.
+**Posture depends on which section the bullet lands in.** The trailer is read as a bullet under a heading, alongside its siblings, and the heading does not supply a missing subject:
+
+- `feat:` → **Added**. Lead with what now exists, and name it. Someone scanning this section wants to learn the capability; they have no prior expectation to correct.
+- `fix:` / `refactor:` / `perf:` → **Fixed** / **Changed**. Leading with the problem reads naturally, because the change only means something relative to the behavior it replaces.
+
+The example above is a `fix:`, so it opens on the defect. A `feat:` trailer written in that shape produces an Added bullet that opens on the old problem and can finish without ever naming the thing added. That happened in v2.1.0 and was rewritten by hand at review; it is cheaper to get right at commit time. The `feat:` shape:
+
+```
+feat(huggingface): add Hub model and quant tool
+
+Adds a HuggingFace tool with five actions, fast-path interception for
+huggingface.co URLs, and a quantization analysis that refuses to guess.
+
+Why: a new HuggingFace tool inspects Hub models in a single call: architecture, parameter count, checkpoint size, gated state, base-model lineage, and per-file checksums, plus the effective bits-per-weight of a quantized release.
+```
+
+`chore:`, `docs:`, `test:`, `style:`, `build:`, `ci:`, `revert:`, `release:` take **no** `Why:`, which is stronger than "do not need one". Those types either skip the changelog entirely or render from their subject, so a `Why:` written on one is silently discarded: the prose goes nowhere and nobody finds out. `docs:` and `test:` do appear (under Documentation / Miscellaneous) but from the commit *subject*, so that is where their user-facing wording belongs.
 
 ### Commit type to CHANGELOG section mapping
 
