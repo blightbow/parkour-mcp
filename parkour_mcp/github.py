@@ -828,7 +828,7 @@ def _parse_owner_repo_path(query: str) -> tuple[str, str, str] | str:
 def _fmt_relative_time(iso_date: str) -> str:
     """Format an ISO 8601 timestamp as a relative time string."""
     try:
-        dt = datetime.fromisoformat(iso_date.replace("Z", "+00:00"))
+        dt = datetime.fromisoformat(iso_date)
         delta = datetime.now(UTC) - dt
         seconds = int(delta.total_seconds())
         if seconds < 60:

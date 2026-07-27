@@ -241,7 +241,7 @@ def _clean_raw(raw: str) -> str:
 def _format_timestamp(iso_str: str) -> str:
     """Convert ISO 8601 timestamp to human-readable UTC string."""
     try:
-        dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
+        dt = datetime.fromisoformat(iso_str)
         return dt.strftime("%Y-%m-%d %H:%M UTC")
     except (ValueError, AttributeError):
         return iso_str
@@ -250,8 +250,8 @@ def _format_timestamp(iso_str: str) -> str:
 def _format_relative_time(post_iso: str, topic_iso: str) -> str:
     """Format post time as T+HH:MM:SS relative to topic creation."""
     try:
-        post_dt = datetime.fromisoformat(post_iso.replace("Z", "+00:00"))
-        topic_dt = datetime.fromisoformat(topic_iso.replace("Z", "+00:00"))
+        post_dt = datetime.fromisoformat(post_iso)
+        topic_dt = datetime.fromisoformat(topic_iso)
         delta = max(0, int((post_dt - topic_dt).total_seconds()))
         hours, remainder = divmod(delta, 3600)
         minutes, seconds = divmod(remainder, 60)
