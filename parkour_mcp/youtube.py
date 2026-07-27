@@ -497,8 +497,8 @@ async def _video(url: str) -> str:
             or "en"
         )
         hint_parts = [
-            f'{tool_name("youtube")} action=transcript url=... '
-            f'languages=["{primary}"] for caption text.',
+            (f'{tool_name("youtube")} action=transcript url=... '
+            f'languages=["{primary}"] for caption text.'),
             'Use 2-letter ISO codes (e.g. "en", "ja"), not full language names.',
         ]
         if captions.auto_translated:
@@ -1326,8 +1326,8 @@ async def _no_transcript_response(
         "captions_source": source_langs or None,
     })
     msg_parts = [
-        f"Error: No transcript available in the requested language(s): "
-        f"{list(languages)}.",
+        (f"Error: No transcript available in the requested language(s): "
+        f"{list(languages)}."),
     ]
     if source_langs:
         msg_parts.append(

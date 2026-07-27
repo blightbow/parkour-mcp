@@ -1151,8 +1151,8 @@ async def _run_quant_audit(
     """
     if not base_model:
         return [
-            "quant_audit requested but this repo declares no base model, "
-            "so there is no native format to compare against",
+            ("quant_audit requested but this repo declares no base model, "
+            "so there is no native format to compare against"),
         ]
     params = {"blobs": "true", "expand": list(_FLAGSHIP_EXPANDS)}
     payload = await _hf_request(

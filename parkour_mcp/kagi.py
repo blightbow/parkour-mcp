@@ -167,16 +167,16 @@ def kagi_lenses_markdown() -> str:
     parts = [
         "# Kagi default lenses",
         "",
-        "Built-in lens identifiers for `kagi_search`'s `lens_id` "
+        ("Built-in lens identifiers for `kagi_search`'s `lens_id` "
         "parameter. The slug is the lowercase display name with "
         "spaces preserved (`news 360`, `kagi documentation`). "
         "Underscore variants do not engage the lens — they fall back "
-        "to a default search.",
+        "to a default search."),
         "",
-        "User-created lenses are not enumerated here; their lens IDs "
+        ("User-created lenses are not enumerated here; their lens IDs "
         "come from `https://kagi.com/lenses/<id>` after the user "
         "marks the lens shareable at "
-        "https://kagi.com/settings/lenses.",
+        "https://kagi.com/settings/lenses."),
         "",
         "## Always available",
         "",
@@ -187,10 +187,10 @@ def kagi_lenses_markdown() -> str:
         "",
         "## Require user activation",
         "",
-        "These lenses must be enabled at "
+        ("These lenses must be enabled at "
         "https://kagi.com/settings/lenses by the account holder. "
         "Sending the slug for an unactivated lens falls back to a "
-        "default search rather than erroring.",
+        "default search rather than erroring."),
         "",
     ])
     for lens in activation_gated:
