@@ -5,6 +5,21 @@ All notable changes to parkour-mcp will be documented in this file.
 Format: https://keepachangelog.com/en/1.1.0/
 Versioning: https://semver.org/spec/v2.0.0.html
 
+## [2.1.0] 2026-07-27
+
+### Added
+- a new HuggingFace tool inspects Hub models in a single call: architecture, parameter count, checkpoint size, gated state, base-model lineage, and per-file checksums, plus the effective bits-per-weight of a quantized release. Where the Hub's own metadata cannot support that arithmetic it says so and stays silent, rather than publishing a number that would misread an honest release as bloated. Weight files are described, never downloaded: a `.safetensors` read returns its checksum and the byte-range recipe for reading the header.
+
+
+### Changed
+- lazy imports across the package claimed to break cycles that did not exist and defer dependencies already loaded at startup, so the one suppression that genuinely mattered was indistinguishable from the fifty that did not; the surviving four now cite a reproducible failure, and the rest became a policy ruff enforces in both directions.
+
+
+### Documentation
+- Add Hub tool design spec
+- Correct the checker-authority note
+- Record the ruff 0.16 migration with triage
+
 ## [2.0.0] 2026-07-26
 
 ### Added
