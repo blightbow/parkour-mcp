@@ -611,8 +611,12 @@ framework constraint, not a blanket group waiver.
 
 ## Phased implementation
 
-**Status: Phases 1 through 6 done, plus the `BLE001` audit. 1 finding
-outstanding (`EXE001`), Phase 7 remains.**
+**Status: complete.** All seven phases and the `BLE001` audit landed.
+`uv run pytest` is green at 1645 passed with ruff and ty gating, vulture is
+clean, and no rule was waived to get there. Retained as the record of why the
+config reads as it does; the decisions worth carrying forward are the
+`extend-select` posture, the suppression-audit caveats now in `TECH_DEBT.md`,
+and the deferred `D` / `PT` / `N` adoption below.
 
 Findings decrease monotonically; the full `uv run pytest` only goes green at the
 end, because `pytest-ruff` fails on any outstanding finding. The gate at each

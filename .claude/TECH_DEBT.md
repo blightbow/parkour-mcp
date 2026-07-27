@@ -49,6 +49,19 @@ than it does:
   that stops suppressing anything becomes an error. Note its autofix deletes
   the *whole* trailing comment, prose included, so re-home any explanation as
   a plain comment rather than losing it.
+- **Both suppression spellings count.** Since 0.16 ruff accepts
+  `# ruff: ignore[RULE]` as well as `# noqa: RULE`, inline or on the preceding
+  line, and 0.15 added block form (`# ruff: disable[RULE]` /
+  `# ruff: enable[RULE]`). RUF100 polices all of them, but a *grep*-based audit
+  must match every spelling or it will under-report.
+- **A directive count is not a health check.** The isort autofix rewraps an
+  import past the line limit into parenthesised form and carries a trailing
+  `noqa` onto the imported-name line, where the rule does not report. The
+  comment survives `grep` and silently stops suppressing. Measured on this repo:
+  0 PLC0415 findings before a naive autofix, 8 after, with the directive count
+  unchanged at 6 throughout. Gate on the finding count, never the comment count.
+  Keep suppressed imports short enough not to wrap; see the four sites in
+  `doi.py` and `mediawiki.py`, whose reasons live in a block comment above.
 - **vulture** (`just lint-deep`) gates version-tag pushes via
   `scripts/git-hooks/pre-push`, which is the only place it runs — CI's
   tag-push job is `uv run pytest` plus the semgrep install that the test
@@ -92,15 +105,6 @@ templated rationales; an audit found 51 of them false.
 `just install-hooks` (it sets `core.hooksPath`), so a fresh clone pushing a
 tag is ungated. Moving the vulture and ty scans into CI would close that,
 at the cost of failing a tag push after the tag already exists.
-
-### ruff 0.16 migration — 184 findings, deliberately deferred
-
-- **Location**: `uv.lock` (ruff pinned at 0.15.8), `[tool.ruff.lint]`.
-- **Issue**: ruff 0.16.0 (2026-07-23) is a breaking release — "Ruff now enables a much larger set of rules by default (413, up from 59)", plus `PLR0917` stabilized out of preview. Upgrading this repo surfaces **184 findings** on code nobody changed. The sister repo `betamatter` is already on 0.16.0 and clean, but only because it is four small pure-stdlib files, so the two repos' linters currently diverge despite the config comment claiming they are kept in sync.
-- **Triage already done** (so a fresh session need not redo it): 81 × `I001` un-sorted imports (legitimate; the PLC0415 hoist in `ec1a81a` contributed, but it also fires on untouched files because `I` is newly on by default); 60 × `RUF100` / `PLR0917` / `RUF059` (legitimate new signal); **17 × `B018` on `.vulture_whitelist.py`, which is a false positive** — that file is bare name references by design and needs `B018` added to its `per-file-ignores` beside the existing `F821`; ~26 mixed and mostly mechanical. 108 of 184 are auto-fixable.
-- **Why deferred**: adopting it is roughly 76 judgement calls plus a config fix, which is its own branch. Taking it inside an unrelated change is precisely the pressure that produced the 55 templated `PLC0415` suppressions this repo just spent a sweep removing — a wall of findings with no budget makes mass-suppression the path of least resistance. The lockfile is what converted a breaking upstream change into a scheduled decision, which is the argument for keeping linters locked rather than floating.
-- **Also new in 0.16**: `# ruff: ignore[RULE]` is now accepted as an alternative to `noqa`, including on the preceding line. Any suppression audit after the upgrade must grep for **both** spellings.
-- **How to evaluate**: `uv lock --upgrade-package ruff`, then triage by rule rather than by file. Fix `.vulture_whitelist.py`'s `per-file-ignores` first so the 17 false positives stop masking the real count.
 
 ### `youtube.py` — two dead `except ImportError` guards
 
