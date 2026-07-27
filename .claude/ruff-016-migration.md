@@ -580,7 +580,7 @@ Fix at the source. None of these should be suppressed.
 
 | Rule | N | Assessment |
 |---|---|---|
-| `RUF059` | 14 | Two populations. **4 are genuinely dead code**: `state` / `display_state` unpacked from `_build_issue_markdown` and `_build_pr_markdown` in `github.py` and `_pipeline.py`. The value is already carried inside `extra_fm` (`github.py:1829`, `:1949`) and all four call sites discard it, so the correct fix is to drop the element from the return tuple, not to rename it. The other 10 are test-local unpacking, honest underscore-prefix renames. |
+| `RUF059` | 14 | All 14 are honest underscore-prefix renames. An earlier draft claimed 4 of them were dead code, on the reasoning that `state` / `display_state` is already carried inside `extra_fm` and every call site discarded it. That was wrong: it surveyed only the sites `RUF059` flagged, which by construction are the ones that discard, and missed `fetch_direct.py`, whose issue and PR branches both read the element to build their frontmatter. The value is used at 2 of 6 call sites, so the tuple stays. |
 | `ISC004` | 6 | All six are deliberate multi-line prose in list literals, not missing commas. But the rule exists because the two are indistinguishable to a reader, so wrap each in explicit parens. Real PoLA improvement, not a waiver. |
 | `FURB162` | 4 | `datetime.fromisoformat(s.replace("Z", "+00:00"))`. `requires-python = ">=3.12"` and `fromisoformat` has handled `Z` natively since 3.11, so the replace is dead. `discourse.py` x3, `github.py` x1. |
 | `RUF015` | 4 | Unnecessary iterable allocation for first element. Test code. |

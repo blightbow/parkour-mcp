@@ -255,7 +255,7 @@ class TestCitationCff:
         from parkour_mcp.github import _fetch_citation_cff, _parse_citation_cff
         cff = await _fetch_citation_cff("scikit-learn", "scikit-learn", "main")
         assert cff is not None
-        doi, title, authors, year = _parse_citation_cff(cff)
+        doi, title, authors, _year = _parse_citation_cff(cff)
         assert doi is None  # no DOI in their CFF
         assert "Scikit-learn" in title
         assert len(authors) > 0

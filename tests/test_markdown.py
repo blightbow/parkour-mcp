@@ -1140,7 +1140,7 @@ class TestApplySemanticTruncation:
         paragraphs = [f"## Section {i}\n\n{'Word ' * 200}" for i in range(20)]
         content = "\n\n".join(paragraphs)
 
-        result, hint = _apply_semantic_truncation(content, 500)
+        _result, hint = _apply_semantic_truncation(content, 500)
         assert hint is not None
         # The hint should mention the actual shown amount
         assert "showing first" in hint

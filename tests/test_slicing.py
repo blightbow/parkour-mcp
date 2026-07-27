@@ -173,7 +173,7 @@ class TestWikiCache:
     def test_clear(self):
         _wiki_cache.store("https://en.wikipedia.org/wiki/A", {}, {})
         _wiki_cache.clear()
-        info, page = _wiki_cache.get("https://en.wikipedia.org/wiki/A")
+        info, _page = _wiki_cache.get("https://en.wikipedia.org/wiki/A")
         assert info is None
 
 

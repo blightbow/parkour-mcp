@@ -813,7 +813,7 @@ class TestParseCitationCff:
                 "authors": [{"family-names": "Foo", "given-names": "Bar"}],
             },
         }
-        doi, title, authors, year = _parse_citation_cff(cff)
+        doi, title, _authors, _year = _parse_citation_cff(cff)
         assert doi == "10.5281/zenodo.5555"
         assert title == "The Paper"
 

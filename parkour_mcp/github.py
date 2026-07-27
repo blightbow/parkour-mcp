@@ -1898,7 +1898,7 @@ async def _action_issue(
     )
     if isinstance(built, str):
         return built
-    title, raw_md, state, extra_fm = built
+    title, raw_md, _state, extra_fm = built
 
     fm_entries = _fm_base(f"https://github.com/{owner}/{repo}/issues/{number}")
     fm_entries.update(extra_fm)
@@ -2066,7 +2066,7 @@ async def _action_pull_request(
     )
     if isinstance(built, str):
         return built
-    title, raw_md, display_state, extra_fm = built
+    title, raw_md, _display_state, extra_fm = built
 
     fm_entries = _fm_base(f"https://github.com/{owner}/{repo}/pull/{number}")
     fm_entries.update(extra_fm)

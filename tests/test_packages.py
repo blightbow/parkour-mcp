@@ -309,16 +309,16 @@ class TestParseQuery:
         assert version == "v0.20.0"
 
     def test_invalid_no_slash(self):
-        system, name, version = _parse_query("requests")
+        system, _name, _version = _parse_query("requests")
         assert system is None
 
     def test_unknown_ecosystem(self):
-        system, name, version = _parse_query("homebrew/ffmpeg")
+        system, name, _version = _parse_query("homebrew/ffmpeg")
         assert system is None
         assert name == "homebrew"  # raw eco preserved for error msg
 
     def test_empty_name(self):
-        system, name, version = _parse_query("pypi/")
+        system, _name, _version = _parse_query("pypi/")
         assert system is None
 
 

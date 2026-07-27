@@ -1140,7 +1140,7 @@ async def _github_fast_path(
         )
         if isinstance(built, str):
             return built  # error string
-        title, raw_md, state, extra_fm = built
+        title, raw_md, _state, extra_fm = built
 
         # Cache raw markdown with comment-boundary presplit for BM25 search
         comment_chunks = _split_github_comments(raw_md)
@@ -1175,7 +1175,7 @@ async def _github_fast_path(
         )
         if isinstance(built, str):
             return built
-        title, raw_md, display_state, extra_fm = built
+        title, raw_md, _display_state, extra_fm = built
 
         # Cache raw markdown with comment-boundary presplit for BM25 search
         comment_chunks = _split_github_comments(raw_md)
