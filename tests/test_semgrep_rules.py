@@ -68,6 +68,7 @@ def test_semgrep_rules_pass():
         capture_output=True,
         text=True,
         timeout=120,
+        check=False,  # returncode is inspected below: 0 clean, 1 findings, else tool error
     )
     # semgrep exits 0 on "no findings" and 1 on "findings present"; any
     # other exit code is a tool error we want surfaced distinctly.

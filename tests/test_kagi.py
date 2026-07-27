@@ -1,6 +1,7 @@
 """Tests for parkour_mcp.kagi — v1 search, v0 summarize island, error parsers."""
 
 import json
+from typing import ClassVar
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -380,8 +381,10 @@ class TestRedditHint:
             )
         )
 
-    _NON_REDDIT = [{"url": "https://example.com/a", "title": "A", "snippet": "s"}]
-    _REDDIT = [{
+    _NON_REDDIT: ClassVar[list[dict]] = [
+        {"url": "https://example.com/a", "title": "A", "snippet": "s"},
+    ]
+    _REDDIT: ClassVar[list[dict]] = [{
         "url": "https://www.reddit.com/r/python/comments/abc/title/",
         "title": "A thread", "snippet": "s",
     }]
