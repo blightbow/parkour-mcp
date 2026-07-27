@@ -254,12 +254,12 @@ async def _extract_interactive_elements(page, max_elements: int = 25) -> tuple[l
 async def _render_js(
     url: str,
     source_url: str,
+    *,
     fragment_warning: str | None,
     section_names: list[str] | None,
     search: str | None,
     slices: int | list[int] | None,
     slices_list: list[int],
-    *,
     max_tokens: int,
     actions: list | None,
     max_elements: int,
@@ -294,7 +294,8 @@ async def _render_js(
                                 return _dispatch_slicing(
                                     url, search, slices,
                                     slices_list if slices is not None else [],
-                                    max_tokens, source_url, warning=fragment_warning,
+                                    max_tokens=max_tokens, source_url=source_url,
+                                    warning=fragment_warning,
                                     fallback=result,
                                 )
                             return result
@@ -508,7 +509,8 @@ async def _render_js(
     if want_slicing:
         return _dispatch_slicing(
             url, search, slices, slices_list if slices is not None else [],
-            max_tokens, source_url, warning=fragment_warning,
+            max_tokens=max_tokens, source_url=source_url,
+            warning=fragment_warning,
             fallback=output,
         )
 

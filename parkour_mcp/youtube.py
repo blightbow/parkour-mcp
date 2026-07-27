@@ -1795,6 +1795,7 @@ def _build_context_hint(matched: list[int], total: int) -> str:
 def _render_search_response(
     entry: _TranscriptEntry,
     query: str | None,
+    *,
     start_seconds: float | None,
     end_seconds: float | None,
     chapter: str | None,
@@ -1962,7 +1963,9 @@ async def _transcript(
         or end_seconds is not None
     ):
         return _render_search_response(
-            entry, search, start_seconds, end_seconds, chapter, order, timestamps,
+            entry, search,
+            start_seconds=start_seconds, end_seconds=end_seconds,
+            chapter=chapter, order=order, timestamps=timestamps,
         )
     return _render_full_transcript_response(entry, timestamps)
 

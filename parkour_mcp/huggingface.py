@@ -887,6 +887,7 @@ def _apply_model_hints(
     fm: FMEntries,
     repo: str,
     rev: str,
+    *,
     report: _QuantReport,
     base_model: str | None,
     weight_file: str | None,
@@ -1098,7 +1099,9 @@ async def _action_model(
     # rather than a shard of the model the caller asked about.
     weight_file = report.canonical_files[0] if report.canonical_files else None
     _apply_model_hints(
-        fm, repo, rev, report, base_model, weight_file, filenames,
+        fm, repo, rev,
+        report=report, base_model=base_model, weight_file=weight_file,
+        filenames=filenames,
     )
 
     if quant_audit:
@@ -1320,7 +1323,7 @@ async def _action_file(
         lang = "markdown" if basename.endswith(".md") else ""
         body = f"```{lang}\n{rendered}\n```" if rendered else ""
 
-    _cache_file_body(cache_url, repo, path, rev, basename, rendered)
+    _cache_file_body(cache_url, repo, path, rev=rev, basename=basename, rendered=rendered)
 
     truncated, trunc_hint = _apply_semantic_truncation(body, 6000)
     if trunc_hint:
@@ -1341,6 +1344,7 @@ def _cache_file_body(
     cache_url: str | None,
     repo: str,
     path: str,
+    *,
     rev: str,
     basename: str,
     rendered: str,

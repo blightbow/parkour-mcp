@@ -313,7 +313,8 @@ async def web_fetch_direct(
                     return _dispatch_slicing(
                         url, search, slices,
                         slices_list if slices is not None else [],
-                        max_tokens, source_url, warning=fragment_warning,
+                        max_tokens=max_tokens, source_url=source_url,
+                        warning=fragment_warning,
                         fallback=result,
                     )
                 if section_names:
@@ -343,7 +344,8 @@ async def web_fetch_direct(
                     return _dispatch_slicing(
                         url, search, slices,
                         slices_list if slices is not None else [],
-                        max_tokens, source_url, warning=fragment_warning,
+                        max_tokens=max_tokens, source_url=source_url,
+                        warning=fragment_warning,
                         fallback=result,
                     )
                 if section_names:
@@ -374,7 +376,8 @@ async def web_fetch_direct(
                     return _dispatch_slicing(
                         url, search, slices,
                         slices_list if slices is not None else [],
-                        max_tokens, source_url, warning=fragment_warning,
+                        max_tokens=max_tokens, source_url=source_url,
+                        warning=fragment_warning,
                         fallback=result,
                     )
                 if section_names:
@@ -406,7 +409,8 @@ async def web_fetch_direct(
         if result is not None:
             if want_slicing:
                 return _dispatch_slicing(url, search, slices, slices_list if slices is not None else [],
-                                         max_tokens, source_url, warning=fragment_warning,
+                                         max_tokens=max_tokens, source_url=source_url,
+                                         warning=fragment_warning,
                                          fallback=result)
             return result
     except Exception:
@@ -428,8 +432,9 @@ async def web_fetch_direct(
         )
         from .fetch_js import _render_js
         return await _render_js(
-            url, source_url, fragment_warning, section_names,
-            search, slices, slices_list,
+            url, source_url,
+            fragment_warning=fragment_warning, section_names=section_names,
+            search=search, slices=slices, slices_list=slices_list,
             max_tokens=max_tokens, actions=actions, max_elements=max_elements,
             premature=premature,
         )
@@ -467,7 +472,8 @@ async def web_fetch_direct(
                     return _dispatch_slicing(
                         url, search, slices,
                         slices_list if slices is not None else [],
-                        max_tokens, source_url, warning=fragment_warning,
+                        max_tokens=max_tokens, source_url=source_url,
+                        warning=fragment_warning,
                         fallback=result,
                     )
                 if section_names:
@@ -566,7 +572,8 @@ async def web_fetch_direct(
     # If search/slices was requested, the cache is now populated — dispatch
     if want_slicing:
         return _dispatch_slicing(url, search, slices, slices_list if slices is not None else [],
-                                 max_tokens, source_url, warning=fragment_warning,
+                                 max_tokens=max_tokens, source_url=source_url,
+                                 warning=fragment_warning,
                                  fallback=output)
 
     return output

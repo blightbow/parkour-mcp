@@ -644,6 +644,7 @@ def _format_mediawiki_search(
 async def _handle_page(
     title: str,
     wiki: str,
+    *,
     section: list[str] | None,
     search: str | None,
     slices: int | list[int] | None,
@@ -941,7 +942,9 @@ async def mediawiki(
                 "Example: action='page' title=\"Gödel's incompleteness theorems\""
             )
         return await _handle_page(
-            title, wiki, section_names, search, slices, max_tokens,
+            title, wiki,
+            section=section_names, search=search, slices=slices,
+            max_tokens=max_tokens,
         )
 
     if action == "search":

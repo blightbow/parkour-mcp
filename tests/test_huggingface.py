@@ -768,7 +768,10 @@ def test_presplit_failure_skips_cache():
     behind that cap.
     """
     url = "https://huggingface.co/org/model/blob/main/x.txt"
-    _cache_file_body(url, "org/model", "x.txt", "main", "x.txt", "y" * 1_500_000)
+    _cache_file_body(
+        url, "org/model", "x.txt",
+        rev="main", basename="x.txt", rendered="y" * 1_500_000,
+    )
     assert _page_cache.get(url) is None
 
 

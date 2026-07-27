@@ -1813,6 +1813,7 @@ def _dispatch_slicing(
     search: str | None,
     slices,
     slices_list: list[int],
+    *,
     max_tokens: int,
     source_url: str,
     warning=None,
