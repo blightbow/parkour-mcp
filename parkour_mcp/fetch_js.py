@@ -182,6 +182,7 @@ async def _extract_interactive_elements(page, max_elements: int = 25) -> tuple[l
         try:
             text = await btn.inner_text()
         except Exception:
+            logger.debug("inner_text() failed; falling back to value attribute", exc_info=True)
             text = await btn.get_attribute("value")
         if text and text.strip():
             selector = await _get_unique_selector(btn)
@@ -469,6 +470,7 @@ async def _render_js(
             await browser.close()
 
     except Exception as e:
+        logger.debug("headless render failed for %s", url, exc_info=True)
         return f"Error: Failed to render page - {type(e).__name__}: {e}"
 
     # Convert HTML to markdown (reuses the soup from sparse-content check if html unchanged)

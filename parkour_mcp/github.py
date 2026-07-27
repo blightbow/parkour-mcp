@@ -190,6 +190,7 @@ async def _github_request(
             try:
                 return response.json()
             except Exception:
+                logger.debug("GitHub response for %s was not JSON", path, exc_info=True)
                 return response.text
         if response.status_code == 204:
             return {}
@@ -224,6 +225,7 @@ async def _github_request(
                     return f"Error: Invalid request — {msg}"
                 return f"Error: Invalid request — {body.get('message', 'Unprocessable Entity')}"
             except Exception:
+                logger.debug("could not parse 422 body for %s", path, exc_info=True)
                 return "Error: HTTP 422 Unprocessable Entity."
 
         # 5xx — retry
@@ -844,6 +846,7 @@ def _fmt_relative_time(iso_date: str) -> str:
             return f"{days // 30}mo ago"
         return f"{days // 365}y ago"
     except Exception:
+        logger.debug("could not parse timestamp %r", iso_date, exc_info=True)
         return iso_date
 
 
@@ -1164,6 +1167,7 @@ async def _fetch_citation_cff(
                 return None
             return yaml.safe_load(resp.text)
         except Exception:
+            logger.debug("CITATION.cff fetch or parse failed for %s", raw_url, exc_info=True)
             return None
 
     return await _cached_repo_fetch(raw_url, _do_fetch)
@@ -1223,6 +1227,7 @@ async def _fetch_issue_form_yaml(
             text = base64.b64decode(encoded).decode("utf-8")
             parsed = yaml.safe_load(text)
         except Exception:
+            logger.debug("issue template %s was not decodable YAML", api_path, exc_info=True)
             return None
         if not isinstance(parsed, dict):
             return None
@@ -1259,6 +1264,7 @@ async def _fetch_issue_template_config_yml(
             text = base64.b64decode(encoded).decode("utf-8")
             parsed = yaml.safe_load(text)
         except Exception:
+            logger.debug("issue template config %s was not decodable YAML", api_path, exc_info=True)
             return None
         if not isinstance(parsed, dict):
             return None

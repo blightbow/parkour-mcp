@@ -431,6 +431,7 @@ async def _video(url: str) -> str:
     try:
         info = await asyncio.to_thread(_extract_video_info_sync, url)
     except Exception as exc:
+        logger.debug("yt-dlp video extraction failed for %s", url, exc_info=True)
         return _map_yt_dlp_error(exc)
 
     if info is None:
@@ -1302,6 +1303,7 @@ async def _no_transcript_response(
     try:
         info = await asyncio.to_thread(_extract_video_info_sync, canonical_url)
     except Exception:
+        logger.debug("caption inventory lookup failed for %s", canonical_url, exc_info=True)
         info = None
     if isinstance(info, dict):
         captions = _captions_summary(info)
@@ -1361,6 +1363,7 @@ def _fetch_video_chapters_sync(video_id: str) -> list[Chapter]:
     try:
         info = _extract_video_info_sync(url)
     except Exception:
+        logger.debug("chapter extraction failed for %s", url, exc_info=True)
         return []
     if not isinstance(info, dict):
         return []
@@ -1549,6 +1552,7 @@ async def _yt_dlp_transcript_fallback(
     try:
         info = await asyncio.to_thread(_extract_video_info_sync, url)
     except Exception:
+        logger.debug("yt-dlp fallback metadata fetch failed for %s", url, exc_info=True)
         return None
     if not info or not isinstance(info, dict):
         return None
@@ -1569,6 +1573,7 @@ async def _yt_dlp_transcript_fallback(
     try:
         snippets = await _fetch_and_parse_json3(json3_url)
     except Exception:
+        logger.debug("json3 caption fetch failed for %s", json3_url, exc_info=True)
         return None
     if not snippets:
         return None
@@ -1883,6 +1888,7 @@ async def _transcript(
                 _fetch_transcript_sync, video_id, languages,
             )
         except Exception as exc:
+            logger.debug("transcript fetch failed; evaluating yt-dlp fallback", exc_info=True)
             # When the dedicated library is blocked or hits the PoToken
             # wall, yt-dlp's caption code path can sometimes succeed.
             # Limit the fallback to those specific exceptions so genuine
@@ -1924,6 +1930,7 @@ async def _transcript(
         try:
             chapters_list = await chapters_task
         except Exception:
+            logger.debug("chapter task failed; continuing without chapters", exc_info=True)
             chapters_list = []
         chapters = tuple(chapters_list)
         entry = _build_transcript_entry(
@@ -2135,6 +2142,7 @@ async def _channel(url: str, limit: int) -> str:
     try:
         info = await asyncio.to_thread(_extract_flat_sync, url, limit)
     except Exception as exc:
+        logger.debug("yt-dlp channel extraction failed for %s", url, exc_info=True)
         return _map_yt_dlp_error(exc)
     if info is None:
         return f"Error: yt-dlp returned no metadata for {url}"
@@ -2153,6 +2161,7 @@ async def _playlist(url: str, limit: int) -> str:
     try:
         info = await asyncio.to_thread(_extract_flat_sync, url, limit)
     except Exception as exc:
+        logger.debug("yt-dlp playlist extraction failed for %s", url, exc_info=True)
         return _map_yt_dlp_error(exc)
     if info is None:
         return f"Error: yt-dlp returned no metadata for {url}"
@@ -2213,6 +2222,7 @@ async def _search(query: str, limit: int) -> str:
     try:
         info = await asyncio.to_thread(_extract_flat_sync, search_url, limit)
     except Exception as exc:
+        logger.debug("yt-dlp search failed for %s", search_url, exc_info=True)
         return _map_yt_dlp_error(exc)
     if info is None:
         return f"Error: yt-dlp returned no results for query: {query}"
@@ -2495,6 +2505,7 @@ async def youtube_comments(
             _extract_video_with_comments_sync, canonical_url, max_comments,
         )
     except Exception as exc:
+        logger.debug("yt-dlp comment extraction failed for %s", canonical_url, exc_info=True)
         return _map_yt_dlp_error(exc)
 
     if info is None or not isinstance(info, dict):

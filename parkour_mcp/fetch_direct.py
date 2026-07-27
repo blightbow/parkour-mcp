@@ -582,6 +582,7 @@ async def _github_sections(
                     return None
                 source_text = resp.text
             except Exception:
+                logger.debug("raw GitHub fetch failed for %s", raw_url, exc_info=True)
                 return None
 
             # Populate the page cache so a follow-up web_fetch_direct call

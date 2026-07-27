@@ -221,6 +221,7 @@ async def _hf_request(
             try:
                 return response.json()
             except Exception:
+                logger.debug("HuggingFace response for %s was not JSON", path, exc_info=True)
                 return response.text
 
         if response.status_code == 401:
@@ -243,6 +244,7 @@ async def _hf_request(
             try:
                 detail = response.json().get("error", "")
             except Exception:
+                logger.debug("HuggingFace 400 body for %s was not JSON", path, exc_info=True)
                 detail = response.text[:400]
             return f"Error: HuggingFace API rejected the request — {detail}"
 
