@@ -19,7 +19,7 @@ import json
 import logging
 import re
 import time
-from dataclasses import dataclass, field, fields, asdict
+from dataclasses import asdict, dataclass, field, fields
 from typing import Annotated
 
 from pydantic import Field as PydanticField

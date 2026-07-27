@@ -6,26 +6,25 @@ import pytest
 from curl_cffi.requests import exceptions as cc_exc
 
 import parkour_mcp.reddit as reddit_mod
-from parkour_mcp.reddit import (
-    _fetch_reddit_content,
-    _format_comment_thread,
-    _format_listing,
-    _render_comments,
-    _format_timestamp,
-    _format_relative_time,
-    _build_comment_section_tree,
-    _split_by_comments,
-    _check_reddit_json_error,
-    _MAX_COMMENT_DEPTH,
-)
+from parkour_mcp._pipeline import _page_cache, _reddit_fast_path
 from parkour_mcp.detection import (
     RedditPageType,
     _classify_reddit_url,
     _detect_reddit_url,
     _extract_comment_permalink,
 )
-from parkour_mcp._pipeline import _reddit_fast_path, _page_cache
-
+from parkour_mcp.reddit import (
+    _MAX_COMMENT_DEPTH,
+    _build_comment_section_tree,
+    _check_reddit_json_error,
+    _fetch_reddit_content,
+    _format_comment_thread,
+    _format_listing,
+    _format_relative_time,
+    _format_timestamp,
+    _render_comments,
+    _split_by_comments,
+)
 
 # ---------------------------------------------------------------------------
 # Sample JSON fixtures

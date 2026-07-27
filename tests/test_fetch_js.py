@@ -10,16 +10,16 @@ import httpx
 import pytest
 import respx
 
+from parkour_mcp._pipeline import _page_cache, _wiki_cache
 from parkour_mcp.fetch_direct import web_fetch_direct
-from parkour_mcp._pipeline import _wiki_cache, _page_cache
 
-from .conftest import (
-    MEDIAWIKI_QUERY_RESPONSE,
-    MEDIAWIKI_PARSE_FULL_RESPONSE,
-)
 from ._output import (
     fenced_heading,
     split_output,
+)
+from .conftest import (
+    MEDIAWIKI_PARSE_FULL_RESPONSE,
+    MEDIAWIKI_QUERY_RESPONSE,
 )
 
 

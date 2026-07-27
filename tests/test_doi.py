@@ -4,6 +4,8 @@ import httpx
 import pytest
 import respx
 
+from parkour_mcp._pipeline import _doi_fast_path
+from parkour_mcp.detection import _detect_doi_url
 from parkour_mcp.doi import (
     ARXIV_DOI_RE,
     _alt_dois_from_relations,
@@ -16,18 +18,15 @@ from parkour_mcp.doi import (
     _extract_update_notice,
     _fetch_doi_paper,
     _format_crossref_date,
+    _format_csl_json_as_markdown,
     _ra_cache,
     _relations_fm_entry,
     fetch_crossref_metadata,
-    fetch_datacite_metadata,
     fetch_csl_json,
+    fetch_datacite_metadata,
     fetch_formatted_citation,
-    _format_csl_json_as_markdown,
 )
-from parkour_mcp.detection import _detect_doi_url
-from parkour_mcp._pipeline import _doi_fast_path
 from parkour_mcp.shelf import _reset_shelf
-
 
 # ---------------------------------------------------------------------------
 # URL detection

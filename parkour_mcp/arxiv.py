@@ -5,14 +5,12 @@ import logging
 import xml.etree.ElementTree as ET
 from typing import Annotated
 
+import httpx
 from defusedxml.ElementTree import fromstring as _safe_fromstring
 from pydantic import Field
 
-import httpx
-
 from .common import _API_USER_AGENT, RateLimiter, s2_enabled, tool_name
 from .detection import _detect_arxiv_url, _strip_version
-from .markdown import FMEntries, _build_frontmatter
 from .doi import (
     _alt_dois_from_relations,
     _build_alert_message,
@@ -21,8 +19,8 @@ from .doi import (
     fetch_crossref_metadata,
     fetch_formatted_citation,
 )
-from .markdown import _format_retraction_banner
-from .shelf import _track_on_shelf, CitationRecord
+from .markdown import FMEntries, _build_frontmatter, _format_retraction_banner
+from .shelf import CitationRecord, _track_on_shelf
 
 logger = logging.getLogger(__name__)
 

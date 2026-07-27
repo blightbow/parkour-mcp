@@ -4,12 +4,12 @@ import httpx
 import pytest
 import respx
 
+from parkour_mcp._pipeline import _page_cache, _wiki_cache
 from parkour_mcp.fetch_direct import web_fetch_direct
 from parkour_mcp.markdown import (
     MarkdownSection,
     _compute_slice_ancestry,
 )
-from parkour_mcp._pipeline import _page_cache, _wiki_cache
 
 
 @pytest.fixture(autouse=True)
@@ -624,8 +624,8 @@ class TestSafeMarkdownPresplit:
         with gzip.open(fixture, "rt", encoding="utf-8") as f:
             whatwg_html = f.read()
 
-        from parkour_mcp.markdown import html_to_markdown
         from parkour_mcp._pipeline import _safe_markdown_presplit
+        from parkour_mcp.markdown import html_to_markdown
 
         _, markdown = html_to_markdown(whatwg_html)
         result = _safe_markdown_presplit(markdown)

@@ -7,6 +7,25 @@ from urllib.parse import urlparse
 
 import httpx
 
+from ._pipeline import (
+    _arxiv_fast_path,
+    _cached_mediawiki_fetch,
+    _discourse_fast_path,
+    _dispatch_slicing,
+    _doi_fast_path,
+    _extract_fragment,
+    _get_slices,
+    _github_fast_path,
+    _ietf_fast_path,
+    _mediawiki_fast_path,
+    _normalize_sections,
+    _page_cache,
+    _process_markdown_sections,
+    _reddit_fast_path,
+    _resolve_fragment_source,
+    _s2_fast_path,
+    _search_slices,
+)
 from .common import (
     _FETCH_HEADERS,
     _MAX_RESPONSE_BYTES,
@@ -18,23 +37,6 @@ from .common import (
     s2_enabled,
     tool_name,
 )
-from .markdown import (
-    FMEntries,
-    _append_frontmatter_entry,
-    html_to_markdown, _detect_js_dependent,
-    _extract_sections_from_markdown, _build_section_list,
-    _filter_markdown_by_sections, _build_frontmatter, _apply_hard_truncation,
-    _fence_content, _TRUST_ADVISORY, _resolve_toc_slice, _TOC_SLICE_SIZE,
-)
-from ._pipeline import (
-    _extract_fragment, _normalize_sections, _resolve_fragment_source,
-    _mediawiki_fast_path, _arxiv_fast_path, _s2_fast_path, _ietf_fast_path, _doi_fast_path, _reddit_fast_path, _discourse_fast_path, _github_fast_path,
-    _process_markdown_sections,
-    _cached_mediawiki_fetch,
-    _page_cache, _search_slices, _get_slices,
-    _dispatch_slicing,
-)
-from .mediawiki import _mediawiki_html_to_markdown
 from .detection import (
     RedditPageType,
     _classify_reddit_url,
@@ -48,21 +50,49 @@ from .detection import (
     _extract_comment_permalink,
     _strip_version,
 )
-from .huggingface import _hf_fast_path
-from .github import (
-    extract_code_definitions, format_code_sections,
-    _build_issue_markdown, _build_pr_markdown, _detect_github_url,
-    _get_github_token, _blob_presplit, _split_github_comments,
-)
-from .reddit import (
-    _fetch_reddit_json,
-    _resolve_redd_it, _build_comment_section_tree, _format_comment_thread,
-    _split_by_comments,
-)
 from .discourse import (
-    _detect_discourse_headers, _extract_topic_id,
-    _build_post_section_tree, _format_topic, _split_by_posts,
-    _base_url_from, _fetch_topic, _fetch_remaining_posts,
+    _base_url_from,
+    _build_post_section_tree,
+    _detect_discourse_headers,
+    _extract_topic_id,
+    _fetch_remaining_posts,
+    _fetch_topic,
+    _format_topic,
+    _split_by_posts,
+)
+from .github import (
+    _blob_presplit,
+    _build_issue_markdown,
+    _build_pr_markdown,
+    _detect_github_url,
+    _get_github_token,
+    _split_github_comments,
+    extract_code_definitions,
+    format_code_sections,
+)
+from .huggingface import _hf_fast_path
+from .markdown import (
+    _TOC_SLICE_SIZE,
+    _TRUST_ADVISORY,
+    FMEntries,
+    _append_frontmatter_entry,
+    _apply_hard_truncation,
+    _build_frontmatter,
+    _build_section_list,
+    _detect_js_dependent,
+    _extract_sections_from_markdown,
+    _fence_content,
+    _filter_markdown_by_sections,
+    _resolve_toc_slice,
+    html_to_markdown,
+)
+from .mediawiki import _mediawiki_html_to_markdown
+from .reddit import (
+    _build_comment_section_tree,
+    _fetch_reddit_json,
+    _format_comment_thread,
+    _resolve_redd_it,
+    _split_by_comments,
 )
 from .shelf import CitationRecord, _track_on_shelf
 

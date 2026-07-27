@@ -16,13 +16,13 @@ import respx
 from parkour_mcp._pipeline import _page_cache
 from parkour_mcp.detection import _detect_hf_url, is_hf_commit_sha
 from parkour_mcp.huggingface import (
-    _HFRateLimit,
     _cache_file_body,
     _family_stem,
-    _hf_fast_path,
     _fm_base,
     _format_dtype_fingerprint,
+    _hf_fast_path,
     _hf_request,
+    _HFRateLimit,
     _partition_checkpoint_sets,
     _pick_canonical_set,
     _split_repo_path,

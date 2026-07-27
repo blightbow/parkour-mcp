@@ -10,21 +10,18 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 from mcp.types import Annotations, Icon, ToolAnnotations
 
-from .kagi import search
-from .fetch_direct import web_fetch_direct, web_fetch_sections
 from .arxiv import arxiv
+from .common import TOOL_NAMES, init_tool_names, s2_enabled
+from .discourse import discourse
+from .fetch_direct import web_fetch_direct, web_fetch_sections
 from .github import github
 from .huggingface import huggingface
 from .ietf import ietf
-from .packages import packages
-from .discourse import discourse
+from .kagi import kagi_lenses_markdown, kagi_regions_markdown, search
 from .mediawiki import mediawiki
+from .packages import packages
+from .shelf import _format_shelf_list, _get_shelf, research_shelf
 from .youtube import youtube, youtube_comments
-from .shelf import research_shelf, _get_shelf
-from .common import TOOL_NAMES, init_tool_names, s2_enabled
-from .shelf import _format_shelf_list
-from .kagi import kagi_regions_markdown
-from .kagi import kagi_lenses_markdown
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

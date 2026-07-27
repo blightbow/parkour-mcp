@@ -6,6 +6,7 @@ import pytest
 import tantivy
 
 import parkour_mcp.youtube  # noqa: F401
+
 _yt_module = sys.modules["parkour_mcp.youtube"]
 
 # Capture the real chapter-fetch function before any autouse fixture
@@ -66,7 +67,6 @@ from parkour_mcp.youtube import (  # noqa: E402
     render_transcript,
     youtube,
 )
-
 
 # ---------------------------------------------------------------------------
 # URL detection

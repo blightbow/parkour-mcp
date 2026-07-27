@@ -233,8 +233,7 @@ def _detect_reddit_url(url: str) -> str | None:
     # Strip a caller-appended `.json` so the fetcher does not double it,
     # then ensure a trailing slash.
     path = parsed.path
-    if path.endswith(".json"):
-        path = path[: -len(".json")]
+    path = path.removesuffix(".json")
     if not path.endswith("/"):
         path += "/"
 

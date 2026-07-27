@@ -20,8 +20,8 @@ from urllib.parse import urlparse
 import httpx
 from pydantic import Field
 
-from .common import RateLimiter, _FETCH_HEADERS, tool_name
-from .markdown import _build_frontmatter, _fence_content, _TRUST_ADVISORY
+from .common import _FETCH_HEADERS, RateLimiter, tool_name
+from .markdown import _TRUST_ADVISORY, _build_frontmatter, _fence_content
 
 logger = logging.getLogger(__name__)
 

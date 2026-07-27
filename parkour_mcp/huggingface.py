@@ -31,12 +31,12 @@ from ._pipeline import _page_cache
 from .common import _API_USER_AGENT, RateLimiter, load_credential, tool_name
 from .detection import _detect_hf_url, is_hf_commit_sha
 from .markdown import (
+    _TRUST_ADVISORY,
     FMEntries,
     _apply_semantic_truncation,
     _build_frontmatter,
     _fence_content,
     _plaintext_presplit,
-    _TRUST_ADVISORY,
 )
 
 logger = logging.getLogger(__name__)

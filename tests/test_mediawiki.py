@@ -1,28 +1,28 @@
 """Tests for parkour_mcp.mediawiki module."""
 
+import sys
+
 import httpx
 import pytest
 import respx
 
-import sys
-
 from parkour_mcp.mediawiki import (
+    _INLINE_CITEREF_MD_RE,
     _clean_display_title,
     _detect_mediawiki,
+    _extract_citations,
+    _extract_inline_citations,
     _fetch_mediawiki_page,
+    _format_citations,
+    _format_inline_citations,
     _handle_search,
     _mediawiki_html_to_markdown,
-    _extract_citations,
-    _format_citations,
-    _extract_inline_citations,
-    _format_inline_citations,
-    _INLINE_CITEREF_MD_RE,
 )
 
 from .conftest import (
-    MEDIAWIKI_QUERY_RESPONSE,
-    MEDIAWIKI_QUERY_MISSING_PAGE,
     MEDIAWIKI_PARSE_FULL_RESPONSE,
+    MEDIAWIKI_QUERY_MISSING_PAGE,
+    MEDIAWIKI_QUERY_RESPONSE,
 )
 
 

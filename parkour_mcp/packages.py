@@ -16,7 +16,7 @@ from urllib.parse import quote
 from pydantic import Field
 
 from .common import _depsdev_get, tool_name
-from .markdown import _build_frontmatter, _fence_content, _TRUST_ADVISORY
+from .markdown import _TRUST_ADVISORY, _build_frontmatter, _fence_content
 from .scorecard import format_score as _format_scorecard
 
 logger = logging.getLogger(__name__)

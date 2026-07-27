@@ -3,26 +3,25 @@
 import pytest
 
 from parkour_mcp.markdown import (
+    _FENCE_CLOSE,
+    _FENCE_OPEN,
+    _TOC_SLICE_SIZE,
     MarkdownSection,
-    md,
-    html_to_markdown,
-    _slugify,
-    _extract_sections_from_markdown,
-    _build_section_list,
-    _filter_markdown_by_sections,
-    _build_frontmatter,
     _apply_hard_truncation,
     _apply_semantic_truncation,
+    _build_frontmatter,
+    _build_section_list,
+    _extract_sections_from_markdown,
     _fence_content,
+    _filter_markdown_by_sections,
     _format_retraction_banner,
     _resolve_toc_slice,
-    _TOC_SLICE_SIZE,
-    _FENCE_OPEN,
-    _FENCE_CLOSE,
+    _slugify,
+    html_to_markdown,
+    md,
 )
 
 from .conftest import SAMPLE_MARKDOWN, SAMPLE_MARKDOWN_WITH_DUPLICATES
-
 
 # --- md() / TextOnlyConverter ---
 

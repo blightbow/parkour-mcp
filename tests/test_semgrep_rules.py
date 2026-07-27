@@ -27,7 +27,6 @@ import subprocess
 
 import pytest
 
-
 _REPO_ROOT = pathlib.Path(__file__).parent.parent
 _SEMGREP_RULES = _REPO_ROOT / ".semgrep"
 

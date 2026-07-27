@@ -28,13 +28,13 @@ import httpx
 import respx
 
 import parkour_mcp.reddit as _reddit_mod
+from parkour_mcp.arxiv import arxiv
 from parkour_mcp.common import init_tool_names
 from parkour_mcp.fetch_direct import web_fetch_direct, web_fetch_sections
+from parkour_mcp.github import github
+from parkour_mcp.ietf import ietf
 from parkour_mcp.mediawiki import mediawiki
 from parkour_mcp.semantic_scholar import semantic_scholar
-from parkour_mcp.arxiv import arxiv
-from parkour_mcp.ietf import ietf
-from parkour_mcp.github import github
 
 # Init tool-name lookup (hints reference sibling tools by their
 # profile-correct name).  "code" profile matches the PascalCase form

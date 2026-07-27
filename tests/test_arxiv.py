@@ -1,26 +1,26 @@
 """Tests for parkour_mcp.arxiv module."""
 
+import sys
+
 import httpx
 import pytest
 import respx
 
-import sys
-
 import parkour_mcp.arxiv  # noqa: F401
+
 _arxiv_module = sys.modules["parkour_mcp.arxiv"]
 
+from parkour_mcp._pipeline import _arxiv_fast_path  # noqa: E402
 from parkour_mcp.arxiv import (  # noqa: E402
     ARXIV_API_URL,
+    _arxiv_request,
     _fetch_arxiv_paper,
     _format_arxiv_list,
     _format_arxiv_paper,
     _parse_arxiv_entry,
-    _arxiv_request,
     arxiv,
 )
 from parkour_mcp.detection import _detect_arxiv_url, _strip_version  # noqa: E402
-from parkour_mcp._pipeline import _arxiv_fast_path  # noqa: E402
-
 
 # ---------------------------------------------------------------------------
 # Atom XML test fixtures
@@ -453,7 +453,7 @@ class TestFetchArxivPaper:
         """When CrossRef reports the paper's publisher DOI is retracted,
         the arXiv response surfaces a [RETRACTED] banner, alert: fm key,
         and the shelf entry lands in the retracted bucket."""
-        from parkour_mcp.shelf import _reset_shelf, _get_shelf
+        from parkour_mcp.shelf import _get_shelf, _reset_shelf
         _reset_shelf()
         try:
             respx.get(ARXIV_API_URL).mock(
@@ -505,7 +505,7 @@ class TestFetchArxivPaper:
     async def test_crossref_unavailable_does_not_break(self):
         """CrossRef enrichment is fail-open: a 500 error leaves the
         arXiv response intact with no banner/alert."""
-        from parkour_mcp.shelf import _reset_shelf, _get_shelf
+        from parkour_mcp.shelf import _get_shelf, _reset_shelf
         _reset_shelf()
         try:
             respx.get(ARXIV_API_URL).mock(

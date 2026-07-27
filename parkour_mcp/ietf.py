@@ -6,22 +6,21 @@ import re
 import xml.etree.ElementTree as ET
 from typing import Annotated
 
+import httpx
 from defusedxml.ElementTree import fromstring as _safe_fromstring
 from pydantic import Field
 
-import httpx
-
 from .common import _API_HEADERS, _API_USER_AGENT, RateLimiter, s2_enabled, tool_name
 from .detection import _detect_ietf_url
+from .doi import fetch_formatted_citation
 from .markdown import (
+    _TRUST_ADVISORY,
     FMEntries,
     _append_frontmatter_entry,
     _build_frontmatter,
     _fence_content,
-    _TRUST_ADVISORY,
 )
-from .doi import fetch_formatted_citation
-from .shelf import _track_on_shelf, CitationRecord
+from .shelf import CitationRecord, _track_on_shelf
 
 logger = logging.getLogger(__name__)
 

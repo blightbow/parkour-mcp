@@ -611,8 +611,8 @@ framework constraint, not a blanket group waiver.
 
 ## Phased implementation
 
-**Status: Phases 1 and 2 done, plus the `BLE001` audit. 160 findings
-outstanding, Phases 3 through 7 remain.**
+**Status: Phases 1 through 4 done, plus the `BLE001` audit. 59 findings
+outstanding, Phases 5 through 7 remain.**
 
 Findings decrease monotonically; the full `uv run pytest` only goes green at the
 end, because `pytest-ruff` fails on any outstanding finding. The gate at each

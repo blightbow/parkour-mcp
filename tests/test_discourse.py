@@ -4,6 +4,7 @@ import httpx
 import pytest
 import respx
 
+from parkour_mcp._pipeline import _discourse_fast_path
 from parkour_mcp.discourse import (
     _build_post_section_tree,
     _clean_raw,
@@ -15,8 +16,6 @@ from parkour_mcp.discourse import (
     _split_by_posts,
     discourse,
 )
-from parkour_mcp._pipeline import _discourse_fast_path
-
 
 # ---------------------------------------------------------------------------
 # Sample response fixtures

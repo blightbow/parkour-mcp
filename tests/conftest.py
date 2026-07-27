@@ -14,48 +14,63 @@ from parkour_mcp.common import init_tool_names
 init_tool_names("code")
 
 import parkour_mcp.semantic_scholar  # noqa: E402
+
 _s2_mod = sys.modules["parkour_mcp.semantic_scholar"]
 
 import parkour_mcp.doi  # noqa: E402
+
 _doi_mod = sys.modules["parkour_mcp.doi"]
 
 import parkour_mcp.reddit  # noqa: E402
+
 _reddit_mod = sys.modules["parkour_mcp.reddit"]
 
 import parkour_mcp.github  # noqa: E402
+
 _github_mod = sys.modules["parkour_mcp.github"]
 
 import parkour_mcp.scorecard  # noqa: E402
+
 _scorecard_mod = sys.modules["parkour_mcp.scorecard"]
 
 import parkour_mcp.huggingface  # noqa: E402
+
 _hf_mod = sys.modules["parkour_mcp.huggingface"]
 
 import parkour_mcp.ietf  # noqa: E402
+
 _ietf_mod = sys.modules["parkour_mcp.ietf"]
 
 import parkour_mcp.packages  # noqa: E402
+
 _packages_mod = sys.modules["parkour_mcp.packages"]
 
 import parkour_mcp.common  # noqa: E402
+
 _common_mod = sys.modules["parkour_mcp.common"]
 
 import parkour_mcp.discourse  # noqa: E402
+
 _discourse_mod = sys.modules["parkour_mcp.discourse"]
 
 import parkour_mcp.mediawiki  # noqa: E402
+
 _mediawiki_mod = sys.modules["parkour_mcp.mediawiki"]
 
 import parkour_mcp.youtube  # noqa: E402
+
 _youtube_mod = sys.modules["parkour_mcp.youtube"]
 
 import parkour_mcp.markdown  # noqa: E402
+
 _markdown_mod = sys.modules["parkour_mcp.markdown"]
 
 import parkour_mcp.fetch_direct  # noqa: E402
+
 _fetch_direct_mod = sys.modules["parkour_mcp.fetch_direct"]
 
 import parkour_mcp._pipeline  # noqa: E402, F401
+
 _pipeline_mod = sys.modules["parkour_mcp._pipeline"]
 
 

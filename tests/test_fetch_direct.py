@@ -5,25 +5,25 @@ import pytest
 import respx
 
 from parkour_mcp import markdown
+from parkour_mcp._pipeline import _page_cache, _wiki_cache
 from parkour_mcp.fetch_direct import (
     web_fetch_direct,
     web_fetch_sections,
 )
-from parkour_mcp._pipeline import _wiki_cache, _page_cache
 
-from .conftest import (
-    SAMPLE_HTML_PAGE,
-    SAMPLE_JSON_CONTENT,
-    SAMPLE_PLAIN_TEXT,
-    MEDIAWIKI_QUERY_RESPONSE,
-    MEDIAWIKI_PARSE_FULL_RESPONSE,
-    MEDIAWIKI_PARSE_WITH_INLINE_CITATIONS,
-)
 from ._output import (
     assert_fenced,
     fenced_heading,
     fenced_line,
     split_output,
+)
+from .conftest import (
+    MEDIAWIKI_PARSE_FULL_RESPONSE,
+    MEDIAWIKI_PARSE_WITH_INLINE_CITATIONS,
+    MEDIAWIKI_QUERY_RESPONSE,
+    SAMPLE_HTML_PAGE,
+    SAMPLE_JSON_CONTENT,
+    SAMPLE_PLAIN_TEXT,
 )
 
 

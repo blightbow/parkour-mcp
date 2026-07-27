@@ -6,13 +6,11 @@ import re
 from pathlib import Path
 from typing import Annotated
 
-from pydantic import Field
-
 import httpx
+from pydantic import Field
 
 from .common import _API_HEADERS, RateLimiter, load_credential, tool_name
 from .detection import _detect_s2_url
-from .markdown import _build_frontmatter
 from .doi import (
     _alt_dois_from_relations,
     _build_alert_message,
@@ -21,8 +19,8 @@ from .doi import (
     fetch_crossref_metadata,
     fetch_formatted_citation,
 )
-from .markdown import _format_retraction_banner
-from .shelf import _track_on_shelf, CitationRecord
+from .markdown import _build_frontmatter, _format_retraction_banner
+from .shelf import CitationRecord, _track_on_shelf
 
 logger = logging.getLogger(__name__)
 

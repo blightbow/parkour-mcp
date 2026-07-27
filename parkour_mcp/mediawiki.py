@@ -1,26 +1,26 @@
 """MediaWiki detection, API-based page fetching, and dedicated tool."""
 
-import logging
 import html as html_mod
+import logging
 import re
 import urllib.parse
 from typing import Annotated
 
 import httpx
+from bs4 import BeautifulSoup
 from pydantic import Field
 
 from .common import _API_HEADERS, RateLimiter, tool_name
 from .markdown import (
-    FMEntries,
-    md,
-    _append_frontmatter_entry,
-    _normalize_whitespace,
-    _clean_headings,
-    _build_frontmatter,
-    _fence_content,
     _TRUST_ADVISORY,
+    FMEntries,
+    _append_frontmatter_entry,
+    _build_frontmatter,
+    _clean_headings,
+    _fence_content,
+    _normalize_whitespace,
+    md,
 )
-from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
 

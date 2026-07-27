@@ -16,16 +16,26 @@ import httpx
 from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
 
-from .common import _FETCH_HEADERS, _classify_content_type, guarded_fetch, ResponseTooLarge
-from .markdown import (
-    FMEntries,
-    html_to_markdown, _build_frontmatter, _apply_hard_truncation,
-    _fence_content, _TRUST_ADVISORY,
-)
 from ._pipeline import (
-    _discourse_fast_path, _process_markdown_sections, _dispatch_slicing,
+    _discourse_fast_path,
+    _dispatch_slicing,
+    _process_markdown_sections,
+)
+from .common import (
+    _FETCH_HEADERS,
+    ResponseTooLarge,
+    _classify_content_type,
+    guarded_fetch,
 )
 from .discourse import _detect_discourse_headers
+from .markdown import (
+    _TRUST_ADVISORY,
+    FMEntries,
+    _apply_hard_truncation,
+    _build_frontmatter,
+    _fence_content,
+    html_to_markdown,
+)
 
 # Per-operation budget for navigation, actions, and selector waits.  Not
 # caller-tunable: an agent has no basis to pick a millisecond value, and a

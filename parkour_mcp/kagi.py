@@ -19,11 +19,11 @@ from pydantic import Field
 from .common import _API_USER_AGENT, load_credential, tool_name
 from .detection import is_reddit_url
 from .markdown import (
+    _TRUST_ADVISORY,
     FMEntries,
     _append_frontmatter_entry,
     _build_frontmatter,
     _fence_content,
-    _TRUST_ADVISORY,
 )
 
 logger = logging.getLogger(__name__)

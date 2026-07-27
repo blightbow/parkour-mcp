@@ -24,17 +24,17 @@ import gzip
 import json
 import os
 import time
-from pathlib import Path
 from collections.abc import Callable
+from pathlib import Path
 
 import pytest
 import tantivy
 from semantic_text_splitter import MarkdownSplitter
 
 from parkour_mcp.markdown import (
-    html_to_markdown,
-    _extract_sections_from_markdown,
     _compute_slice_ancestry,
+    _extract_sections_from_markdown,
+    html_to_markdown,
 )
 
 pytestmark = pytest.mark.perf

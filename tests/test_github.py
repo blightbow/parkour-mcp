@@ -6,6 +6,7 @@ import httpx
 import pytest
 import respx
 
+from parkour_mcp._pipeline import _page_cache
 from parkour_mcp.github import (
     _blob_presplit,
     _detect_github_url,
@@ -23,7 +24,6 @@ from parkour_mcp.github import (
     github,
 )
 from parkour_mcp.markdown import _TRUST_ADVISORY
-from parkour_mcp._pipeline import _page_cache
 from parkour_mcp.shelf import _get_shelf, _reset_shelf
 
 

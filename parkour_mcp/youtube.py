@@ -28,16 +28,15 @@ from typing import Annotated, Any, Literal
 import httpx
 import tantivy
 from pydantic import Field
-
-from ._pipeline import _evict_group, register_group_cache
 from youtube_transcript_api import YouTubeTranscriptApi
 
+from ._pipeline import _evict_group, register_group_cache
 from .common import tool_name
 from .markdown import (
+    _TRUST_ADVISORY,
     FMEntries,
     _build_frontmatter,
     _fence_content,
-    _TRUST_ADVISORY,
 )
 
 logger = logging.getLogger(__name__)
@@ -903,10 +902,19 @@ class _TranscriptEntry:
     """
 
     __slots__ = (
-        "url", "video_id", "language_code", "is_generated",
-        "segments", "windows", "chapters", "chunking_strategy", "group",
-        "fetcher", "fallback_from",
-        "_tantivy_index", "_built",
+        "_built",
+        "_tantivy_index",
+        "chapters",
+        "chunking_strategy",
+        "fallback_from",
+        "fetcher",
+        "group",
+        "is_generated",
+        "language_code",
+        "segments",
+        "url",
+        "video_id",
+        "windows",
     )
 
     _SCHEMA = None
@@ -1899,7 +1907,9 @@ async def _transcript(
                 # package is a required dependency and imported at module top.
                 # Deleting the guard is a behavior change — see TECH_DEBT.
                 from youtube_transcript_api import (  # noqa: PLC0415  # sole statement of a dead except-ImportError guard
-                    NoTranscriptFound, PoTokenRequired, RequestBlocked,
+                    NoTranscriptFound,
+                    PoTokenRequired,
+                    RequestBlocked,
                 )
             except ImportError:
                 chapters_task.cancel()

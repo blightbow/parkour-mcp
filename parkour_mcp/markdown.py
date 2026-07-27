@@ -27,9 +27,9 @@ from betamatter import (
 from betamatter import FMEntries as _BetamatterFMEntries
 from bs4 import BeautifulSoup
 from markdownify import MarkdownConverter
+from semantic_text_splitter import MarkdownSplitter
 
 from .common import tool_name
-from semantic_text_splitter import MarkdownSplitter
 
 
 class TextOnlyConverter(MarkdownConverter):

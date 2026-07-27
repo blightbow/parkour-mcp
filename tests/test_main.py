@@ -23,7 +23,6 @@ from parkour_mcp import (
     _build_description,
 )
 
-
 _INTERNAL_NAMES = (
     [name for name, _ in _ALWAYS_ON_TOOLS]
     + list(_OPTIONAL_TOOLS)

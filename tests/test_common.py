@@ -8,10 +8,10 @@ import pytest
 import respx
 
 from parkour_mcp.common import (
-    check_url_ssrf,
     _is_private_ip,
-    guarded_fetch,
     _parse_truthy_env,
+    check_url_ssrf,
+    guarded_fetch,
     load_credential,
 )
 

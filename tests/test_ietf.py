@@ -3,21 +3,20 @@
 import pytest
 import respx
 
+from parkour_mcp._pipeline import _ietf_fast_path
+from parkour_mcp.detection import _detect_ietf_url
 from parkour_mcp.ietf import (
+    _RFC_DOI_RE,
     _fetch_rfc_metadata,
     _fetch_rfc_paper,
-    _format_rfc_paper,
     _format_rfc_list,
+    _format_rfc_paper,
     _resolve_subseries,
     _search_rfcs,
     _subseries_label,
-    _RFC_DOI_RE,
     ietf,
 )
-from parkour_mcp.detection import _detect_ietf_url
-from parkour_mcp._pipeline import _ietf_fast_path
-from parkour_mcp.shelf import _reset_shelf, _get_shelf
-
+from parkour_mcp.shelf import _get_shelf, _reset_shelf
 
 # ---------------------------------------------------------------------------
 # Test fixtures — RFC Editor JSON

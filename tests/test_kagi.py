@@ -1,7 +1,7 @@
 """Tests for parkour_mcp.kagi — v1 search, v0 summarize island, error parsers."""
 
 import json
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
@@ -616,8 +616,8 @@ class TestSearchV1Args:
         references belong exclusively in the profile-aware tool description
         (kagi_resource_pointer) so they only surface in 'code' profile.
         """
-        from typing import get_args
         import inspect
+        from typing import get_args
         sig = inspect.signature(search)
         for name, param in sig.parameters.items():
             for meta in get_args(param.annotation):
@@ -634,8 +634,8 @@ class TestSearchV1Args:
         """Empirical UAT findings against the live v1 endpoint: same-page calls
         are deterministic but adjacent pages overlap. Both facts have to stay
         in the prose so a consumer of multiple pages knows to deduplicate."""
-        from typing import get_args
         import inspect
+        from typing import get_args
         sig = inspect.signature(search)
         meta = get_args(sig.parameters["page"].annotation)
         desc = next(m.description for m in meta if hasattr(m, "description"))
@@ -649,8 +649,8 @@ class TestSearchV1Args:
         specific 'weak on images' caveat moved to the consolidated note on
         workflow itself (UAT round 7 asked for one consolidated source of
         truth on the images workflow's filter behavior)."""
-        from typing import get_args
         import inspect
+        from typing import get_args
         sig = inspect.signature(search)
         meta = get_args(sig.parameters["region"].annotation)
         desc = next(m.description for m in meta if hasattr(m, "description"))
@@ -662,8 +662,8 @@ class TestSearchV1Args:
         offset. Empirically both are true — limit prefixes are stable, page
         selection is independent. The page description must say this clearly
         so the two parameters do not appear to contradict each other."""
-        from typing import get_args
         import inspect
+        from typing import get_args
         sig = inspect.signature(search)
         meta = get_args(sig.parameters["page"].annotation)
         desc = next(m.description for m in meta if hasattr(m, "description"))
@@ -675,8 +675,8 @@ class TestSearchV1Args:
         'MM-DD-YYYY' which silently accepts and produces wrong filtering.
         Both filters need to disclose this so a driver does not assume any
         date-shaped string parses."""
-        from typing import get_args
         import inspect
+        from typing import get_args
         sig = inspect.signature(search)
         for name in ("after", "before"):
             meta = get_args(sig.parameters[name].annotation)
@@ -689,8 +689,8 @@ class TestSearchV1Args:
         the 'images' workflow weakness; round 7 asked for a single consolidated
         caveat on workflow. Item 7 minor: omitting workflow vs workflow='search'
         should be stated equivalent."""
-        from typing import get_args
         import inspect
+        from typing import get_args
         sig = inspect.signature(search)
         meta = get_args(sig.parameters["workflow"].annotation)
         desc = next(m.description for m in meta if hasattr(m, "description"))
@@ -702,8 +702,8 @@ class TestSearchV1Args:
         confirmed by three case variants returning different results), and
         site:/filetype: query operators intersect with the lens scope
         (confirmed by site:reddit.com + academic lens returning empty)."""
-        from typing import get_args
         import inspect
+        from typing import get_args
         sig = inspect.signature(search)
         meta = get_args(sig.parameters["lens_id"].annotation)
         desc = next(m.description for m in meta if hasattr(m, "description"))
@@ -715,8 +715,8 @@ class TestSearchV1Args:
         Kagi silently degrades to results that ignore the lens. Separately,
         'news 360' is a web-search lens, not the news workflow, so the
         Field description disambiguates the two."""
-        from typing import get_args
         import inspect
+        from typing import get_args
         sig = inspect.signature(search)
         meta = get_args(sig.parameters["lens_id"].annotation)
         desc = next(m.description for m in meta if hasattr(m, "description"))
@@ -728,8 +728,8 @@ class TestSearchV1Args:
         """Empirical UAT finding: after/before silently drop results that
         carry no detectable date. Disclosing this in both filters keeps a
         consumer from being surprised by a smaller-than-expected result set."""
-        from typing import get_args
         import inspect
+        from typing import get_args
         sig = inspect.signature(search)
         for name in ("after", "before"):
             meta = get_args(sig.parameters[name].annotation)
@@ -741,8 +741,8 @@ class TestSearchV1Args:
         clients that can't autonomously read kagi://lenses (Claude Desktop,
         Hermes plugin) still get an actionable catalog from the parameter
         prose alone."""
-        from typing import get_args
         import inspect
+        from typing import get_args
         sig = inspect.signature(search)
         field = sig.parameters["lens_id"].annotation
         # Annotated[Optional[str], Field(description=...)] — pull the Field.

@@ -16,14 +16,17 @@ import importlib
 import logging
 import re
 from collections import OrderedDict
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any, Optional
-from collections.abc import Awaitable, Callable
 from urllib.parse import quote as _urlquote_raw
 
 import httpx
+import tree_sitter
 from pydantic import Field
+from semantic_text_splitter import CodeSplitter
 
 from .common import (
     _API_USER_AGENT,
@@ -34,20 +37,17 @@ from .common import (
     tool_name,
 )
 from .markdown import (
+    _TRUST_ADVISORY,
     FMEntries,
     _append_frontmatter_entry,
     _apply_semantic_truncation,
     _build_frontmatter,
     _fence_content,
     _plaintext_presplit,
-    _TRUST_ADVISORY,
 )
 from .scorecard import fetch_overall as _fetch_scorecard_overall
 from .scorecard import format_score as _format_scorecard
-from datetime import UTC, datetime
-from semantic_text_splitter import CodeSplitter
-from .shelf import _track_on_shelf, CitationRecord
-import tree_sitter
+from .shelf import CitationRecord, _track_on_shelf
 
 logger = logging.getLogger(__name__)
 

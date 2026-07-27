@@ -15,34 +15,7 @@ import httpx
 import tantivy
 from semantic_text_splitter import MarkdownSplitter
 
-from .markdown import (
-    FMEntries,
-    _append_frontmatter_entry,
-    _extract_sections_from_markdown,
-    _build_section_list,
-    _filter_markdown_by_sections,
-    _build_frontmatter,
-    _apply_semantic_truncation,
-    _compute_slice_ancestry,
-    _fence_content,
-    _TRUST_ADVISORY,
-)
-from .mediawiki import (
-    _detect_mediawiki,
-    _fetch_mediawiki_page,
-    _mediawiki_html_to_markdown,
-    _INLINE_CITEREF_MD_RE,
-)
 from .arxiv import _fetch_arxiv_paper
-from .detection import (
-    _detect_arxiv_url,
-    _detect_doi_url,
-    _detect_ietf_url,
-    _detect_reddit_url,
-    _detect_s2_url,
-)
-from .doi import _fetch_doi_paper
-from .reddit import _fetch_reddit_content, _split_by_comments
 from .common import (
     _FETCH_HEADERS,
     _LANGUAGE_MAP,
@@ -51,18 +24,52 @@ from .common import (
     s2_enabled,
     tool_name,
 )
-from .ietf import _fetch_rfc_paper, _fetch_draft
+from .detection import (
+    _detect_arxiv_url,
+    _detect_doi_url,
+    _detect_ietf_url,
+    _detect_reddit_url,
+    _detect_s2_url,
+)
 from .discourse import (
-    _detect_discourse_headers, _extract_topic_id,
-    _fetch_discourse_content, _split_by_posts,
+    _detect_discourse_headers,
+    _extract_topic_id,
+    _fetch_discourse_content,
+    _split_by_posts,
 )
+from .doi import _fetch_doi_paper
 from .github import (
-    _detect_github_url, _action_repo, _action_tree,
-    _build_issue_markdown, _build_pr_markdown,
-    _blob_presplit, _split_github_comments,
-    _rate_limit_warning, _get_github_token,
+    _action_repo,
+    _action_tree,
+    _blob_presplit,
+    _build_issue_markdown,
+    _build_pr_markdown,
+    _detect_github_url,
+    _get_github_token,
+    _github_request,
+    _rate_limit_warning,
+    _split_github_comments,
 )
-from .github import _github_request
+from .ietf import _fetch_draft, _fetch_rfc_paper
+from .markdown import (
+    _TRUST_ADVISORY,
+    FMEntries,
+    _append_frontmatter_entry,
+    _apply_semantic_truncation,
+    _build_frontmatter,
+    _build_section_list,
+    _compute_slice_ancestry,
+    _extract_sections_from_markdown,
+    _fence_content,
+    _filter_markdown_by_sections,
+)
+from .mediawiki import (
+    _INLINE_CITEREF_MD_RE,
+    _detect_mediawiki,
+    _fetch_mediawiki_page,
+    _mediawiki_html_to_markdown,
+)
+from .reddit import _fetch_reddit_content, _split_by_comments
 
 logger = logging.getLogger(__name__)
 
@@ -210,10 +217,19 @@ class _CacheEntry:
     bare empty result.
     """
 
-    __slots__ = ("url", "title", "markdown", "renderer", "group",
-                 "_presplit",
-                 "_slices", "_slice_ancestry", "_tantivy_index",
-                 "_built", "_build_failed")
+    __slots__ = (
+        "_build_failed",
+        "_built",
+        "_presplit",
+        "_slice_ancestry",
+        "_slices",
+        "_tantivy_index",
+        "group",
+        "markdown",
+        "renderer",
+        "title",
+        "url",
+    )
 
     _SPLITTER = MarkdownSplitter((1600, 2000))
 

@@ -7,12 +7,12 @@ import pytest
 from parkour_mcp.shelf import (
     CitationRecord,
     ResearchShelf,
+    _format_shelf_list,
     _get_shelf,
     _reset_shelf,
     record_to_bibtex,
     record_to_ris,
     research_shelf,
-    _format_shelf_list,
 )
 
 

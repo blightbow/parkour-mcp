@@ -16,13 +16,13 @@ import httpx
 
 from .common import _API_USER_AGENT, RateLimiter, clean_env, s2_enabled, tool_name
 from .markdown import (
+    _TRUST_ADVISORY,
     FMEntries,
     _build_frontmatter,
     _fence_content,
     _format_retraction_banner,
-    _TRUST_ADVISORY,
 )
-from .shelf import _track_on_shelf, CitationRecord
+from .shelf import CitationRecord, _track_on_shelf
 
 logger = logging.getLogger(__name__)
 

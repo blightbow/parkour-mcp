@@ -4,25 +4,25 @@ import httpx
 import pytest
 import respx
 
+from parkour_mcp._pipeline import _page_cache, _wiki_cache
 from parkour_mcp.mediawiki import (
-    mediawiki,
     _canonicalize_title_for_cache,
     _normalize_citeref_key,
     _resolve_wiki_base,
+    mediawiki,
 )
-from parkour_mcp._pipeline import _wiki_cache, _page_cache
 
-from .conftest import (
-    MEDIAWIKI_QUERY_RESPONSE,
-    MEDIAWIKI_PARSE_FULL_RESPONSE,
-    MEDIAWIKI_PARSE_WITH_INLINE_CITATIONS,
-    MEDIAWIKI_PARSE_WITH_CITATIONS,
-    MEDIAWIKI_SEARCH_RESPONSE,
-    MEDIAWIKI_SEARCH_EMPTY_RESPONSE,
-)
 from ._output import (
     assert_fenced,
     split_output,
+)
+from .conftest import (
+    MEDIAWIKI_PARSE_FULL_RESPONSE,
+    MEDIAWIKI_PARSE_WITH_CITATIONS,
+    MEDIAWIKI_PARSE_WITH_INLINE_CITATIONS,
+    MEDIAWIKI_QUERY_RESPONSE,
+    MEDIAWIKI_SEARCH_EMPTY_RESPONSE,
+    MEDIAWIKI_SEARCH_RESPONSE,
 )
 
 

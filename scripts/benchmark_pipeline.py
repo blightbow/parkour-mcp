@@ -28,7 +28,7 @@ import json
 import logging
 import platform
 import time
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
@@ -37,9 +37,9 @@ from semantic_text_splitter import MarkdownSplitter
 
 from parkour_mcp.common import _FETCH_HEADERS
 from parkour_mcp.markdown import (
-    html_to_markdown,
-    _extract_sections_from_markdown,
     _compute_slice_ancestry,
+    _extract_sections_from_markdown,
+    html_to_markdown,
 )
 
 SCRIPT_DIR = Path(__file__).parent
@@ -211,10 +211,9 @@ async def bench_fast_path(
     provided.  The capture hook hooks httpx via a transport wrapper so it
     records the first HTTP response body seen during the call.
     """
-    from parkour_mcp.fetch_direct import web_fetch_direct
-
     # Reset any page-cache state so each run starts fresh
     from parkour_mcp._pipeline import _page_cache
+    from parkour_mcp.fetch_direct import web_fetch_direct
     _page_cache.clear()
 
     captured_bytes: list[bytes] = []
