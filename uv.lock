@@ -1079,7 +1079,7 @@ requires-dist = [
     { name = "httpx", extras = ["http2"] },
     { name = "kagiapi" },
     { name = "markdownify" },
-    { name = "mcp", extras = ["cli"] },
+    { name = "mcp", extras = ["cli"], specifier = "<2" },
     { name = "playwright" },
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "semantic-text-splitter", specifier = ">=0.29.0" },

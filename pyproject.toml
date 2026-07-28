@@ -10,7 +10,18 @@ authors = [
 ]
 dependencies = [
     "betamatter>=0.1.0",
-    "mcp[cli]",
+    # Upper bound is load-bearing: mcp 2.0.0 moved `mcp.server.fastmcp.*`
+    # to `mcp.server.mcpserver.*` with no compat shim, so an unbounded
+    # resolve ImportErrors at `import parkour_mcp`. Lockfiles do not travel
+    # to PyPI consumers, so the ceiling has to live here. `>=1.28,<2` is
+    # upstream's own holding pattern for the v1 maintenance line.
+    #
+    # Ceiling only, no floor: the `dev` group's semgrep hard-pins
+    # `mcp==1.23.3`, so a `>=1.28` floor makes the dev resolve
+    # unsatisfiable. `<2` is what actually closes the break; a fresh
+    # consumer install still resolves the highest v1 (verified against
+    # 1.29.0 before release).
+    "mcp[cli]<2",
     "kagiapi",
     "beautifulsoup4",
     "httpx[http2]",
