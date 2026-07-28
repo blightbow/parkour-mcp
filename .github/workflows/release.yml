@@ -73,6 +73,20 @@ jobs:
           fi
           uv run python3 scripts/sync_versions.py --check
 
+      - name: Install semgrep
+        # Not in the `dev` dependency group: tests/test_semgrep_rules.py
+        # shells out to the binary and never imports the package, and
+        # declaring it dragged semgrep's hard `mcp==1.23.3` pin into our
+        # resolve. The runner has no semgrep, and a missing binary fails
+        # the suite rather than skipping it (deliberately — the ruleset is
+        # a security gate), so it has to be installed before the test step.
+        run: |
+          uv tool install semgrep
+          # GITHUB_PATH applies to later steps; export for this one's check.
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.local/bin:$PATH"
+          semgrep --version
+
       - name: Run tests
         run: uv run pytest
 

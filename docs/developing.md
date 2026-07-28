@@ -16,6 +16,37 @@ the repo instead of living in the untracked `.git/hooks/` directory. The
 only hook currently installed is a `pre-push` guard for version tags —
 see [Cutting a release](#cutting-a-release) below.
 
+Then install semgrep, which `uv sync` does *not* provide:
+
+```bash
+brew install semgrep      # or: uv tool install semgrep
+```
+
+`tests/test_semgrep_rules.py` runs the project ruleset in `.semgrep/` as
+part of the normal suite. It shells out to the binary via `shutil.which()`
+and never imports the package, so semgrep is a tool, not a dependency —
+and deliberately absent from the `dev` dependency group. Declaring it there
+dragged its hard `mcp==1.23.3` pin into our resolve, holding the lockfile
+six minors below what a fresh consumer install of parkour-mcp gets. That
+pin is intentional on semgrep's side ([semgrep#11476][sg-pin]) and stays
+exact even in the in-flight bump to `1.28.1` ([semgrep#11808][sg-bump]);
+running semgrep in its own environment is what its maintainers recommend
+for exactly this conflict ([semgrep#11506][sg-extra]).
+
+**A missing binary fails the suite rather than skipping it.** These rules
+are a security gate (SSRF precedence, content fencing), and a gate that
+quietly vanishes on a machine without the binary is worse than no gate —
+the suite goes green and nothing reports that the checks never ran. To run
+without it, opt out explicitly:
+
+```bash
+PARKOUR_SKIP_SEMGREP=1 uv run pytest
+```
+
+[sg-pin]: https://github.com/semgrep/semgrep/issues/11476
+[sg-bump]: https://github.com/semgrep/semgrep/pull/11808
+[sg-extra]: https://github.com/semgrep/semgrep/issues/11506
+
 ## Running tests
 
 ```bash

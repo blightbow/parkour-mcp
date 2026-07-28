@@ -14,14 +14,12 @@ dependencies = [
     # to `mcp.server.mcpserver.*` with no compat shim, so an unbounded
     # resolve ImportErrors at `import parkour_mcp`. Lockfiles do not travel
     # to PyPI consumers, so the ceiling has to live here. `>=1.28,<2` is
-    # upstream's own holding pattern for the v1 maintenance line.
-    #
-    # Ceiling only, no floor: the `dev` group's semgrep hard-pins
-    # `mcp==1.23.3`, so a `>=1.28` floor makes the dev resolve
-    # unsatisfiable. `<2` is what actually closes the break; a fresh
-    # consumer install still resolves the highest v1 (verified against
-    # 1.29.0 before release).
-    "mcp[cli]<2",
+    # upstream's own holding pattern for the v1 maintenance line, and the
+    # floor is now expressible: semgrep used to drag `mcp==1.23.3` into the
+    # dev resolve, so the lock sat six minors below what a consumer install
+    # got. It is a tool now, not a dependency (see the `dev` group), and the
+    # lock tracks what users actually resolve.
+    "mcp[cli]>=1.28,<2",
     "kagiapi",
     "beautifulsoup4",
     "httpx[http2]",
@@ -229,7 +227,16 @@ dev = [
     "pytest-ruff>=0.5",
     "pytest-ty>=0.2.1",
     "respx>=0.22.0",
-    "semgrep>=1.159.0",
+    # semgrep is deliberately NOT here. tests/test_semgrep_rules.py shells
+    # out to the binary via shutil.which(); nothing imports the package, so
+    # it is a tool, not a library dependency. Declaring it here dragged its
+    # hard `mcp==1.23.3` pin into our resolve (semgrep/semgrep#11476 — an
+    # exact pin held on purpose, and semgrep/semgrep#11808 keeps it exact
+    # while moving to 1.28.1), which capped our own mcp version and made the
+    # dev environment resolve differently from a consumer install. Install
+    # it out-of-tree instead: `brew install semgrep`, or `uv tool install
+    # semgrep` — which is what semgrep's own maintainers recommend for this
+    # conflict (semgrep/semgrep#11506).
     "tabulate>=0.9",
     "tree-sitter-python>=0.23",
     "vulture>=2.16",

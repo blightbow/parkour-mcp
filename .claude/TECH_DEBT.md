@@ -51,13 +51,25 @@ than it does:
   a plain comment rather than losing it.
 - **vulture** (`just lint-deep`) gates version-tag pushes via
   `scripts/git-hooks/pre-push`, which is the only place it runs — CI's
-  tag-push job is `uv run pytest` and nothing more. Findings are fixed at the
+  tag-push job is `uv run pytest` plus the semgrep install that the test
+  step now requires, and nothing more. Findings are fixed at the
   source; `.vulture_whitelist.py` takes false positives only, each with a
   comment naming what vulture cannot see.
+- **semgrep** gates too, via `tests/test_semgrep_rules.py` in the same
+  `pytest` run, against the project ruleset in `.semgrep/` (FMEntries
+  construction, SSRF precedence, content fencing). Suppressions are
+  `# nosemgrep: <rule-id>` with a reason. Unlike the others it is **not**
+  in the `dev` dependency group — the test shells out to the binary and
+  never imports the package, and declaring it dragged semgrep's hard
+  `mcp==1.23.3` pin into our resolve. Install it out-of-tree
+  (`brew install semgrep`); a missing binary fails the suite rather than
+  skipping it, and `PARKOUR_SKIP_SEMGREP=1` is the explicit opt-out. See
+  `docs/developing.md#first-time-setup`.
 
-Suppressions therefore use `# noqa: RULE` for ruff and `# ty: ignore[rule]`
-for ty, each with a reason. A suppression in any other checker's dialect is
-inert — nothing here consumes it.
+Suppressions therefore use `# noqa: RULE` for ruff, `# ty: ignore[rule]`
+for ty, and `# nosemgrep: <rule-id>` for semgrep, each with a reason. A
+suppression in any other checker's dialect is inert — nothing here
+consumes it.
 
 **Lazy imports have a declarative home; prefer it to a `noqa`.** PLC0415's own
 docs recognise exactly three grounds for a function-scope import: avoiding a
