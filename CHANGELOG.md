@@ -5,6 +5,11 @@ All notable changes to parkour-mcp will be documented in this file.
 Format: https://keepachangelog.com/en/1.1.0/
 Versioning: https://semver.org/spec/v2.0.0.html
 
+## [2.1.1] 2026-07-28
+
+### Fixed
+- `uvx parkour-mcp` and `uv tool install parkour-mcp` work again instead of failing at startup with ModuleNotFoundError, after the mcp 2.0.0 release made every unbounded fresh install resolve an incompatible major.
+
 ## [2.1.0] 2026-07-27
 
 ### Added
