@@ -117,17 +117,87 @@ at the cost of failing a tag push after the tag already exists.
 
 ## Performance bottlenecks to investigate
 
-### `html_to_markdown` on megapages — the dominant generic-HTTP latency
+### `html_to_markdown` on megapages — RESOLVED, do not re-optimize
 
-- **Location**: `parkour_mcp/markdown.py:82` (`html_to_markdown`) via `markdownify` + BeautifulSoup4
-- **Measured cost** (see `scripts/benchmark_baselines.json`):
-  - PEP 8 (48 KB markdown): ~88 ms
-  - ECMAScript spec (3 MB markdown): ~6,940 ms
-  - WHATWG HTML spec (6 MB markdown): **~17,200 ms**
-- **Scope**: generic HTTP path only. Every fast path bypasses `html_to_markdown` entirely.
-- **Context**: An audit discovered `web_fetch_sections` wasn't populating `_page_cache`, so every `sections → direct` flow re-ran `html_to_markdown` — paying this cost twice. That gap is now closed (see `tests/test_perf.py` for regression coverage). But the underlying single-call cost remains the dominant latency for large-page generic-HTTP flows.
-- **Why deferred**: The cache fix removes the worst-case duplication. The remaining single-call cost is paid only once per page per session and is rare in practice (megapages are outliers). A remediation would be non-trivial: replace the BeautifulSoup-based `TextOnlyConverter` with a faster HTML parser (e.g. `selectolax`, `html5-parser`, or `lxml`) or cap the converter input size before parsing. Worth doing when a real regression or user report justifies the effort.
-- **Regression guard**: `tests/test_perf.py::test_html_to_markdown` asserts wall-clock stays within 2× of the captured baseline. Raises an alarm if a refactor accidentally pessimises the HTML→markdown step.
+This entry previously named `html_to_markdown` "the dominant generic-HTTP
+latency" at ~6,940 ms (ECMA-262) and ~17,200 ms (WHATWG HTML spec), and
+proposed swapping the BeautifulSoup-based `TextOnlyConverter` for a faster
+parser. **Both the numbers and the remediation are obsolete.** They were
+written on 2026-04-10 (`e325efe`) against markdownify-era baselines, and
+the port landed the next day.
+
+`da4f54a` (2026-04-11) replaced the converter with `htmd-py`, a binding
+over the `htmd` Rust crate, and `8f41392` (2026-04-15) recaptured the
+baselines. `4bd71ef` moved the pin from the `blightbow/htmd-py` fork to
+upstream v0.1.2 once `lmmx/htmd#41` merged the text-only `Options` fields.
+The entry was never updated to match, so it sat ~3 months describing a
+pipeline that no longer existed.
+
+Measured delta (from `8f41392`, `html_to_markdown_ms`):
+
+| tier | markdownify | htmd | speedup |
+|---|---:|---:|---:|
+| small (PEP 8) | 88 ms | 7 ms | ~12× |
+| medium (ECMA-262) | 6,936 ms | 202 ms | ~34× |
+| pathological (WHATWG) | 17,200 ms | 362 ms | ~47× |
+
+The port also *recovered* content rather than trading accuracy for speed —
+the WHATWG fixture grew 6.34 MB → 8.08 MB (+27.6%) from htmd's layout-table
+handling, which was the original motivation. Do not re-propose
+`selectolax` / `lxml` for the generic path.
+
+**But markdownify is still live on one path.** `markdown.py#TextOnlyConverter`
+was deliberately retained, and `mediawiki.py:448` calls it via
+`markdown.py#md` because the MediaWiki path applies BS4 transforms
+(navbox pruning, math extraction, citation footnote rewriting) before
+converting. So the old converter — and its cost curve — still backs every
+Wikipedia fetch. That is **not** covered by the tables below: the
+generic-HTTP tiers exercise htmd, and the only MediaWiki entry in
+`fast_paths` is a 1.1 KB result. A large Wikipedia article is the one
+un-benchmarked place the pre-port cost could still surface. Capturing a
+megapage MediaWiki fixture is the cheap way to find out whether that
+matters; nobody has.
+
+### `MarkdownSplitter` is now the dominant generic-HTTP phase
+
+- **Location**: `semantic-text-splitter` (`>=0.29.0`), driven from
+  `parkour_mcp/_pipeline.py`; introduced in `db1519d`.
+- **Measured cost** (`scripts/benchmark_baselines.json`, captured
+  2026-04-15 on Darwin arm64 / Python 3.14.4):
+
+  | tier | fetch | h2md | **split** | sections | tantivy | total |
+  |---|---:|---:|---:|---:|---:|---:|
+  | small | 172 | 7 | **1** | 1 | 5 | 186 ms |
+  | medium | 335 | 202 | **1,859** | 38 | 13 | 2.5 s |
+  | pathological | 1,055 | 362 | **4,260** | 102 | 25 | 5.9 s |
+
+  On the pathological tier the splitter is 72% of pipeline wall-clock, and
+  the only phase above a second.
+- **Scope**: generic HTTP path only, as before — every fast path bypasses
+  it. Fast-path end-to-end times are all well under 2.5 s (`fast_paths` in
+  the same baseline file).
+- **Why deferred**: 5.9 s end-to-end on the worst page on the open web is
+  not a user-visible problem, and it is paid once per page per session
+  behind `_PageCache`. There is no obvious cheaper substitute either: the
+  splitter is what produces semantic slice boundaries and ancestry, which
+  the BM25 index and every `slices=` / `section=` follow-up depend on.
+  Chunking faster by splitting dumber would degrade retrieval, which is the
+  product. Revisit only if a real report cites megapage latency.
+- **Regression guard**: `tests/test_perf.py` covers **every** phase, not
+  just conversion — `test_html_to_markdown`, `test_splitter`,
+  `test_extract_sections`, `test_tantivy_index`, plus `test_full_pipeline`
+  for the summed total (which catches a regression that hides by staying
+  just inside per-phase tolerance). Default tolerance is 2× the captured
+  baseline, overridable via `PERF_TOLERANCE`. `test_html_to_markdown_output_size`
+  additionally pins byte-level output so a converter swap cannot quietly
+  truncate — that guard exists because `html-to-markdown` 3.1.0 silently
+  dropped 96% of the WHATWG fixture during the port
+  (`kreuzberg-dev/html-to-markdown#275`).
+- **Keeping this honest**: regenerate with
+  `uv run python3 scripts/benchmark_pipeline.py --update-baselines` and
+  update the tables above in the same commit. The numbers here are prose
+  and rot silently; the JSON is what `test_perf.py` asserts against, so a
+  mismatch means this entry is wrong, not the suite.
 
 ## YouTube tool — deferred enhancements
 
