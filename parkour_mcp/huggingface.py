@@ -20,6 +20,7 @@ import asyncio
 import json
 import logging
 import re
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Annotated, Any
@@ -1369,6 +1370,253 @@ def _cache_file_body(
         )
 
 
+# Current-generation releases nest the language-model dimensions under
+# `text_config` and leave the top level to routing, token ids, and the vision
+# and audio towers.  Reading only the top level reports *nothing* for them:
+# across a 99-config sample of popular and recent releases, 61 carry a nested
+# block and 60 of those hold strictly more core dimensions there than at the
+# top, including the whole Qwen3.5 / Qwen3.6 / Gemma 4 / Qwen3-VL line.
+_TEXT_SUBCONFIG = "text_config"
+
+_CORE_DIMS = (
+    "max_position_embeddings", "num_hidden_layers", "hidden_size",
+    "num_attention_heads", "vocab_size",
+)
+
+# No single expert-count spelling is dominant enough to read alone.  Reading
+# `num_experts` by itself misses 7 of 15 sampled MoE configs, among them
+# `deepseek-ai/DeepSeek-R1` (`n_routed_experts`) and `openai/gpt-oss-120b`
+# (`num_local_experts`), each of which then reports an active-expert count
+# with no total beside it.
+_EXPERT_TOTAL_KEYS = ("num_experts", "n_routed_experts", "num_local_experts")
+_EXPERT_ACTIVE_KEYS = ("num_experts_per_tok", "experts_per_token")
+_EXPERT_SHARED_KEYS = ("n_shared_experts", "num_shared_experts")
+
+# transformers renamed `torch_dtype` to `dtype`; the sample splits roughly
+# evenly across the two, so both are live.
+_DTYPE_KEYS = ("dtype", "torch_dtype")
+
+_DTYPE_LABELS = {
+    "bfloat16": "BF16", "float16": "FP16", "float32": "FP32",
+    "float64": "FP64", "int8": "INT8", "uint8": "UINT8",
+    "float8_e4m3fn": "FP8 (E4M3)", "float8_e5m2": "FP8 (E5M2)",
+}
+
+_MODALITY_SUBCONFIGS = (("vision", "vision_config"), ("audio", "audio_config"))
+
+# Values of `rope_type` that mean "no scaling applied".
+_ROPE_NOOP_TYPES = frozenset({"default", "none"})
+
+
+def _is_int(value: Any) -> bool:
+    """``bool`` is an ``int`` subclass, and a flag is not a dimension."""
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _first_int(source: dict, keys: tuple[str, ...]) -> int | None:
+    """Return the first key in *keys* that *source* declares as an integer."""
+    for key in keys:
+        if _is_int(source.get(key)):
+            return source[key]
+    return None
+
+
+def _dimension_block(config: dict) -> tuple[dict, str | None]:
+    """Return the block carrying the language-model dimensions, and its key.
+
+    The key is ``None`` for a flat config and the sub-config name for a nested
+    one, so the caller can say where the numbers came from.  A multimodal
+    wrapper also carries a `vision_config` with its own `hidden_size` and
+    `num_hidden_layers`, and silently reporting one tower's dimensions under
+    the same field names the flat case uses would be indistinguishable from
+    the model's own.
+    """
+    nested = config.get(_TEXT_SUBCONFIG)
+    if not isinstance(nested, dict):
+        return config, None
+    top_hits = sum(1 for key in _CORE_DIMS if _is_int(config.get(key)))
+    nested_hits = sum(1 for key in _CORE_DIMS if _is_int(nested.get(key)))
+    if nested_hits > top_hits:
+        return nested, _TEXT_SUBCONFIG
+    return config, None
+
+
+def _storage_dtype(config: dict) -> str | None:
+    """Name the checkpoint's declared storage precision."""
+    for source in (config, config.get(_TEXT_SUBCONFIG)):
+        if not isinstance(source, dict):
+            continue
+        for key in _DTYPE_KEYS:
+            if raw := _safe_identifier(source.get(key)):
+                return _DTYPE_LABELS.get(raw.lower(), raw)
+    return None
+
+
+def _checkpoint_format(config: dict) -> str | None:
+    """Name the checkpoint's format from config.json alone.
+
+    Strongest declaration first.  Every quantizer in the transformers
+    ecosystem self-identifies in ``quantization_config.quant_method`` (24
+    distinct values across a 483-config survey, from `awq` and `gptq` through
+    `compressed-tensors`, `torchao`, `quark`, and `nvfp4_aqlm_hybrid`), and
+    TensorRT-LLM self-identifies in ``quantization.quant_algo``.  mlx-lm
+    declares neither, which makes MLX the one format that has to be recognised
+    by shape: it writes its block twice, as ``quantization`` for MLX's own
+    loader and as ``quantization_config`` for HF-ecosystem compatibility.
+
+    **The mirror is content equality, and that is the entire safety margin.**
+    TensorRT-LLM checkpoints carry a top-level ``quantization`` dict and *no*
+    ``quantization_config``, so a rule testing mere presence would label every
+    one of them MLX.  ``rungalileo/mistral-7b-instruct-v0.3-trtllm-ckpt-bf16``
+    fails only that gate.  Measured false positives across 483 live configs:
+    zero.
+
+    Two silences are deliberate.  2024-vintage mlx-lm wrote ``quantization``
+    alone, in the same shape TensorRT-LLM uses, so `mlx-community/phi-2-4bit`
+    and its contemporaries go unnamed rather than risk claiming a TRT-LLM
+    checkpoint for MLX.  And the dtype arm requires the *absence* of any quant
+    block, because on a quantized repo that field is the compute dtype, not
+    the storage width, so reporting it would describe the checkpoint wrongly.
+    """
+    qc = config.get("quantization_config")
+    qc = qc if isinstance(qc, dict) else {}
+    if method := _safe_identifier(qc.get("quant_method")):
+        return method
+
+    top = config.get("quantization")
+    if isinstance(top, dict) and top:
+        # Key presence, not value: an unquantized TensorRT-LLM checkpoint
+        # writes the same block with `quant_algo: null`
+        # (`rungalileo/mistral-7b-instruct-v0.3-trtllm-ckpt-bf16`).  Matching
+        # on the value would let that one fall past this arm, which closes the
+        # trap on the mirror below by luck rather than by construction.
+        if "quant_algo" in top:
+            algo = _safe_identifier(top.get("quant_algo"))
+            return f"TensorRT-LLM ({algo})" if algo else "TensorRT-LLM"
+        # Attribution needs evidence of *who* wrote the block, which two empty
+        # dicts do not supply, hence the truthiness check above.  That is not
+        # the §14.1b presence test, which asks a different question (whether a
+        # loader can construct quantized layers) and stays presence-only.
+        if "quantization_config" in config and top == qc:
+            mode = _safe_identifier(top.get("mode"))
+            return f"MLX ({mode})" if mode else "MLX"
+
+    unquantized = (
+        "quantization_config" not in config and "quantization" not in config
+    )
+    if unquantized and (dtype := _storage_dtype(config)):
+        return f"{dtype} (unquantized)"
+    return None
+
+
+def _apply_attention_frontmatter(fm: FMEntries, block: dict) -> None:
+    """Frontload the fields that decide KV-cache size and real context length."""
+    heads, kv = block.get("num_attention_heads"), block.get("num_key_value_heads")
+    lora = block.get("kv_lora_rank")
+    if _is_int(lora):
+        # Latent attention caches a compressed vector, so the head ratio does
+        # not describe cache size the way it does under GQA, and these configs
+        # set `num_key_value_heads` equal to `num_attention_heads`
+        # (`deepseek-ai/DeepSeek-R1`: 128 and 128).  Reading that as MHA would
+        # be exactly backwards about the model with the smallest KV cache.
+        fm["kv_heads"] = (
+            f"{kv} (MLA, kv_lora_rank={lora})" if _is_int(kv)
+            else f"MLA, kv_lora_rank={lora}"
+        )
+    elif _is_int(heads) and _is_int(kv) and kv:
+        if kv == heads:
+            fm["kv_heads"] = f"{kv} (MHA)"
+        elif kv == 1:
+            fm["kv_heads"] = f"{kv} (MQA)"
+        else:
+            ratio = f"{heads // kv}:1" if heads % kv == 0 else f"{heads}:{kv}"
+            fm["kv_heads"] = f"{kv} (GQA {ratio})"
+
+    # An extended context and a native one report the same
+    # `max_position_embeddings`, and the difference decides whether the far end
+    # of the window is trained or interpolated.  `original_max_position_
+    # embeddings` is the pre-extension length when the config carries it, which
+    # is the single most useful number here: DeepSeek-R1 reports a 163840
+    # window built by YaRN from a native 4096.
+    rope = block.get("rope_scaling")
+    if isinstance(rope, dict):
+        kind = _safe_identifier(rope.get("rope_type") or rope.get("type"))
+        factor = rope.get("factor")
+        has_factor = isinstance(factor, (int, float)) and not isinstance(factor, bool)
+        # `rope_type: default` declares the *absence* of scaling, so naming it
+        # would imply the window is extended when it is native.
+        if kind in _ROPE_NOOP_TYPES and not has_factor:
+            kind = None
+        native = rope.get("original_max_position_embeddings")
+        parts = [p for p in (
+            kind,
+            f"factor={factor}" if has_factor else None,
+            f"native={native}" if _is_int(native) else None,
+        ) if p]
+        if parts:
+            fm["rope_scaling"] = ", ".join(parts)
+
+    if _is_int(block.get("sliding_window")) and block["sliding_window"]:
+        fm["sliding_window"] = block["sliding_window"]
+    layer_types = block.get("layer_types")
+    if isinstance(layer_types, list):
+        kinds = Counter(t for t in layer_types if isinstance(t, str))
+        if len(kinds) > 1:
+            fm["attention_pattern"] = ", ".join(
+                f"{n}x {k}" for k, n in kinds.most_common()
+            )
+
+
+def _apply_moe_frontmatter(fm: FMEntries, block: dict, config: dict) -> None:
+    """Frontload expert counts, whichever spelling this family uses."""
+    for key, spellings in (
+        ("num_experts", _EXPERT_TOTAL_KEYS),
+        ("experts_per_token", _EXPERT_ACTIVE_KEYS),
+        ("shared_experts", _EXPERT_SHARED_KEYS),
+    ):
+        value = _first_int(block, spellings)
+        if value is None and block is not config:
+            value = _first_int(config, spellings)
+        if value is not None:
+            fm[key] = value
+
+
+def _apply_quant_block_frontmatter(fm: FMEntries, config: dict) -> None:
+    """Summarize ``quantization_config``, including what the summary drops.
+
+    Full config.json carries mode and group_size, which the free ``config``
+    expand drops, and that is the whole reason to spend this call.
+
+    The scalar filter is the interesting part.  A block can carry per-layer
+    override dicts alongside its scalars, and dropping them silently turns a
+    mixed-precision checkpoint into a uniform-looking one: `bits=4` reads as
+    the whole story on `dawncr0w/MiMo-V2.5-oQ4-MLX`, whose block also holds
+    181 layer overrides at 8-bit.  Count what was dropped rather than implying
+    it was not there.
+    """
+    if "quantization_config" not in config:
+        return
+    qc = config.get("quantization_config") or {}
+    if not isinstance(qc, dict):
+        return
+    summary = ", ".join(
+        f"{k}={v}" for k, v in qc.items()
+        if isinstance(v, (str, int, float, bool))
+    )
+    overrides = [v for v in qc.values() if isinstance(v, dict)]
+    if overrides:
+        bits = sorted({v["bits"] for v in overrides if _is_int(v.get("bits"))})
+        if not bits:
+            spread = "no bits declared"
+        elif len(bits) == 1:
+            spread = f"all {bits[0]}-bit"
+        else:
+            spread = f"{bits[0]}-bit to {bits[-1]}-bit"
+        dropped = f"+{len(overrides)} per-layer overrides, {spread}"
+        summary = f"{summary} ({dropped})" if summary else dropped
+    fm["quantization"] = summary or "declared, no scalar fields"
+
+
 def _apply_config_frontmatter(fm: FMEntries, config: dict) -> None:
     """Frontload the fields a caller reads config.json for."""
     if model_type := _safe_identifier(config.get("model_type")):
@@ -1376,25 +1624,26 @@ def _apply_config_frontmatter(fm: FMEntries, config: dict) -> None:
     architectures = config.get("architectures") or []
     if architectures and (arch := _safe_identifier(architectures[0])):
         fm["architecture"] = arch
-    for key in ("max_position_embeddings", "num_hidden_layers",
-                "hidden_size", "num_attention_heads", "vocab_size"):
-        if isinstance(config.get(key), int):
-            fm[key] = config[key]
-    if isinstance(config.get("num_experts"), int):
-        fm["num_experts"] = config["num_experts"]
-    if isinstance(config.get("num_experts_per_tok"), int):
-        fm["experts_per_token"] = config["num_experts_per_tok"]
+    if checkpoint_format := _checkpoint_format(config):
+        fm["checkpoint_format"] = checkpoint_format
 
-    # Full config.json carries mode and group_size, which the free `config`
-    # expand drops — that is the whole reason to spend this call.
-    if "quantization_config" in config:
-        qc = config.get("quantization_config") or {}
-        if isinstance(qc, dict):
-            summary = ", ".join(
-                f"{k}={v}" for k, v in qc.items()
-                if isinstance(v, (str, int, float, bool))
-            )
-            fm["quantization"] = summary or "declared, no scalar fields"
+    block, nested_key = _dimension_block(config)
+    if nested_key:
+        fm["dimensions_from"] = nested_key
+    for key in _CORE_DIMS:
+        if _is_int(block.get(key)):
+            fm[key] = block[key]
+    _apply_attention_frontmatter(fm, block)
+    _apply_moe_frontmatter(fm, block, config)
+
+    modalities = [
+        name for name, key in _MODALITY_SUBCONFIGS
+        if isinstance(config.get(key), dict)
+    ]
+    if modalities:
+        fm["modalities"] = " + ".join(["text", *modalities])
+
+    _apply_quant_block_frontmatter(fm, config)
     if config.get("auto_map"):
         fm.append(
             "warning",

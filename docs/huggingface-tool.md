@@ -162,6 +162,9 @@ shelf: 1 tracked — use ResearchShelf to review
 
 ### Field catalogue
 
+The `file` action's `config.json` block is catalogued separately in §6a and §6b, since it derives
+everything from the config bytes rather than the API.
+
 **Factual (frontmatter-safe):** `source`, `api`, `repo`, `model_type`, `architecture`,
 `params` (humanized `safetensors.total`), `dtype_fingerprint` (the by-dtype map — a compact
 quant signature), `size` (bytes of the **canonical checkpoint set**, GiB — never Σ all
@@ -192,13 +195,89 @@ The interception's biggest wins are here.
 
 | File | Behavior |
 |---|---|
-| `config.json` | parse; frontload `model_type`, `architectures`, `quantization_config` summary, context length, MoE/vision/audio presence; body = pretty JSON (fenced). |
+| `config.json` | parse; frontload `model_type`, `architectures`, `checkpoint_format` (§6a), the core dimensions, attention shape, MoE counts, vision/audio presence, and a `quantization_config` summary; body = pretty JSON (fenced). |
 | `*.safetensors.index.json` | frontload shard count, Σ size, `metadata.total_size`, key-count; `hint`: keys map tensors→shards; headers range-readable. Body = weight_map (fenced, possibly sliced — it's large). **More than one `*.index.json` in `siblings` means the repo ships multiple checkpoint sets** (§14.1 precondition 2); name which one this is. Do not confuse `model_index.json` (a diffusers *pipeline* manifest) with `model.safetensors.index.json` — the names near-collide and mean different things. |
 | `tokenizer_config.json`, `generation_config.json`, `*.json` | parse + fenced JSON. |
 | `README.md` | markdown (fenced); frontload `base_model`, `tags`, `gated` from the API. |
 | **`*.safetensors` (weights)** | **never download.** Frontload LFS `sha256` + size + a `warning` that this is a multi-GB shard, plus the exact `Range: bytes=0-<n>` header-read recipe (8-byte length prefix → JSON header → dtype/shape). |
 | `*.gguf` | frontload GGUF quant type parsed from filename (e.g. `Q4_K_M`) + size + sha; no download. |
 | generic | raw content with a size guard (as `_action_file` does). |
+
+### 6a. `checkpoint_format` — naming the format from config.json alone
+
+The `file` action reads `/{repo}/raw/{rev}/{path}` from the site, never the API, so it has no
+`library_name` and no `tags`. Everything it reports is derived from the config bytes. That is
+fine for most formats and awkward for exactly one.
+
+**Every quantizer in the transformers ecosystem self-identifies.** A 483-config survey across 68
+tag buckets found 24 distinct `quantization_config.quant_method` values (`awq`, `gptq`,
+`bitsandbytes`, `compressed-tensors`, `hqq`, `torchao`, `aqlm`, `quanto`, `exl2`, `exl3`, `vptq`,
+`spqr`, `eetq`, `bitnet`, `auto-round`, `quark`, `modelopt`, `smooth_quant`, `mxfp4`, `fp8`,
+`w8a8_fp8`, `w4afp8`, `nvfp4_aqlm_hybrid`, `inkling_nvfp4_aqlm_hybrid`). TensorRT-LLM
+self-identifies too, in `quantization.quant_algo`. **mlx-lm declares neither**, so MLX is the one
+format that has to be recognised by shape: mlx-lm writes its block twice, as `quantization` for
+MLX's own loader and as `quantization_config` for HF-ecosystem compatibility.
+
+The ladder, strongest declaration first:
+
+| # | Test | Result |
+|---|---|---|
+| 1 | `quantization_config.quant_method` | that value, verbatim |
+| 2 | `"quant_algo" in quantization` | `TensorRT-LLM (<algo>)` |
+| 3 | `quantization == quantization_config`, both non-empty | `MLX (<mode>)` |
+| 4 | no quant block of any kind, plus `dtype` / `torch_dtype` | `<DTYPE> (unquantized)` |
+| 5 | otherwise | emit nothing |
+
+**Rule 3 is content equality, and that is the entire safety margin.** TensorRT-LLM checkpoints
+carry a top-level `quantization` dict and *no* `quantization_config`, so a rule testing mere
+presence would label every one of them MLX. `rungalileo/mistral-7b-instruct-v0.3-trtllm-ckpt-bf16`
+is the repo that fails only that gate; `glux-cz/Qwen3-8B-NVFP4-Blackwell` and
+`Shoolife/Qwen2.5-1.5B-Instruct-TensorRT-LLM-Checkpoint-FP16` share its shape. Re-run through the
+implemented ladder against 471 live configs: 37 MLX labels, **zero** false positives, and all three
+TRT-LLM repos named rather than merely dodged.
+
+**Rule 2 matches the key, not the value.** An unquantized TRT-LLM checkpoint writes the same block
+with `quant_algo: null`. Matching the value would let it fall past rule 2, which leaves the trap
+closed by luck (rule 3's mirror) rather than by construction.
+
+Two silences are deliberate:
+
+- **Pre-mirror MLX.** 2024-vintage mlx-lm wrote `quantization` alone, in the same shape TRT-LLM
+  uses (`mlx-community/phi-2-4bit`, `Llama-2-7b-chat-4-bit`, `zephyr-7b-beta-4bit`, and 9 others in
+  the sample, all `{bits, group_size}`). They go unnamed rather than risk the reverse error. The
+  discriminator exists if this ever matters (TRT-LLM always carries `quant_algo`, old MLX never
+  does), but it trades content equality for a keyset argument.
+- **Rule 4 requires the *absence* of a quant block.** On a quantized repo `dtype` is the compute
+  dtype, not the storage width, so reporting it would describe the checkpoint wrongly.
+
+Empty blocks do not attribute: `{} == {}` is true and says nothing about who wrote it. This is a
+different question from §14.1b's presence test, which asks whether a loader can construct
+quantized layers and stays presence-only.
+
+### 6b. Non-quant models get the same treatment
+
+`checkpoint_format` covers 93% of sampled configs (439 of 471), and 69 of those labels are
+`(unquantized)` on repos that previously carried no format line at all. The rest of the block is
+shaped by two measurements:
+
+- **Dimensions nest.** 61 of 99 sampled popular and recent releases carry a `text_config`, and for
+  60 of those the nested block holds strictly more core dimensions than the top level. Reading only
+  the top level emitted *zero* dimension fields for 54 of 99, the whole Qwen3.5 / Qwen3.6 / Gemma 4
+  / Qwen3-VL line among them. `dimensions_from` names the block when it is not the top level, so a
+  nested read is never mistaken for a flat one. A wrapper also carries a `vision_config` with its
+  own `hidden_size`, and only `text_config` is ever descended into.
+- **Expert counts have three spellings.** `num_experts` (Mixtral-era), `n_routed_experts`
+  (DeepSeek, GLM, MiMo), `num_local_experts` (gpt-oss). Reading the first alone missed 7 of 15
+  sampled MoE configs, each of which then reported an active-expert count with no total beside it.
+
+Also frontloaded, each because it changes a decision the caller would otherwise make blind:
+`kv_heads` with the GQA ratio (KV-cache sizing), `rope_scaling` with `factor` and the
+pre-extension window (an extended and a native context report the same `max_position_embeddings`),
+`sliding_window` and `attention_pattern` for hybrid stacks, and `modalities`.
+
+`kv_lora_rank` suppresses the MHA/GQA/MQA label in favour of `MLA`: latent attention sets
+`num_key_value_heads` equal to `num_attention_heads` (`deepseek-ai/DeepSeek-R1`: 128 and 128), so
+the ratio reads as MHA on the model with the *smallest* KV cache in the sample.
 
 ## 7. Dead-end predictions (highest-value betas)
 

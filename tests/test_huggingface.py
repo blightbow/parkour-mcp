@@ -16,7 +16,9 @@ import respx
 from parkour_mcp._pipeline import _page_cache
 from parkour_mcp.detection import _detect_hf_url, is_hf_commit_sha
 from parkour_mcp.huggingface import (
+    _apply_config_frontmatter,
     _cache_file_body,
+    _checkpoint_format,
     _family_stem,
     _fm_base,
     _format_dtype_fingerprint,
@@ -30,7 +32,7 @@ from parkour_mcp.huggingface import (
     analyze_quant,
     huggingface,
 )
-from parkour_mcp.markdown import _TRUST_ADVISORY
+from parkour_mcp.markdown import _TRUST_ADVISORY, FMEntries
 
 GIB = 1024 ** 3
 
@@ -438,6 +440,254 @@ class TestConfigProjection:
         """GGUF-only repos project `config` itself to {}."""
         report = analyze_quant(_payload(config={}))
         assert report.quant_config_present is False
+
+
+# ---------------------------------------------------------------------------
+# checkpoint_format — naming the format from config.json alone
+# ---------------------------------------------------------------------------
+
+# Transcribed from the live configs of the named repos.
+_TRT_BLOCK = {
+    "quant_algo": "NVFP4", "kv_cache_quant_algo": None, "group_size": 128,
+    "exclude_modules": None, "clamp_val": None, "has_zero_point": False,
+    "pre_quant_scale": False, "mamba_ssm_cache_dtype": None,
+}
+_MLX_BLOCK = {"group_size": 64, "bits": 4, "mode": "affine"}
+
+
+class TestCheckpointFormat:
+    """Every quantizer in the transformers ecosystem self-identifies in
+    `quant_method`, and TensorRT-LLM in `quant_algo`.  mlx-lm declares neither,
+    so MLX alone is recognised by shape, and the shape it is recognised by has
+    a near neighbour that must not be caught."""
+
+    def test_declared_quant_method_wins(self):
+        assert _checkpoint_format({
+            "quantization_config": {"quant_method": "awq", "bits": 4},
+        }) == "awq"
+
+    def test_tensorrt_llm_block_is_never_mlx(self):
+        """The trap. `rungalileo/mistral-7b-instruct-v0.3-trtllm-ckpt-bf16`
+        and `glux-cz/Qwen3-8B-NVFP4-Blackwell` carry a top-level
+        `quantization` dict and no `quantization_config`, which is the shape a
+        presence-only MLX rule would claim.  Measured against 483 live configs,
+        this is the only family that shape collides with."""
+        out = _checkpoint_format({"quantization": _TRT_BLOCK})
+        assert out == "TensorRT-LLM (NVFP4)"
+        assert "MLX" not in out
+
+    def test_unquantized_tensorrt_llm_matches_on_key_presence(self):
+        """A bf16 TRT-LLM checkpoint writes the same block with a null
+        `quant_algo`.  Matching the value rather than the key would let it fall
+        through to the arms below."""
+        block = {**_TRT_BLOCK, "quant_algo": None}
+        assert _checkpoint_format({"quantization": block}) == "TensorRT-LLM"
+
+    def test_mirrored_block_is_mlx(self):
+        assert _checkpoint_format({
+            "quantization": _MLX_BLOCK, "quantization_config": _MLX_BLOCK,
+        }) == "MLX (affine)"
+
+    def test_mirror_is_equality_not_co_presence(self):
+        """Two differing blocks are not the mlx-lm double-write."""
+        assert _checkpoint_format({
+            "quantization": {"bits": 4},
+            "quantization_config": {"bits": 8},
+        }) is None
+
+    def test_empty_blocks_do_not_attribute(self):
+        """`{} == {}` is true and says nothing about who wrote it.  Distinct
+        from the §14.1b presence test, which asks whether a loader can build
+        quantized layers and stays presence-only."""
+        assert _checkpoint_format({
+            "quantization": {}, "quantization_config": {},
+        }) is None
+
+    def test_pre_mirror_mlx_stays_silent(self):
+        """2024-vintage mlx-lm (`mlx-community/phi-2-4bit`) wrote
+        `quantization` alone, in the same shape TensorRT-LLM uses.  Silence is
+        the chosen failure, since the alternative risks the reverse error."""
+        assert _checkpoint_format({
+            "quantization": {"bits": 4, "group_size": 64},
+        }) is None
+
+    def test_unquantized_reports_storage_dtype(self):
+        assert _checkpoint_format({"dtype": "bfloat16"}) == "BF16 (unquantized)"
+
+    def test_legacy_torch_dtype_spelling(self):
+        assert _checkpoint_format({"torch_dtype": "float16"}) == "FP16 (unquantized)"
+
+    def test_dtype_arm_requires_the_absence_of_a_quant_block(self):
+        """On a quantized repo this field is the compute dtype, not the storage
+        width, so reporting it would describe the checkpoint wrongly."""
+        assert _checkpoint_format({
+            "dtype": "bfloat16", "quantization": {"bits": 4, "group_size": 64},
+        }) is None
+
+
+# ---------------------------------------------------------------------------
+# config.json frontmatter
+# ---------------------------------------------------------------------------
+
+def _fm(config: dict) -> FMEntries:
+    entries = FMEntries({})
+    _apply_config_frontmatter(entries, config)
+    return entries
+
+
+class TestConfigDimensions:
+    """Current-generation releases nest the language-model dimensions under
+    `text_config`.  Reading only the top level reported nothing at all for 54
+    of 99 sampled popular and recent releases."""
+
+    def test_dimensions_come_from_the_nested_block(self):
+        fm = _fm({
+            "model_type": "gemma4",
+            "text_config": {
+                "num_hidden_layers": 42, "hidden_size": 2560,
+                "num_attention_heads": 8, "vocab_size": 262144,
+                "max_position_embeddings": 131072,
+            },
+        })
+        assert fm["num_hidden_layers"] == 42
+        assert fm["hidden_size"] == 2560
+        assert fm["dimensions_from"] == "text_config"
+
+    def test_flat_config_does_not_claim_a_source(self):
+        fm = _fm({"model_type": "qwen3", "hidden_size": 5120})
+        assert fm["hidden_size"] == 5120
+        assert "dimensions_from" not in fm
+
+    def test_vision_tower_dimensions_never_win(self):
+        """A wrapper carries a `vision_config` with its own `hidden_size`.
+        Reporting a tower's dimensions under the field names the flat case uses
+        would be indistinguishable from the model's own."""
+        fm = _fm({
+            "vision_config": {"hidden_size": 1152, "num_hidden_layers": 27},
+            "text_config": {"hidden_size": 4096, "num_hidden_layers": 36},
+        })
+        assert fm["hidden_size"] == 4096
+        assert fm["num_hidden_layers"] == 36
+
+    def test_top_level_wins_when_it_carries_more(self):
+        fm = _fm({
+            "hidden_size": 4096, "num_hidden_layers": 48, "vocab_size": 152576,
+            "text_config": {"hidden_size": 1024},
+        })
+        assert fm["hidden_size"] == 4096
+        assert "dimensions_from" not in fm
+
+
+class TestExpertSpellings:
+    """No expert-count spelling is dominant enough to read alone: reading
+    `num_experts` by itself missed 7 of 15 sampled MoE configs."""
+
+    def test_n_routed_experts(self):
+        """`deepseek-ai/DeepSeek-R1`."""
+        fm = _fm({"n_routed_experts": 256, "num_experts_per_tok": 8,
+                  "n_shared_experts": 1})
+        assert fm["num_experts"] == 256
+        assert fm["experts_per_token"] == 8
+        assert fm["shared_experts"] == 1
+
+    def test_num_local_experts(self):
+        """`openai/gpt-oss-120b`."""
+        fm = _fm({"num_local_experts": 128, "num_experts_per_tok": 4})
+        assert fm["num_experts"] == 128
+
+    def test_null_shared_expert_count_is_omitted(self):
+        fm = _fm({"n_routed_experts": 256, "n_shared_experts": None})
+        assert "shared_experts" not in fm
+
+    def test_dense_model_declares_no_experts(self):
+        assert "num_experts" not in _fm({"hidden_size": 4096})
+
+
+class TestQuantBlockSummary:
+    def test_per_layer_overrides_are_counted_not_dropped(self):
+        """`dawncr0w/MiMo-V2.5-oQ4-MLX` declares `bits=4` beside 181 layer
+        overrides at 8-bit.  Dropping the overrides silently turns a
+        mixed-precision checkpoint into a uniform-looking one."""
+        overrides = {
+            f"model.mtp.layers.{i}.eh_proj": {"bits": 8, "group_size": 64}
+            for i in range(181)
+        }
+        fm = _fm({"quantization_config": {"bits": 4, "group_size": 64,
+                                          **overrides}})
+        assert "bits=4" in fm["quantization"]
+        assert "181 per-layer overrides" in fm["quantization"]
+        assert "all 8-bit" in fm["quantization"]
+
+    def test_mixed_override_widths_report_a_range(self):
+        fm = _fm({"quantization_config": {
+            "bits": 4,
+            "a": {"bits": 6}, "b": {"bits": 8},
+        }})
+        assert "6-bit to 8-bit" in fm["quantization"]
+
+    def test_uniform_block_carries_no_override_note(self):
+        fm = _fm({"quantization_config": {"bits": 4, "group_size": 128}})
+        assert fm["quantization"] == "bits=4, group_size=128"
+
+    def test_present_but_empty_block_still_reported(self):
+        fm = _fm({"quantization_config": {}})
+        assert fm["quantization"] == "declared, no scalar fields"
+
+    def test_absent_block_stays_silent(self):
+        assert "quantization" not in _fm({"model_type": "llama"})
+
+
+class TestAttentionFrontmatter:
+    def test_gqa_ratio(self):
+        fm = _fm({"num_attention_heads": 64, "num_key_value_heads": 4})
+        assert fm["kv_heads"] == "4 (GQA 16:1)"
+
+    def test_latent_attention_is_not_reported_as_mha(self):
+        """`deepseek-ai/DeepSeek-R1` sets `num_key_value_heads` equal to
+        `num_attention_heads` and caches a compressed vector instead.  Reading
+        that as MHA would be exactly backwards about the model with the
+        smallest KV cache."""
+        fm = _fm({"num_attention_heads": 128, "num_key_value_heads": 128,
+                  "kv_lora_rank": 512})
+        assert "MLA" in fm["kv_heads"]
+        assert "MHA" not in fm["kv_heads"]
+
+    def test_multi_query_attention(self):
+        fm = _fm({"num_attention_heads": 32, "num_key_value_heads": 1})
+        assert fm["kv_heads"] == "1 (MQA)"
+
+    def test_rope_type_default_declares_no_scaling(self):
+        """`rope_type: default` means the window is native, so naming it would
+        imply an extension that is not there."""
+        fm = _fm({"rope_scaling": {"rope_type": "default", "type": "default"}})
+        assert "rope_scaling" not in fm
+
+    def test_yarn_reports_the_pre_extension_window(self):
+        """An extended and a native context report the same
+        `max_position_embeddings`; only this says which one it is."""
+        fm = _fm({"rope_scaling": {
+            "type": "yarn", "factor": 40, "original_max_position_embeddings": 4096,
+        }})
+        assert fm["rope_scaling"] == "yarn, factor=40, native=4096"
+
+    def test_hybrid_layer_stack_is_summarized(self):
+        fm = _fm({"layer_types": ["full_attention", "sliding_attention",
+                                  "sliding_attention"]})
+        assert fm["attention_pattern"] == "2x sliding_attention, 1x full_attention"
+
+    def test_uniform_layer_stack_says_nothing(self):
+        fm = _fm({"layer_types": ["full_attention", "full_attention"]})
+        assert "attention_pattern" not in fm
+
+
+class TestModalities:
+    def test_vision_and_audio_towers_are_named(self):
+        fm = _fm({"vision_config": {"hidden_size": 1152},
+                  "audio_config": {"hidden_size": 1024}})
+        assert fm["modalities"] == "text + vision + audio"
+
+    def test_text_only_model_says_nothing(self):
+        assert "modalities" not in _fm({"hidden_size": 4096})
 
 
 # ---------------------------------------------------------------------------
