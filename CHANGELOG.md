@@ -5,6 +5,33 @@ All notable changes to parkour-mcp will be documented in this file.
 Format: https://keepachangelog.com/en/1.1.0/
 Versioning: https://semver.org/spec/v2.0.0.html
 
+## [2.1.2] 2026-07-30
+
+### Changed
+- Discourse and GitHub timestamps parse directly instead of being rewritten first, with identical results.
+- a multi-line prose entry in a list literal is now visibly one element rather than indistinguishable from a missing comma.
+- nine expressions across the package are now written in their simpler form, min over a sorted-then-indexed list, .values() over a discarded key binding, and one tuple endswith over three chained calls, with behaviour verified identical.
+- fifteen internal functions that took six or more parameters positionally now require names for their optional tail, and the separator was placed from an AST sweep of every call site in the package and tests, so no existing caller changes and none could silently break.
+- the seven remaining helpers whose callers did pass past the boundary now name those arguments at all fifteen call sites, so reading a call to _dispatch_slicing no longer means counting commas to tell whether the fifth argument was max_tokens or source_url.
+
+
+### Fixed
+- failures on the DOI and Reddit fallback paths now record where they happened instead of only that they happened.
+- a failed metadata, caption, chapter or template fetch now leaves a traceback in debug logs instead of vanishing into an empty result.
+- four circular-import suppressions sat on lines long enough that an import rewrap would carry the directive off the line it suppresses and silently stop it working, measured as eight new findings with the comment count unchanged; they are now short enough that the rewrap cannot reach them.
+- reading a model's config.json stayed silent on MLX, the one checkpoint format that does not declare itself, reported no dimensions at all for current-generation releases that nest them under text_config, missed the expert count on any MoE config not spelling it num_experts, and implied a uniform quant width on checkpoints whose config declares per-layer overrides; it now names the format (TensorRT-LLM included), descends into the nested block, reads every expert spelling, distinguishes latent attention from the MHA it would otherwise be reported as, names the pre-extension context window when RoPE scaling extended it, and counts the overrides the summary drops.
+
+
+### Documentation
+- Correct perf entry against measured baselines
+- Make Why: posture section-aware
+- Assess the ruff 0.16 migration and plan the overhaul
+- Fold the completed audit into the plan and drop dead claims
+
+
+### Miscellaneous
+- State two intents the code already depended on
+
 ## [2.1.1] 2026-07-28
 
 ### Fixed
