@@ -917,17 +917,29 @@ def _apply_quant_steering(
                 f"no lineage so there is nothing to compare against",
             )
 
+    # Presence, not preservation.  E8M0 scales prove *this* checkpoint carries
+    # an FP microscaling grid; they say nothing about whether it matches the
+    # base's, which cannot be known without fetching the base.  The comparative
+    # verdict therefore lives in `_run_quant_audit`, the only place both sides
+    # are in hand.  Claiming "preserved" here asserted a comparison that had
+    # not been made: it fired on vendor base repos about their own native
+    # format, and on a quant it fired in the same response as the audit's own
+    # "declares no base model, so there is no native format to compare against".
     if report.is_quant and report.fp_grid is not None:
         if report.fp_grid > 0.5:
-            fm.append(
-                "note",
-                "native FP-microscaling grid preserved (E8M0 scales present)",
-            )
+            note = "FP-microscaling grid present (E8M0 scales)"
+            if base_model:
+                note += (
+                    f"; set quant_audit=true to compare it against "
+                    f"{base_model}'s native grid"
+                )
+            fm.append("note", note)
         elif report.native_format == "affine":
             fm.append(
                 "note",
-                "all-affine — no E8M0 scales present, so a native FP grid on "
-                "the base was regridded rather than preserved",
+                "all-affine: no E8M0 scales present, so if the base carried an "
+                "FP microscaling grid it was regridded onto a uniform lattice "
+                "rather than preserved",
             )
 
 
@@ -1236,6 +1248,28 @@ async def _run_quant_audit(
     lines = []
     if base.native_format:
         lines.append(f"base {base_model} weight format: {base.native_format}")
+
+    # The grid-preservation verdict this action exists to buy.  Both grids are
+    # in hand here and nowhere else in the codebase, so this is the only place
+    # the comparative claim can honestly be made.
+    if base.fp_grid is not None and report.fp_grid is not None:
+        base_mx, repo_mx = base.fp_grid > 0.5, report.fp_grid > 0.5
+        if base_mx and repo_mx:
+            lines.append(
+                "grid preserved: base and this repo both carry E8M0 "
+                "microscaling scales",
+            )
+        elif base_mx:
+            lines.append(
+                "grid NOT preserved: the base carries E8M0 microscaling "
+                "scales and this repo does not, so a non-uniform FP lattice "
+                "was requantized onto a uniform one",
+            )
+        else:
+            lines.append(
+                "base carries no E8M0 microscaling scales, so there is no "
+                "native FP grid to preserve",
+            )
 
     # Precondition 1's stated remedy: substitute the base's parameter count,
     # and say that a substitution happened rather than passing the number off

@@ -1159,6 +1159,75 @@ class TestPageCachePopulation:
         assert _page_cache.get("https://huggingface.co/org/model") is None
 
 
+# mlx-community/DeepSeek-V4-Flash-8bit shape: mxfp4 experts, E8M0 scales.
+_QUANT_MX = {"U32": 36_434_673_664, "U8": 8_657_043_456, "BF16": 272_765_568}
+# The damage case: every scale is float, so the FP lattice is gone.
+_QUANT_AFFINE = {"U32": 39_628_000_000, "BF16": 10_465_000_000}
+# deepseek-ai/DeepSeek-V4-Flash shape: FP4 experts over an FP8 backbone.
+_BASE_FP4 = {
+    "I8": 141_733_920_768,
+    "F8_E8M0": 8_858_737_664,
+    "F8_E4M3": 6_023_020_544,
+    "BF16": 1_415_259_264,
+}
+
+
+def _mock_audit_pair(quant_dtypes: dict) -> None:
+    """Mock a quant repo declaring lineage plus the FP4-native base it names."""
+    respx.get("https://huggingface.co/api/models/org/quant").mock(
+        return_value=httpx.Response(200, json=_payload(
+            id="org/quant",
+            safetensors={"parameters": quant_dtypes, "total": 284_333_146_519},
+            siblings=[
+                {"rfilename": "model.safetensors.index.json", "size": 100},
+                *_shards("model", 33, int(144.44 * GIB)),
+            ],
+            baseModels={
+                "relation": "quantized", "models": [{"id": "org/base"}],
+            },
+        )),
+    )
+    respx.get("https://huggingface.co/org/quant/raw/main/README.md").mock(
+        return_value=httpx.Response(200, text="# Quant"),
+    )
+    respx.get("https://huggingface.co/api/models/org/base").mock(
+        return_value=httpx.Response(200, json=_payload(
+            id="org/base",
+            safetensors={"parameters": _BASE_FP4, "total": 158_069_433_298},
+            siblings=[
+                {"rfilename": "model.safetensors.index.json", "size": 100},
+                *_shards("model", 46, int(148.66 * GIB)),
+            ],
+        )),
+    )
+
+
+@pytest.mark.asyncio
+class TestQuantAuditGridVerdict:
+    """Tier 1 owns the preservation verdict because only it holds both grids.
+
+    The dtype fingerprint shows whether *this* repo carries E8M0 scales.
+    Whether that matches the base's grid is a different claim needing the base
+    fetched, which is exactly what ``quant_audit=true`` buys.  Asserting it
+    from one side fired on vendor base repos about their own native format.
+    """
+
+    @respx.mock
+    async def test_mx_over_fp4_base_reports_preserved(self):
+        _mock_audit_pair(_QUANT_MX)
+        out = await huggingface("model", "org/quant", quant_audit=True)
+        assert "grid preserved" in out
+
+    @respx.mock
+    async def test_affine_over_fp4_base_reports_damage(self):
+        """The case the detector exists for: a native FP4 lattice requantized
+        onto a uniform one.  No size or bpw signal shows this, and the
+        downloader has no way to notice it after the fact."""
+        _mock_audit_pair(_QUANT_AFFINE)
+        out = await huggingface("model", "org/quant", quant_audit=True)
+        assert "grid NOT preserved" in out
+
+
 def test_presplit_failure_skips_cache():
     """A single line over the presplit ceiling is the issue-#6 splitter DoS
     vector; caching is skipped rather than routed into it.
