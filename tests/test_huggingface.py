@@ -27,6 +27,7 @@ from parkour_mcp.huggingface import (
     _HFRateLimit,
     _partition_checkpoint_sets,
     _pick_canonical_set,
+    _scale_implied_packing,
     _split_repo_path,
     _split_repo_rev,
     analyze_quant,
@@ -150,6 +151,94 @@ class TestPrecondition1DenominatorValidity:
         assert report.bpw is None
         assert report.bpw_suppressed is not None
         assert "double the declared 4-bit" in report.bpw_suppressed
+
+    def test_i8_nibble_packing_suppresses_bpw(self):
+        """deepseek-ai/DeepSeek-V4-Flash: FP4 packed two-per-I8, no U32.
+
+        The repo §14.1a called theoretical.  It defeats the U32 key (no U32
+        anywhere) *and* the declared-width cross-check (it declares
+        ``quant_method`` with no ``bits``), landing at ratio exactly 1.0000.
+        Unguarded it reports 8.08 bpw against a true ~4.39, which renders a
+        native-FP4 vendor release as an 8-bit upload and inverts every requant
+        verdict drawn from comparing a quant against it.
+
+        The scale array is what settles it with no declared width in hand:
+        8.86B E8M0 scales over a 141.7B-element I8 payload is 2.0001 weights
+        per stored byte.
+        """
+        report = analyze_quant(_payload(
+            safetensors={
+                "parameters": {
+                    "BF16": 1_415_259_264,
+                    "I64": 2_327_040,
+                    "F32": 36_168_018,
+                    "F8_E8M0": 8_858_737_664,
+                    "F8_E4M3": 6_023_020_544,
+                    "I8": 141_733_920_768,
+                },
+                "total": 158_069_433_298,
+            },
+            siblings=[
+                {"rfilename": "model.safetensors.index.json", "size": 100},
+                *_shards("model", 46, int(148.66 * GIB)),
+            ],
+            config={"quantization_config": {"quant_method": "fp8"}},
+        ))
+        assert report.bpw is None
+        assert report.bpw_suppressed is not None
+        assert "packed storage elements" in report.bpw_suppressed
+        assert "2.0 weights per stored byte" in report.bpw_suppressed
+
+    def test_unpacked_i8_without_scale_bucket_reports_bpw(self):
+        """deepseek-ai/DeepSeek-V4-Flash-0731: same family, Hub *did* unpack.
+
+        The sibling of the case above, and the reason the new gate measures
+        packing rather than keying on ``I8``.  Here the Hub unpacked the FP4
+        into logical weight counts and dropped the E8M0 scales from the
+        histogram entirely, so ``total`` is a true weight count and 4.39 bpw
+        is correct.  With no scale bucket the measurement abstains, which is
+        what lets a correct number through.
+        """
+        report = analyze_quant(_payload(
+            safetensors={
+                "parameters": {
+                    "BF16": 1_483_567_488,
+                    "I64": 2_327_040,
+                    "F32": 37_741_630,
+                    "F8_E4M3": 6_304_038_912,
+                    "I8": 296_352_743_424,
+                },
+                "total": 304_180_418_494,
+            },
+            siblings=[
+                {"rfilename": "model.safetensors.index.json", "size": 100},
+                *_shards("model", 48, int(155.43 * GIB)),
+            ],
+            config={"quantization_config": {"quant_method": "fp8"}},
+        ))
+        assert report.bpw == pytest.approx(4.39, abs=0.02)
+
+    def test_byte_per_weight_microscaling_is_not_packed(self):
+        """An mxfp8 payload stores one weight per byte: packing 1.0, not 2.0.
+
+        Guards the threshold from the other side.  A microscaled checkpoint
+        with a distinct E8M0 bucket is exactly the shape the new gate inspects,
+        so it must not suppress one whose payload is *not* sub-byte packed.
+        """
+        report = analyze_quant(_payload(
+            safetensors={
+                "parameters": {"I8": 32_000_000_000, "F8_E8M0": 1_000_000_000},
+                "total": 33_000_000_000,
+            },
+            siblings=[
+                {"rfilename": "model.safetensors.index.json", "size": 100},
+                *_shards("model", 8, int(30.73 * GIB)),
+            ],
+            config={"quantization_config": {"quant_method": "mxfp8"}},
+        ))
+        assert _scale_implied_packing(report.dtypes) == pytest.approx(1.0)
+        assert report.bpw is not None
+        assert report.bpw_suppressed is None
 
 
 # ---------------------------------------------------------------------------

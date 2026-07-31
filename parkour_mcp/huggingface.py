@@ -317,6 +317,15 @@ _PRECISION_RE = re.compile(r"\.(fp16|fp32|bf16)\.safetensors$", re.IGNORECASE)
 # strongest of the three because nothing stores real weights in it.
 _CONTAINER_DTYPES = ("U32", "U8", "I8")
 
+# OCP microscaling fixes one E8M0 scale per 32 logical weights, and every
+# FP4/FP8 microscaled checkpoint in the wild uses that block size.
+_MX_GROUP_SIZE = 32
+
+# Weights-per-stored-byte above which the payload holds sub-byte values.  The
+# only values that occur are 1.0 (one weight per byte) and 2.0 (FP4 nibble
+# pairs), so the threshold sits in the middle of a gap nothing lands in.
+_PACKED_PAYLOAD_RATIO = 1.5
+
 _SHARD_INDEX = "model.safetensors.index.json"
 _PIPELINE_INDEX = "model_index.json"
 
@@ -502,6 +511,27 @@ def _classify_native_format(dtypes: dict[str, int]) -> str | None:
     return None
 
 
+def _scale_implied_packing(dtypes: dict[str, int]) -> float | None:
+    """Logical weights per stored payload byte, measured via the scale array.
+
+    A microscaling format writes one E8M0 scale per ``_MX_GROUP_SIZE`` logical
+    weights, so scale cardinality counts weights *independently* of however the
+    Hub chose to report the payload.  Divided by the payload's own element
+    count it yields the packing factor directly: 1.0 when a byte holds one
+    weight, 2.0 when it holds two FP4 nibbles.
+
+    Returns None unless the repo reports a distinct ``F8_E8M0`` bucket.  Where
+    the Hub folds scales into the payload bucket instead (``openai/gpt-oss-120b``
+    reports one undifferentiated ``U8``) the two cannot be told apart, and this
+    measurement is unavailable rather than wrong.
+    """
+    scales = dtypes.get("F8_E8M0")
+    payload = dtypes.get("I8", 0) + dtypes.get("U8", 0)
+    if not scales or not payload:
+        return None
+    return (scales * _MX_GROUP_SIZE) / payload
+
+
 def analyze_quant(payload: dict) -> _QuantReport:
     """Derive every Tier 0 quant signal from the flagship response.
 
@@ -627,6 +657,32 @@ def _suppress_reason(report: _QuantReport, dtypes: dict[str, int]) -> str | None
             "the Hub reported packed storage elements rather than logical "
             "weights for this repo (U32 container present and the parameter "
             "total equals the sum of stored elements)"
+        )
+
+    # Precondition 1, second container. The U32 key is positive evidence of
+    # packing but not exhaustive, and §14.1a closed the gap with the declared-
+    # width cross-check while noting no real repo had exercised it.
+    # `deepseek-ai/DeepSeek-V4-Flash` is that repo, and it defeats both:
+    # it packs FP4 two-per-`I8` with the scales in their own `F8_E8M0` bucket
+    # (no U32 anywhere), lands at ratio exactly 1.0000, and declares
+    # `quant_method` with no `bits`, so the cross-check downstream has no
+    # declared width to test against. Unguarded it reports 8.08 bpw against a
+    # true ~4.39, rendering a native-FP4 vendor release as an 8-bit upload and
+    # inverting every requant verdict a caller draws from the comparison.
+    #
+    # The scale array settles it without a declared width: 8.86B E8M0 scales
+    # over a 141.7B-element I8 payload is 2.0001 weights per stored byte.
+    packing = _scale_implied_packing(dtypes)
+    if (
+        sigma
+        and report.total_params == sigma
+        and packing is not None
+        and packing >= _PACKED_PAYLOAD_RATIO
+    ):
+        return (
+            "the Hub reported packed storage elements rather than logical "
+            f"weights for this repo (the E8M0 scale array implies {packing:.1f} "
+            "weights per stored byte, so the parameter total counts bytes)"
         )
     return None
 

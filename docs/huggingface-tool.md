@@ -505,6 +505,9 @@ already fetches** — zero marginal latency. The expensive ones become opt-in.
 - `elems = Σ safetensors.parameters[dtype]` (stored array elements)
 - **`bpw = bytes*8 / safetensors.total`** — effective bits per logical weight
 - **`fp_grid = U8 / (U8 + BF16+F16)`** — share of scale metadata that is E8M0 (FP-microscaling)
+- **`packing = (F8_E8M0 × 32) / (I8+U8)`** — logical weights per stored payload byte, the
+  independent denominator check of §14.1a precondition 1. Unavailable (not zero) when scales
+  share a bucket with the payload.
 
 ### 14.1a ⚠ Four mandatory preconditions on `bpw`
 
@@ -521,6 +524,7 @@ weights.** HF's parser *sometimes* unpacks sub-byte weights and sometimes does n
 | `mlx-community/DeepSeek-V4-Flash-8bit` | 45.4B | 284.3B | 6.26 | yes | **4.36** ✔ |
 | `inferencerlabs/MiMo-V2.5-LM-MLX-Q9` | 96.5B | 308.8B | 3.20 | yes | **9.00** ✔ |
 | `dawncr0w/MiMo-V2.5-oQ4-MLX` | 50.1B | **50.1B** | **1.0000** | **NO** | 28.76 ✘ |
+| `deepseek-ai/DeepSeek-V4-Flash` | 158.1B | **158.1B** | **1.0000** | **NO** | 8.08 ✘ |
 
 **Guard:** if `U32 present AND total == Σ dtypes` then `total` is un-unpacked, so **suppress
 `bpw`** or substitute the base model's `total` (Tier 1: MiMo's real base is 310.8B → oQ4 bpw =
@@ -542,14 +546,35 @@ alone is therefore **not** the signal; ratio 1.0 *with U32* is.
 out `audio_tokenizer/`, oQ4's canonical number is `28.66`. Both are suppressed; the table quotes
 the raw arithmetic to show what an unguarded implementation would print.)*
 
-**Residual gap — U8 packing that HF does not unpack.** The U32 key is sound but not exhaustive:
-`gpt-oss-120b` proves HF also packs into `U8`, and there it happened to unpack. A repo that packs
-into `U8` and is *not* unpacked would land at ratio 1.0 with no `U32`, and gate 1 would wave it
-through. No such repo turned up in probing, so this is a theoretical hole, but it is cheap to
-close with a field already in hand: `bits` **survives the `config` whitelist** (§14.1b), so when
-`bits` is present and `bpw > ~2 × bits`, the denominator is self-evidently wrong. Suppress on that
-cross-check too. Zero extra calls, and it degrades silently when `bits` is absent rather than
-inventing a verdict.
+**Residual gap, now closed — sub-byte packing in a container that is not `U32`.** The `U32` key
+is sound but not exhaustive: `gpt-oss-120b` proves HF also packs into `U8`, and there it happened
+to unpack. The first close for this was a cross-check on the declared width (`bits` **survives the
+`config` whitelist**, §14.1b, so `bpw > ~2 × bits` means the denominator is self-evidently wrong).
+That was recorded here as a *theoretical* hole because no real repo had exercised it. One has now.
+
+`deepseek-ai/DeepSeek-V4-Flash` defeats both tests at once. It packs FP4 two-per-`I8` with the
+scales in a distinct `F8_E8M0` bucket, so there is no `U32` anywhere; it lands at ratio exactly
+1.0000; and it declares `quant_method: fp8` with **no `bits`**, so the declared-width cross-check
+has no width to test against and degrades silently, exactly as designed. Unguarded it reports
+**8.08 bpw against a true ~4.39**: a native-FP4 vendor release rendered as an 8-bit upload. That
+is worse than a wrong number on one repo, because the base is the denominator of every requant
+verdict drawn from it. Read straight, "base 8.08 bpw" beside "quant 4.36 bpw" says the quant threw
+away half the precision, when the real comparison is ~4.39 against 4.36 with the expert grid
+bit-preserved.
+
+**Guard:** measure the packing factor from the scale array, which counts logical weights
+independently of whichever bucket the payload landed in. OCP microscaling writes one E8M0 scale
+per 32 weights, so `(F8_E8M0 × 32) / (I8 + U8)` is weights-per-stored-byte directly: **2.0001**
+here, and 1.0 for a byte-per-weight format such as mxfp8. Suppress at ≥ 1.5, the midpoint of a gap
+nothing occupies. Zero extra calls, and it needs no declared width.
+
+**The abstention is load-bearing in both directions.** The measurement returns nothing when the
+Hub folds scales into the payload bucket (`gpt-oss-120b` reports one undifferentiated `U8`), and
+that silence is what lets correct numbers through. `deepseek-ai/DeepSeek-V4-Flash-0731` is the same
+vendor and the same format, but there HF *did* unpack the FP4 into logical counts and dropped the
+E8M0 scales from the histogram entirely; its `total` is a true weight count and its **4.39 bpw is
+correct**. One family, two repos, opposite conventions, no signal on the repo itself announcing
+which. Resolve the basis per repo; never assume a vendor is internally consistent.
 
 **2. Numerator validity — `Σ siblings[*.safetensors].size` over-counts repos shipping more than
 one checkpoint set.** This is the same severity as the U32 guard and fires on repos with no U32 at
