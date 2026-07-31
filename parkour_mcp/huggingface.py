@@ -503,8 +503,20 @@ def _classify_native_format(dtypes: dict[str, int]) -> str | None:
     ):
         return "FP8-native (E4M3)"
     if "U32" in dtypes and "U8" in dtypes:
-        return "affine + E8M0 scales"
+        # A U32 payload beside an E8M0 scale array.  Which MLX mode wrote it
+        # is not recoverable from the histogram: pure mxfp4/mxfp8 and an
+        # affine/mx hybrid produce the same buckets, and an affine share small
+        # enough to hide inside BF16 leaves no trace at all.  Measured on two
+        # repos of one family, `Vontra/DeepSeek-V4-Flash-0731-MXFP4-MLX`
+        # (no affine anywhere, every module mxfp4 or mxfp8) scores fp_grid
+        # 0.93, while `mlx-community/DeepSeek-V4-Flash-8bit` (an affine
+        # 8-bit backbone under mxfp4 experts) scores 0.97 because its affine
+        # part is 2.6% of the model.  The ordering does not even run the right
+        # way, so no threshold on this histogram recovers the mode.  Name the
+        # grid, which is observable, and leave `mode` to config.json.
+        return "packed payload + E8M0 scales (per-module mode in config.json)"
     if "U32" in dtypes:
+        # No E8M0 bucket, so the scales are float: affine's own signature.
         return "affine"
     if "U8" in dtypes and "U32" not in dtypes:
         return "byte-packed (mxfp-style)"

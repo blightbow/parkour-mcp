@@ -19,6 +19,7 @@ from parkour_mcp.huggingface import (
     _apply_config_frontmatter,
     _cache_file_body,
     _checkpoint_format,
+    _classify_native_format,
     _family_stem,
     _fm_base,
     _format_dtype_fingerprint,
@@ -782,6 +783,67 @@ class TestModalities:
 # ---------------------------------------------------------------------------
 # Fingerprint and format classification
 # ---------------------------------------------------------------------------
+
+# Vontra/DeepSeek-V4-Flash-0731-MXFP4-MLX: mxfp4 experts plus mxfp8 attention,
+# zero affine modules, zero `.biases` tensors.
+_PURE_MX = {
+    "BF16": 1_483_567_488,
+    "F32": 37_741_630,
+    "U8": 18_916_048_896,
+    "U32": 38_620_102_656,
+    "I64": 2_327_040,
+}
+# mlx-community/DeepSeek-V4-Flash-8bit: mxfp4/gs32 experts over an affine
+# 8-bit/gs64 backbone (512 of its 641 per-module overrides).
+_AFFINE_MX_HYBRID = {
+    "BF16": 272_765_568,
+    "U32": 36_434_673_664,
+    "F32": 33_897_431,
+    "U8": 8_657_043_456,
+    "I64": 2_327_040,
+}
+
+
+class TestNativeFormatClassification:
+    """``mode`` is not recoverable from the dtype histogram, so don't claim it.
+
+    Both fixtures above are MLX checkpoints of one model family and produce
+    the same buckets (U32 payload, U8 E8M0 scales, BF16 remainder).  One is
+    pure mxfp4/mxfp8 with no affine module anywhere; the other runs an affine
+    8-bit backbone under mxfp4 experts.  Naming either "affine" is a coin
+    flip, and on an FP4-native base "affine" is the string that signals a
+    destructive regrid, so guessing it wrong is not a cosmetic error.
+    """
+
+    def test_neither_shape_is_called_affine(self):
+        for dtypes in (_PURE_MX, _AFFINE_MX_HYBRID):
+            out = _classify_native_format(dtypes)
+            assert out is not None
+            assert "affine" not in out
+            assert "E8M0" in out
+
+    def test_fp_grid_ordering_runs_backwards(self):
+        """Why no threshold on this histogram recovers the mode.
+
+        The pure-mx repo scores *lower* than the hybrid, because the hybrid's
+        affine share is 2.6% of the model and vanishes into BF16 beside the
+        experts' scale array.  Pinning the inversion keeps the comment in
+        ``_classify_native_format`` from being quietly falsified.
+        """
+        def fp_grid(d):
+            e8m0 = d.get("U8", 0) + d.get("F8_E8M0", 0)
+            return e8m0 / (e8m0 + d.get("BF16", 0) + d.get("F16", 0))
+
+        assert fp_grid(_PURE_MX) == pytest.approx(0.927, abs=0.002)
+        assert fp_grid(_AFFINE_MX_HYBRID) == pytest.approx(0.970, abs=0.002)
+        assert fp_grid(_PURE_MX) < fp_grid(_AFFINE_MX_HYBRID)
+
+    def test_u32_without_e8m0_scales_is_affine(self):
+        """Float scales with no E8M0 bucket is affine's own signature."""
+        assert _classify_native_format(
+            {"U32": 39_628_000_000, "BF16": 10_465_000_000},
+        ) == "affine"
+
 
 class TestDtypeFingerprint:
     def test_drops_trivial_housekeeping_buckets(self):
