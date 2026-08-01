@@ -5,6 +5,13 @@ All notable changes to parkour-mcp will be documented in this file.
 Format: https://keepachangelog.com/en/1.1.0/
 Versioning: https://semver.org/spec/v2.0.0.html
 
+## [2.1.3] 2026-08-01
+
+### Fixed
+- a natively-quantized FP4 model whose weights are packed two-to-a-byte no longer reports roughly double its true bits-per-weight, so comparing a quant against such a base no longer reads as though the quant discarded half the precision it actually preserved.
+- a checkpoint whose experts sit on a preserved microscaling grid is no longer labelled affine, which on an FP4-native base is the one word that signals the quant regridded onto a lattice the model was never trained for.
+- the FP-microscaling note no longer reports a checkpoint as preserving a grid it was never compared against, and quant_audit now returns the preservation verdict itself, including the silent case where a native FP4 lattice was requantized onto a uniform one.
+
 ## [2.1.2] 2026-07-30
 
 ### Changed
