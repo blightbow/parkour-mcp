@@ -26,6 +26,7 @@ from parkour_mcp.huggingface import (
     _hf_fast_path,
     _hf_request,
     _HFRateLimit,
+    _histogram_is_storage_scoped,
     _partition_checkpoint_sets,
     _pick_canonical_set,
     _scale_implied_packing,
@@ -877,6 +878,19 @@ class TestScalesReported:
         """
         assert _scales_reported(_QUANT_AFFINE) is True
 
+    def test_scope_test_catches_what_this_one_misses(self):
+        """openai/gpt-oss-120b satisfies this check trivially and shouldn't.
+
+        Its ``U8`` bucket is packed mxfp4 *payload*, not a scale array, so it
+        sits on both sides of the inequality. The histogram is nonetheless
+        parameter-scoped, which only the byte-scope test detects. Both gates
+        are kept because they catch opposite failures: parameter-scoping makes
+        implied bytes overshoot, a missing scale array makes them undershoot.
+        """
+        gpt_oss = {"U8": 118_245_000_000, "BF16": 2_167_000_000}
+        assert _scales_reported(gpt_oss) is True
+        assert _histogram_is_storage_scoped(gpt_oss, int(60.77 * GIB)) is False
+
     def test_fp_grid_abstains_when_scales_are_missing(self):
         report = analyze_quant(_payload(
             safetensors={
@@ -891,6 +905,28 @@ class TestScalesReported:
         assert report.fp_grid is None
         # The number that *is* trustworthy here must still come through.
         assert report.bpw == pytest.approx(4.39, abs=0.02)
+
+    def test_parameter_scoped_histogram_abstains_but_keeps_bpw(self):
+        """openai/gpt-oss-120b end to end: no grid signal, bpw untouched.
+
+        Its fp_grid was 0.982, computed as payload over payload plus BF16.
+        The conclusion "microscaling grid present" is true for this repo, but
+        nothing in that arithmetic established it, so it must abstain. bpw
+        rests on `total`, not on the scale buckets, and is unaffected.
+        """
+        report = analyze_quant(_payload(
+            safetensors={
+                "parameters": {"U8": 118_245_000_000, "BF16": 2_167_000_000},
+                "total": 120_412_000_000,
+            },
+            siblings=[
+                {"rfilename": "model.safetensors.index.json", "size": 100},
+                *_shards("model", 15, int(60.77 * GIB), start=0),
+            ],
+            config={"quantization_config": {"quant_method": "mxfp4"}},
+        ))
+        assert report.fp_grid is None
+        assert report.bpw == pytest.approx(4.34, abs=0.02)
 
 
 class TestDtypeFingerprint:

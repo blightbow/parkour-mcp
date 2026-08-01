@@ -331,6 +331,23 @@ _PACKED_PAYLOAD_RATIO = 1.5
 # reporting the scales at all.
 _MAX_PLAUSIBLE_GROUP = 128
 
+# Byte width of every dtype the Hub reports, for the storage-vs-parameter
+# scope test.  Unknown dtypes fall back to 1, which biases the implied total
+# downward and therefore toward trusting the histogram.
+_DTYPE_BYTES = {
+    "F64": 8, "I64": 8, "U64": 8,
+    "F32": 4, "I32": 4, "U32": 4,
+    "BF16": 2, "F16": 2, "I16": 2, "U16": 2,
+    "F8_E4M3": 1, "F8_E5M2": 1, "F8_E8M0": 1,
+    "I8": 1, "U8": 1, "BOOL": 1,
+}
+
+# Implied-bytes overshoot above which the histogram is counting logical
+# parameters rather than stored elements.  Measured across one model family:
+# storage-scoped repos land at 1.00-1.06, parameter-scoped at 1.83-1.88, so
+# the threshold sits in a wide empty gap.
+_PARAMETER_SCOPED_RATIO = 1.35
+
 _SHARD_INDEX = "model.safetensors.index.json"
 _PIPELINE_INDEX = "model_index.json"
 
@@ -581,6 +598,37 @@ def _scales_reported(dtypes: dict[str, int]) -> bool:
     return scale_like >= payload / _MAX_PLAUSIBLE_GROUP
 
 
+def _histogram_is_storage_scoped(
+    dtypes: dict[str, int], canonical_bytes: int,
+) -> bool:
+    """Does this histogram count stored elements, or logical parameters?
+
+    The sibling failure to ``_scales_reported``, and the more fundamental one.
+    Scale arrays are quantization *metadata*, not model parameters, so a
+    histogram scoped to parameters structurally cannot evidence them: every
+    E8M0-derived signal read off one is unfounded, and the repos where it
+    happens to come out right are right by luck.
+
+    Multiply each count by its dtype width and compare to the checkpoint.  A
+    storage-scoped histogram reconciles, because that is what it is counting.
+    A parameter-scoped one overshoots by the packing factor, since it reports
+    logical weights that are stored several to a container.  Measured across
+    one family: ``DeepSeek-V4-Flash`` 1.000, ``DeepSeek-V4-Flash-8bit`` 1.000,
+    two MLX conversions 1.057, against ``DeepSeek-V4-Flash-0731`` at 1.832 and
+    ``openai/gpt-oss-120b`` at 1.879.
+
+    ``gpt-oss-120b`` is why this test is needed on top of ``_scales_reported``,
+    which waves it through: its ``U8`` bucket is packed mxfp4 payload rather
+    than a scale array, so it sits on both sides of that inequality and
+    satisfies it trivially.  Its ``fp_grid`` of 0.98 was payload over payload
+    plus BF16, and named the right grid for none of the right reasons.
+    """
+    if not dtypes or canonical_bytes <= 0:
+        return False
+    implied = sum(n * _DTYPE_BYTES.get(k, 1) for k, n in dtypes.items())
+    return implied < canonical_bytes * _PARAMETER_SCOPED_RATIO
+
+
 def analyze_quant(payload: dict) -> _QuantReport:
     """Derive every Tier 0 quant signal from the flagship response.
 
@@ -628,20 +676,6 @@ def analyze_quant(payload: dict) -> _QuantReport:
         dtypes, base_relation, tags, report.quant_config_present, qc,
     )
 
-    # fp_grid: share of scale metadata carried as E8M0 rather than BF16/F16.
-    #
-    # E8M0 scales land in two different buckets depending on who wrote the
-    # checkpoint: MLX packs them into a bare `U8` array, while a natively
-    # microscaled release reports a real `F8_E8M0` dtype. Counting only `U8`
-    # scores `deepseek-ai/DeepSeek-V4-Flash` at 0.0 and calls a preserved FP
-    # grid "all-affine", which is the opposite of the truth.
-    #
-    # Gated on the scales actually being reported: a zero built from an absent
-    # bucket is not a measurement, and downstream it becomes a false all-clear.
-    e8m0 = dtypes.get("U8", 0) + dtypes.get("F8_E8M0", 0)
-    scale_like = e8m0 + dtypes.get("BF16", 0) + dtypes.get("F16", 0)
-    if scale_like and _scales_reported(dtypes):
-        report.fp_grid = e8m0 / scale_like
     report.native_format = _classify_native_format(dtypes)
 
     sets = _collapse_precision_variants(_partition_checkpoint_sets(siblings))
@@ -658,6 +692,27 @@ def analyze_quant(payload: dict) -> _QuantReport:
         ]
         report.sharded = canonical.group != "singles"
         report.shard_count = len(canonical.files)
+
+    # fp_grid: share of scale metadata carried as E8M0 rather than BF16/F16.
+    #
+    # E8M0 scales land in two different buckets depending on who wrote the
+    # checkpoint: MLX packs them into a bare `U8` array, while a natively
+    # microscaled release reports a real `F8_E8M0` dtype. Counting only `U8`
+    # scores `deepseek-ai/DeepSeek-V4-Flash` at 0.0 and calls a preserved FP
+    # grid "all-affine", which is the opposite of the truth.
+    #
+    # Computed after the canonical set because it is only a measurement when
+    # the histogram can carry one, and both ways it can fail need the byte
+    # total to detect. A zero read off an absent scale bucket is not evidence
+    # of an absent grid, and downstream it becomes a confident all-clear.
+    e8m0 = dtypes.get("U8", 0) + dtypes.get("F8_E8M0", 0)
+    scale_like = e8m0 + dtypes.get("BF16", 0) + dtypes.get("F16", 0)
+    if (
+        scale_like
+        and _histogram_is_storage_scoped(dtypes, report.canonical_bytes)
+        and _scales_reported(dtypes)
+    ):
+        report.fp_grid = e8m0 / scale_like
 
     report.bpw_suppressed = _suppress_reason(report, dtypes)
     if report.bpw_suppressed is None and report.total_params:

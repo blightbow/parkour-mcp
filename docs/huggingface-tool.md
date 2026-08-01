@@ -516,6 +516,18 @@ already fetches** — zero marginal latency. The expensive ones become opt-in.
   128`: a scale array holds one entry per group, so it cannot fall under payload over the
   coarsest group size anyone uses. This is arithmetic rather than a name match because no
   naming fix reaches it; the data is absent from the response, not mislabelled in it.
+- **`storage_scoped = Σ(count × dtype width) < canonical_bytes × 1.35`** — the deeper form of
+  the same problem, and the one to reach for first. Scale arrays are quantization *metadata*,
+  not model parameters, so a **parameter-scoped** histogram structurally cannot evidence them;
+  every E8M0-derived signal read off one is unfounded, and the repos where it lands correctly
+  are correct by luck. Multiplying counts by dtype width and comparing to the checkpoint
+  separates the two cleanly: `DeepSeek-V4-Flash` 1.000, `DeepSeek-V4-Flash-8bit` 1.000, two MLX
+  conversions 1.057, against `DeepSeek-V4-Flash-0731` 1.832 and `openai/gpt-oss-120b` 1.879.
+  Keep both gates — parameter-scoping makes implied bytes *overshoot*, an omitted scale array
+  makes them *undershoot*. `gpt-oss-120b` is the proof they are not redundant: its `U8` bucket
+  is packed mxfp4 payload rather than scales, so it sits on both sides of the scale-floor
+  inequality and satisfies it trivially, while its `fp_grid` of 0.98 was payload over payload
+  plus BF16.
 - **`packing = (F8_E8M0 × 32) / (I8+U8)`** — logical weights per stored payload byte, the
   independent denominator check of §14.1a precondition 1. Unavailable (not zero) when scales
   share a bucket with the payload.
