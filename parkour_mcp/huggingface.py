@@ -326,6 +326,11 @@ _MX_GROUP_SIZE = 32
 # pairs), so the threshold sits in the middle of a gap nothing lands in.
 _PACKED_PAYLOAD_RATIO = 1.5
 
+# Coarsest group size any real quantization uses.  A scale array cannot be
+# smaller than payload/this, so anything below it means the histogram is not
+# reporting the scales at all.
+_MAX_PLAUSIBLE_GROUP = 128
+
 _SHARD_INDEX = "model.safetensors.index.json"
 _PIPELINE_INDEX = "model_index.json"
 
@@ -544,6 +549,38 @@ def _scale_implied_packing(dtypes: dict[str, int]) -> float | None:
     return (scales * _MX_GROUP_SIZE) / payload
 
 
+def _scales_reported(dtypes: dict[str, int]) -> bool:
+    """Does this histogram account for the checkpoint's scale arrays at all?
+
+    ``fp_grid`` divides E8M0 scale metadata by all scale metadata, so a zero
+    is only meaningful if the scales are *in* the histogram to begin with.  The
+    Hub does not guarantee that.  ``deepseek-ai/DeepSeek-V4-Flash-0731`` reports
+    no ``F8_E8M0`` bucket whatsoever, yet a range-read of any middle shard finds
+    776 E8M0 tensors in it (``layers.0.attn.wkv.scale`` and siblings).  The
+    scales are in the file; the Hub's aggregate simply omits them, while
+    reporting them for ``deepseek-ai/DeepSeek-V4-Flash``, the preview release of
+    the same model in the same format.
+
+    Without this check ``fp_grid`` reads 0.0 off the gap and the audit reports
+    "no native FP grid to preserve" about an FP4 microscaled checkpoint, which
+    is the reassuring direction of wrong: it green-lights precisely the affine
+    regrid the detector exists to warn about.
+
+    The test is arithmetic rather than a name match, because no naming fix can
+    reach this.  A scale array holds one entry per group, so it cannot be
+    smaller than payload / the coarsest group size anyone uses.  Falling under
+    that floor means the scales were never reported.
+    """
+    payload = sum(dtypes.get(d, 0) for d in _CONTAINER_DTYPES)
+    if not payload:
+        return True
+    scale_like = (
+        dtypes.get("U8", 0) + dtypes.get("F8_E8M0", 0)
+        + dtypes.get("BF16", 0) + dtypes.get("F16", 0)
+    )
+    return scale_like >= payload / _MAX_PLAUSIBLE_GROUP
+
+
 def analyze_quant(payload: dict) -> _QuantReport:
     """Derive every Tier 0 quant signal from the flagship response.
 
@@ -598,9 +635,12 @@ def analyze_quant(payload: dict) -> _QuantReport:
     # microscaled release reports a real `F8_E8M0` dtype. Counting only `U8`
     # scores `deepseek-ai/DeepSeek-V4-Flash` at 0.0 and calls a preserved FP
     # grid "all-affine", which is the opposite of the truth.
+    #
+    # Gated on the scales actually being reported: a zero built from an absent
+    # bucket is not a measurement, and downstream it becomes a false all-clear.
     e8m0 = dtypes.get("U8", 0) + dtypes.get("F8_E8M0", 0)
     scale_like = e8m0 + dtypes.get("BF16", 0) + dtypes.get("F16", 0)
-    if scale_like:
+    if scale_like and _scales_reported(dtypes):
         report.fp_grid = e8m0 / scale_like
     report.native_format = _classify_native_format(dtypes)
 
@@ -1252,7 +1292,14 @@ async def _run_quant_audit(
     # The grid-preservation verdict this action exists to buy.  Both grids are
     # in hand here and nowhere else in the codebase, so this is the only place
     # the comparative claim can honestly be made.
-    if base.fp_grid is not None and report.fp_grid is not None:
+    if base.is_quant and base.fp_grid is None:
+        lines.append(
+            "grid verdict unavailable: the Hub's dtype histogram for the base "
+            "reports no scale array large enough to be its own, so whether it "
+            "carries an FP microscaling grid cannot be read from metadata; "
+            "range-read a middle shard header to settle it",
+        )
+    elif base.fp_grid is not None and report.fp_grid is not None:
         base_mx, repo_mx = base.fp_grid > 0.5, report.fp_grid > 0.5
         if base_mx and repo_mx:
             lines.append(

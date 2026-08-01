@@ -508,6 +508,14 @@ already fetches** — zero marginal latency. The expensive ones become opt-in.
   (FP-microscaling). Both buckets, not just `U8`: MLX packs E8M0 scales into a bare `U8` array
   while a natively microscaled release reports a real `F8_E8M0` dtype, and counting only `U8`
   scores `deepseek-ai/DeepSeek-V4-Flash` at 0.0 and calls a preserved FP grid "all-affine".
+  **Undefined, not 0.0, when the scales are not in the histogram.** The Hub does not guarantee
+  it reports them: `deepseek-ai/DeepSeek-V4-Flash-0731` publishes *no* `F8_E8M0` bucket, yet a
+  range-read of any middle shard finds 776 E8M0 tensors in it (`layers.0.attn.wkv.scale` and
+  siblings) — the scales are in the file, the aggregate omits them, and the preview release of
+  the same model in the same format reports them normally. Gate on `scale_like ≥ payload /
+  128`: a scale array holds one entry per group, so it cannot fall under payload over the
+  coarsest group size anyone uses. This is arithmetic rather than a name match because no
+  naming fix reaches it; the data is absent from the response, not mislabelled in it.
 - **`packing = (F8_E8M0 × 32) / (I8+U8)`** — logical weights per stored payload byte, the
   independent denominator check of §14.1a precondition 1. Unavailable (not zero) when scales
   share a bucket with the payload.
@@ -755,7 +763,7 @@ whitelisted field.
 | 1 | `bpw` vs declared `bits` | config+safetensors | large gap ⇒ **mixed-precision** (informational, not bad — see 14.4) |
 | 2 | `bpw ≥ ~8.4` | derived | at/above 8-bit storage; **upcast bloat** if the base is FP4/INT4-native. **Requires all four preconditions (§14.1a); gate 3 is specifically this detector's.** |
 | 3 | **`fp_grid` high (U8/E8M0 present)** | dtype fingerprint | an FP-microscaling grid is **present in this repo** (mxfp4/mxfp8 scales). **Not a preservation verdict:** whether it matches the base's grid needs the base fetched, so the comparative claim belongs to Tier 1 (§14.5) and nowhere else. Asserting "preserved" from this signal alone fired on vendor *base* repos about their own native format, and fired beside Tier 1's own "declares no base model, so there is no native format to compare against" in the same response. |
-| 4 | **`fp_grid` ≈ 0 + U32 bulk** | dtype fingerprint | **all-affine**: scales are float, so *if* the base carried an FP grid it was regridded. Same hedge as #3, for the same reason. |
+| 4 | **`fp_grid` ≈ 0 + U32 bulk** | dtype fingerprint | **all-affine**: scales are float, so *if* the base carried an FP grid it was regridded. Same hedge as #3, for the same reason. **Only when the scales were reported at all** (§14.1): a 0 read off an absent bucket is not a measurement, and on the Tier 1 side it becomes a false all-clear that green-lights the very regrid this signal exists to flag. `fp_grid` is `None` there and the audit says it cannot tell. |
 | 5 | **`quantization_config` present but `{}`** (NOT absent — §14.1b) | config expand | **gatekeeping tell** — declares a quantization block with no `bits`, so stock loaders cannot construct quantized layers. Absent key means unquantized: stay silent. |
 | 6 | this repo's *own* native format | dtype fingerprint | `I8`+`F8_E8M0` ⇒ FP4-packed; `F8_E4M3` ⇒ FP8-native; `U32`+`BF16` (no E8M0 bucket) ⇒ affine, since float scales are affine's signature. **`U32`+`U8` does NOT resolve to a mode:** pure mxfp4/mxfp8 and an affine/mx hybrid emit identical buckets, and an affine share small enough to hide in BF16 leaves no trace. Measured on one family, `Vontra/DeepSeek-V4-Flash-0731-MXFP4-MLX` (no affine module anywhere) scores `fp_grid` 0.93 while `mlx-community/DeepSeek-V4-Flash-8bit` (affine 8-bit backbone under mxfp4 experts) scores 0.97, so the ordering runs backwards and no threshold recovers it. Name the grid and leave `mode` to `config.json`. Guessing wrong is not cosmetic: on an FP4-native base, "affine" is the string that signals a destructive regrid. |
 | 7 | `gated` / `private` / `disabled` | expand | 401 dead-end before it happens |

@@ -29,6 +29,7 @@ from parkour_mcp.huggingface import (
     _partition_checkpoint_sets,
     _pick_canonical_set,
     _scale_implied_packing,
+    _scales_reported,
     _split_repo_path,
     _split_repo_rev,
     analyze_quant,
@@ -845,6 +846,53 @@ class TestNativeFormatClassification:
         ) == "affine"
 
 
+class TestScalesReported:
+    """A zero ``fp_grid`` is only a measurement if the scales were reported.
+
+    ``deepseek-ai/DeepSeek-V4-Flash-0731`` publishes no ``F8_E8M0`` bucket at
+    all, yet a range-read of any middle shard finds 776 E8M0 tensors in it
+    (``layers.0.attn.wkv.scale`` and siblings).  The Hub's aggregate omits
+    them, while reporting them for ``deepseek-ai/DeepSeek-V4-Flash``, the
+    preview release of the same model in the same format.
+
+    Reading 0.0 off that gap and calling it "no native FP grid to preserve"
+    is the reassuring direction of wrong: it green-lights the affine regrid
+    the detector exists to warn about.
+    """
+
+    def test_missing_scale_bucket_is_detected(self):
+        """0731's real histogram: 296B I8 payload, 1.5B BF16, no E8M0."""
+        assert _scales_reported(_BASE_FP4_NO_SCALES) is False
+
+    def test_reported_scales_pass(self):
+        """The preview repo carries its E8M0 bucket, so 0.86 is a real value."""
+        assert _scales_reported(_BASE_FP4) is True
+
+    def test_affine_float_scales_pass(self):
+        """Affine keeps scales in BF16, so a true 0.0 must still be emitted.
+
+        Guards the check from over-firing: an all-affine repo genuinely has
+        no E8M0 grid, and suppressing that verdict would lose the damage
+        signal this whole detector is for.
+        """
+        assert _scales_reported(_QUANT_AFFINE) is True
+
+    def test_fp_grid_abstains_when_scales_are_missing(self):
+        report = analyze_quant(_payload(
+            safetensors={
+                "parameters": _BASE_FP4_NO_SCALES, "total": 304_180_418_494,
+            },
+            siblings=[
+                {"rfilename": "model.safetensors.index.json", "size": 100},
+                *_shards("model", 48, int(155.43 * GIB)),
+            ],
+            config={"quantization_config": {"quant_method": "fp8"}},
+        ))
+        assert report.fp_grid is None
+        # The number that *is* trustworthy here must still come through.
+        assert report.bpw == pytest.approx(4.39, abs=0.02)
+
+
 class TestDtypeFingerprint:
     def test_drops_trivial_housekeeping_buckets(self):
         out = _format_dtype_fingerprint({
@@ -1170,9 +1218,20 @@ _BASE_FP4 = {
     "F8_E4M3": 6_023_020_544,
     "BF16": 1_415_259_264,
 }
+# deepseek-ai/DeepSeek-V4-Flash-0731: the same vendor and the same FP4+FP8
+# format, but the Hub published no F8_E8M0 bucket for it.  The scales are in
+# the file (776 E8M0 tensors per shard by range-read); only the aggregate
+# omits them.
+_BASE_FP4_NO_SCALES = {
+    "I8": 296_352_743_424,
+    "F8_E4M3": 6_304_038_912,
+    "BF16": 1_483_567_488,
+    "F32": 37_741_630,
+    "I64": 2_327_040,
+}
 
 
-def _mock_audit_pair(quant_dtypes: dict) -> None:
+def _mock_audit_pair(quant_dtypes: dict, base_dtypes: dict = _BASE_FP4) -> None:
     """Mock a quant repo declaring lineage plus the FP4-native base it names."""
     respx.get("https://huggingface.co/api/models/org/quant").mock(
         return_value=httpx.Response(200, json=_payload(
@@ -1193,7 +1252,7 @@ def _mock_audit_pair(quant_dtypes: dict) -> None:
     respx.get("https://huggingface.co/api/models/org/base").mock(
         return_value=httpx.Response(200, json=_payload(
             id="org/base",
-            safetensors={"parameters": _BASE_FP4, "total": 158_069_433_298},
+            safetensors={"parameters": base_dtypes, "total": 158_069_433_298},
             siblings=[
                 {"rfilename": "model.safetensors.index.json", "size": 100},
                 *_shards("model", 46, int(148.66 * GIB)),
@@ -1226,6 +1285,21 @@ class TestQuantAuditGridVerdict:
         _mock_audit_pair(_QUANT_AFFINE)
         out = await huggingface("model", "org/quant", quant_audit=True)
         assert "grid NOT preserved" in out
+
+    @respx.mock
+    async def test_base_with_unreported_scales_declines_to_rule(self):
+        """A base whose scale bucket the Hub omitted yields no verdict.
+
+        Reported as a defect from real use: the audit told a caller "no native
+        FP grid to preserve" about deepseek-ai/DeepSeek-V4-Flash-0731, whose
+        shards carry 776 E8M0 tensors each.  That is the reassuring direction
+        of wrong, so it must say it cannot tell rather than clear the quant.
+        """
+        _mock_audit_pair(_QUANT_AFFINE, base_dtypes=_BASE_FP4_NO_SCALES)
+        out = await huggingface("model", "org/quant", quant_audit=True)
+        assert "grid verdict unavailable" in out
+        assert "no native FP grid to preserve" not in out
+        assert "grid NOT preserved" not in out
 
 
 def test_presplit_failure_skips_cache():
