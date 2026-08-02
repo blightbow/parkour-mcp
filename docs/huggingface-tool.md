@@ -569,6 +569,25 @@ alone is therefore **not** the signal; ratio 1.0 *with U32* is.
 out `audio_tokenizer/`, oQ4's canonical number is `28.66`. Both are suppressed; the table quotes
 the raw arithmetic to show what an unguarded implementation would print.)*
 
+**`-of-N` carries two meanings, and only one is a rival set.** It is a global shard index when
+every member of the group shares one stem (`model-00001-of-00048`, `model-00002-of-00048`, …).
+Where the stems differ it marks *individual* weights that each needed splitting, and those files
+belong with the same directory's unsharded ones. `XiaomiMiMo/MiMo-V2-Flash-Base` is the case: 98
+top-level singles beside 94 files under **47 distinct stems**
+(`model_10_linear_fc1-00001-of-00002` and friends), which are two halves of one 313 GB checkpoint.
+Ranking the split half as a duplicate discards the other 111 GB and reports **5.21 bpw against a
+true 8.08**, understated 36% on a vendor base repo.
+
+Stem-counting keeps genuine duplicates apart, since both real cases carry one stem per group:
+`openai/gpt-oss-120b` (`of-14` top-level against `of-7` under `original/`) and
+`mistralai/Mistral-Small-3.2-24B-Instruct-2506` (`of-10` against `consolidated.safetensors`).
+
+This partition is load-bearing beyond `bpw`. §14.1's `storage_scoped` gate divides implied bytes
+by `canonical_bytes`, so a canonical pick covering only part of what the histogram counts reads as
+parameter-scoped: MiMo landed at 1.5504 against a true 1.0000 and had its grid signal suppressed
+for a reason that had nothing to do with scoping. Genuine duplicates do not cause this, because
+the histogram counts one copy.
+
 **Residual gap, now closed — sub-byte packing in a container that is not `U32`.** The `U32` key
 is sound but not exhaustive: `gpt-oss-120b` proves HF also packs into `U8`, and there it happened
 to unpack. The first close for this was a cross-check on the declared width (`bits` **survives the

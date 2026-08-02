@@ -309,6 +309,13 @@ def _safe_identifier(value: Any) -> str | None:
 # of-N group" is.
 _SHARD_RE = re.compile(r"-(\d+)-of-(\d+)\.safetensors$")
 
+# Same shape, capturing the stem.  A group's stem count is what separates a
+# global shard index from individually split weights; see
+# `_partition_checkpoint_sets`.
+_SHARD_STEM_RE = re.compile(
+    r"^(?P<stem>.+)-(?P<index>\d+)-of-(?P<total>\d+)\.safetensors$",
+)
+
 # A ".fp16"/".fp32"/".bf16" infix marks a precision variant of a sibling file,
 # a same-directory duplicate class distinct from `consolidated`.
 _PRECISION_RE = re.compile(r"\.(fp16|fp32|bf16)\.safetensors$", re.IGNORECASE)
@@ -366,11 +373,16 @@ class _CheckpointSet:
     @property
     def label(self) -> str:
         where = self.directory or "top-level"
-        if self.group == "singles":
-            if len(self.files) == 1:
-                return f"{where}/{self.files[0]['rfilename'].rsplit('/', 1)[-1]}"
-            return f"{where} ({len(self.files)} unsharded files)"
-        return f"{where} ({len(self.files)} files, {self.group})"
+        if self.group != "singles":
+            return f"{where} ({len(self.files)} files, {self.group})"
+        if len(self.files) == 1:
+            return f"{where}/{self.files[0]['rfilename'].rsplit('/', 1)[-1]}"
+        # The bucket also holds individually split weights folded in by
+        # `_partition_checkpoint_sets`, so "unsharded" only fits when none of
+        # its members carries an `-of-N` suffix.
+        if any(_SHARD_RE.search(f.get("rfilename", "")) for f in self.files):
+            return f"{where} ({len(self.files)} per-file weights)"
+        return f"{where} ({len(self.files)} unsharded files)"
 
 
 def _partition_checkpoint_sets(siblings: list[dict]) -> list[_CheckpointSet]:
@@ -387,20 +399,46 @@ def _partition_checkpoint_sets(siblings: list[dict]) -> list[_CheckpointSet]:
     make every file its own "checkpoint", the canonical pick lands on a 1.11
     GiB fragment, and bpw reports 0.03 against a true 8.13.  That repo passes
     the diffusers pipeline gate cleanly, so nothing else catches it.
+
+    ``-of-N`` carries two different meanings and only one of them is a rival
+    checkpoint.  It is a global shard index when every member shares one stem
+    (``model-00001-of-00048``, ``model-00002-of-00048``, ...).  Where the stems
+    differ it marks *individual* weights that each needed splitting, and those
+    files are siblings of the directory's unsharded ones rather than a
+    competing set.  ``XiaomiMiMo/MiMo-V2-Flash-Base`` is the case: 98 top-level
+    singles beside 94 files under 47 distinct stems
+    (``model_10_linear_fc1-00001-of-00002`` and friends), which are the two
+    halves of one 313 GB checkpoint.  Treating the split half as a duplicate
+    discards the other 111 GB, understating bpw by 36% (5.21 against a true
+    8.08) and leaving the histogram reconciling at 1.55 against a set covering
+    65% of what it counts.
+
+    Stem-counting keeps genuine duplicates apart: ``openai/gpt-oss-120b``
+    (``of-14`` top-level against ``of-7`` under ``original/``) and
+    ``mistralai/Mistral-Small-3.2-24B-Instruct-2506`` (``of-10`` against
+    ``consolidated.safetensors``) each carry one stem per group.
     """
-    grouped: dict[tuple[str, str], _CheckpointSet] = {}
+    staged: dict[tuple[str, str], list[tuple[dict, str]]] = {}
     for sibling in siblings:
         name = sibling.get("rfilename", "")
         if not name.endswith(".safetensors"):
             continue
-        directory = name.rsplit("/", 1)[0] if "/" in name else ""
-        match = _SHARD_RE.search(name)
-        group = f"of-{int(match.group(2))}" if match else "singles"
-        key = (directory, group)
-        if key not in grouped:
-            grouped[key] = _CheckpointSet(directory=directory, group=group)
-        grouped[key].files.append(sibling)
-    return list(grouped.values())
+        directory, _, basename = name.rpartition("/")
+        match = _SHARD_STEM_RE.match(basename)
+        group = f"of-{int(match.group('total'))}" if match else "singles"
+        stem = match.group("stem") if match else basename
+        staged.setdefault((directory, group), []).append((sibling, stem))
+
+    merged: dict[tuple[str, str], list[dict]] = {}
+    for (directory, group), members in staged.items():
+        multi_stem = len({stem for _, stem in members}) > 1
+        target = "singles" if group != "singles" and multi_stem else group
+        merged.setdefault((directory, target), []).extend(f for f, _ in members)
+
+    return [
+        _CheckpointSet(directory=directory, group=group, files=files)
+        for (directory, group), files in merged.items()
+    ]
 
 
 def _collapse_precision_variants(sets: list[_CheckpointSet]) -> list[_CheckpointSet]:
@@ -654,17 +692,17 @@ def _histogram_is_storage_scoped(
     ``gpt-oss-120b`` satisfies trivially: its ``U8`` bucket is packed mxfp4
     payload, not a scale array, so it sits on both sides of that inequality.
 
-    **Known limit:** the numerator covers every ``.safetensors`` in the repo
-    while ``canonical_bytes`` covers one checkpoint set, so the ratio tracks
-    canonical-set coverage as much as scoping and fires on any storage-scoped
-    repo whose canonical pick drops more than ~26% of the repo.
-    ``XiaomiMiMo/MiMo-V2-Flash-Base`` reconciles at 1.0000 against all
-    ``.safetensors`` and is suppressed here at 1.5504, because
-    ``_pick_canonical_set`` treats its 98 unsharded files as a duplicate of
-    the 94 sharded ones rather than the complementary half they are.  Dividing
-    by ``all_safetensors_bytes`` instead trades this for a miss on
-    ``gpt-oss-120b``, whose two sets *are* duplicates; the distinction lives in
-    the set partition, not here.
+    **Scope:** the numerator covers every ``.safetensors`` the histogram counts
+    while ``canonical_bytes`` covers one checkpoint set, so the ratio only
+    means "scoping" while the canonical set is the whole of what the histogram
+    describes.  A repo whose canonical pick drops a real part of the
+    checkpoint reads as parameter-scoped at any coverage below ~74%, so that
+    partition is load-bearing for this gate and not merely for ``bpw``.
+    Genuine duplicates are fine, since the histogram counts one copy: on
+    ``gpt-oss-120b`` the ``original/`` set is excluded and the ratio still
+    reports the parameter-scoping correctly.  Splitting one checkpoint across
+    two sets is what breaks it, which is why ``_partition_checkpoint_sets``
+    folds individually split weights in rather than ranking them.
     """
     if not dtypes or canonical_bytes <= 0:
         return False

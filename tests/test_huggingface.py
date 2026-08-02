@@ -290,8 +290,62 @@ class TestPrecondition1DenominatorValidity:
 # §14.1a precondition 2 — numerator validity (checkpoint-set partition)
 # ---------------------------------------------------------------------------
 
+def _split_weights(stems: int, per_stem_bytes: int) -> list[dict]:
+    """Individually split weights: many stems, each cut `-00001-of-00002`."""
+    return [
+        {
+            "rfilename": f"model_{i}_linear_fc1-{p:05d}-of-00002.safetensors",
+            "size": per_stem_bytes // 2,
+        }
+        for i in range(stems) for p in (1, 2)
+    ]
+
+
 class TestPrecondition2CheckpointSets:
     """Summing every `.safetensors` over-counts repos with duplicate sets."""
+
+    def test_multi_stem_of_n_is_not_a_rival_set(self):
+        """XiaomiMiMo/MiMo-V2-Flash-Base: `-of-N` under 47 distinct stems.
+
+        Those are individual weights that each needed splitting, not a global
+        shard index, so they are siblings of the directory's unsharded files.
+        Treating them as a competing set discards the other 111 GB, which
+        understates bpw by 36% and leaves the histogram reconciling against a
+        set covering 65% of what it counts.
+        """
+        siblings = [
+            *[{"rfilename": f"model_{i}.safetensors", "size": 10 ** 9}
+              for i in range(98)],
+            *_split_weights(47, 2 * 10 ** 9),
+        ]
+        sets = _partition_checkpoint_sets(siblings)
+        assert len(sets) == 1
+        assert len(sets[0].files) == 192
+        assert "per-file weights" in sets[0].label
+
+    def test_single_stem_of_n_stays_a_rival_set(self):
+        """mistralai ships consolidated.safetensors beside `of-10` shards.
+
+        One stem across the group means `-of-N` is a real shard index, so the
+        unsharded blob remains a duplicate rather than being folded in.
+        """
+        siblings = [
+            {"rfilename": "consolidated.safetensors", "size": 48 * 10 ** 9},
+            *_shards("model", 10, 48 * 10 ** 9),
+        ]
+        sets = _partition_checkpoint_sets(siblings)
+        assert {s.group for s in sets} == {"singles", "of-10"}
+
+    def test_split_weights_stay_within_their_directory(self):
+        """Folding must not reach across directories and merge a duplicate."""
+        siblings = [
+            *[{"rfilename": f"model_{i}.safetensors", "size": 10 ** 9}
+              for i in range(4)],
+            *[{"rfilename": f"original/{f['rfilename']}", "size": f["size"]}
+              for f in _split_weights(3, 2 * 10 ** 9)],
+        ]
+        sets = _partition_checkpoint_sets(siblings)
+        assert {s.directory for s in sets} == {"", "original"}
 
     def test_resharded_duplicate_in_subdirectory(self):
         """openai/gpt-oss-120b ships the same weights re-sharded under original/.
