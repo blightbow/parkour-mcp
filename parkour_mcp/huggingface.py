@@ -333,11 +333,6 @@ _MX_GROUP_SIZE = 32
 # pairs), so the threshold sits in the middle of a gap nothing lands in.
 _PACKED_PAYLOAD_RATIO = 1.5
 
-# Coarsest group size any real quantization uses.  A scale array cannot be
-# smaller than payload/this, so anything below it means the histogram is not
-# reporting the scales at all.
-_MAX_PLAUSIBLE_GROUP = 128
-
 # Byte width of every dtype the Hub reports, for the storage-vs-parameter
 # scope test.  Unknown dtypes fall back to 1, which biases the implied total
 # downward and therefore toward trusting the histogram.
@@ -630,46 +625,6 @@ def _declared_bits_from_groups(qc: dict) -> int | None:
     return min(widths) if widths else None
 
 
-def _scales_reported(dtypes: dict[str, int]) -> bool:
-    """Does this histogram account for the checkpoint's scale arrays at all?
-
-    ``fp_grid`` divides E8M0 scale metadata by all scale metadata, so a zero
-    is only meaningful if the scales are *in* the histogram to begin with.  The
-    Hub does not guarantee that.  ``deepseek-ai/DeepSeek-V4-Flash-0731`` reports
-    no ``F8_E8M0`` bucket whatsoever, yet a range-read of any middle shard finds
-    776 E8M0 tensors in it (``layers.0.attn.wkv.scale`` and siblings).  The
-    scales are in the file; the Hub's aggregate simply omits them, while
-    reporting them for ``deepseek-ai/DeepSeek-V4-Flash``, the preview release of
-    the same model in the same format.
-
-    A zero read off that gap is not evidence of an absent grid, and downstream
-    it becomes a confident all-clear that green-lights the affine regrid this
-    detector exists to warn about.
-
-    The test is arithmetic rather than a name match, because the data is absent
-    from the response rather than mislabelled in it.  A scale array holds one
-    entry per group, so it cannot fall below payload over the coarsest group
-    size in use.
-
-    **Known limit:** ``_MAX_PLAUSIBLE_GROUP`` assumes group-wise quantization.
-    Per-channel schemes put the group size at ``in_features`` and per-tensor
-    schemes at the whole tensor, so both fall under the floor with complete
-    histograms.  ``ixim/Qwen-Image-2512-Quanto-INT8-Full`` is per-channel at an
-    effective group of ~1,835 and is suppressed here incorrectly.
-    ``_histogram_is_storage_scoped`` is the load-bearing gate; this one is
-    decisive only where that check passes and the scale array is genuinely
-    unreported.
-    """
-    payload = sum(dtypes.get(d, 0) for d in _CONTAINER_DTYPES)
-    if not payload:
-        return True
-    scale_like = (
-        dtypes.get("U8", 0) + dtypes.get("F8_E8M0", 0)
-        + dtypes.get("BF16", 0) + dtypes.get("F16", 0)
-    )
-    return scale_like >= payload / _MAX_PLAUSIBLE_GROUP
-
-
 def _histogram_is_storage_scoped(
     dtypes: dict[str, int], canonical_bytes: int,
 ) -> bool:
@@ -687,10 +642,6 @@ def _histogram_is_storage_scoped(
     family: ``DeepSeek-V4-Flash`` 1.000, ``DeepSeek-V4-Flash-8bit`` 1.000, two
     MLX conversions 1.057, against ``DeepSeek-V4-Flash-0731`` at 1.832 and
     ``openai/gpt-oss-120b`` at 1.879.
-
-    This is the load-bearing gate rather than ``_scales_reported``, which
-    ``gpt-oss-120b`` satisfies trivially: its ``U8`` bucket is packed mxfp4
-    payload, not a scale array, so it sits on both sides of that inequality.
 
     **Scope:** the numerator covers every ``.safetensors`` the histogram counts
     while ``canonical_bytes`` covers one checkpoint set, so the ratio only
@@ -931,7 +882,6 @@ def analyze_quant(payload: dict) -> _QuantReport:
         scale_like
         and not u8_is_sole_basis
         and _histogram_is_storage_scoped(dtypes, report.canonical_bytes)
-        and _scales_reported(dtypes)
     ):
         report.fp_grid = e8m0 / scale_like
 

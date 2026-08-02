@@ -33,7 +33,6 @@ from parkour_mcp.huggingface import (
     _pick_canonical_set,
     _quant_block,
     _scale_implied_packing,
-    _scales_reported,
     _split_repo_path,
     _split_repo_rev,
     analyze_quant,
@@ -992,8 +991,8 @@ class TestDeclaredQuantBlock:
         assert _declared_grid(block) == ["mx-e8m0", "nvfp4-e4m3"]
 
 
-class TestScalesReported:
-    """A zero ``fp_grid`` is only a measurement if the scales were reported.
+class TestHistogramScope:
+    """A zero ``fp_grid`` is only a measurement if the histogram can carry one.
 
     ``deepseek-ai/DeepSeek-V4-Flash-0731`` publishes no ``F8_E8M0`` bucket at
     all, yet a range-read of any middle shard finds 776 E8M0 tensors in it
@@ -1006,34 +1005,35 @@ class TestScalesReported:
     the detector exists to warn about.
     """
 
-    def test_missing_scale_bucket_is_detected(self):
-        """0731's real histogram: 296B I8 payload, 1.5B BF16, no E8M0."""
-        assert _scales_reported(_BASE_FP4_NO_SCALES) is False
+    def test_parameter_scoped_repo_is_detected(self):
+        """0731's real histogram: I8 counts logical weights, scales omitted."""
+        assert _histogram_is_storage_scoped(
+            _BASE_FP4_NO_SCALES, int(155.43 * GIB),
+        ) is False
 
-    def test_reported_scales_pass(self):
-        """The preview repo carries its E8M0 bucket, so 0.86 is a real value."""
-        assert _scales_reported(_BASE_FP4) is True
+    def test_storage_scoped_repo_passes(self):
+        """The preview repo reconciles at 1.000, so 0.86 is a real value."""
+        assert _histogram_is_storage_scoped(_BASE_FP4, int(148.66 * GIB)) is True
 
-    def test_affine_float_scales_pass(self):
-        """Affine keeps scales in BF16, so a true 0.0 must still be emitted.
+    def test_per_channel_scales_are_not_penalised(self):
+        """ixim/Qwen-Image-2512-Quanto-INT8-Full: per-channel INT8.
 
-        Guards the check from over-firing: an all-affine repo genuinely has
-        no E8M0 grid, and suppressing that verdict would lose the damage
-        signal this whole detector is for.
+        One scale per output channel puts the effective group at ``in_features``
+        (~1,835 here), far above any group-wise width. Its histogram is complete
+        and storage-scoped, so its fp_grid of 0.0 is a real measurement and must
+        survive.
         """
-        assert _scales_reported(_QUANT_AFFINE) is True
+        quanto = {"I8": 20_424_818_688, "BF16": 11_130_496}
+        assert _histogram_is_storage_scoped(quanto, 20_436_000_000) is True
 
-    def test_scope_test_catches_what_this_one_misses(self):
-        """openai/gpt-oss-120b satisfies this check trivially and shouldn't.
+    def test_packed_u8_payload_is_parameter_scoped(self):
+        """openai/gpt-oss-120b's U8 bucket is packed mxfp4 payload.
 
-        Its ``U8`` bucket is packed mxfp4 *payload*, not a scale array, so it
-        sits on both sides of the inequality. The histogram is nonetheless
-        parameter-scoped, which only the byte-scope test detects. Both gates
-        are kept because they catch opposite failures: parameter-scoping makes
-        implied bytes overshoot, a missing scale array makes them undershoot.
+        Its element counts are logical weights, so implied bytes overshoot the
+        checkpoint by the packing factor and no scale-derived signal off this
+        histogram is founded.
         """
         gpt_oss = {"U8": 118_245_000_000, "BF16": 2_167_000_000}
-        assert _scales_reported(gpt_oss) is True
         assert _histogram_is_storage_scoped(gpt_oss, int(60.77 * GIB)) is False
 
     def test_fp_grid_abstains_when_scales_are_missing(self):
