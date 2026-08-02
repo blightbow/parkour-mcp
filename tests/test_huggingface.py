@@ -164,11 +164,11 @@ class TestPrecondition1DenominatorValidity:
         compressed-tensors and modelopt nest widths under
         `config_groups[*].weights.num_bits`, which survives the Hub's config
         whitelist. Without reading it `declared_bits` is None, the
-        declared-width cross-check degrades silently, and this 4-bit release
-        reported 10.03 bpw against a true ~5.4 and drew the `bpw >= 8.4`
+        declared-width cross-check has no ceiling, and this 4-bit release
+        measures 10.03 bpw against a true ~5.4 and draws the `bpw >= 8.4`
         upcast-bloat note against its own vendor.
 
-        The minimum width is the right ceiling: tested against the group_0 8,
+        The minimum width is the right ceiling: tested against group_0's 8,
         the bogus 10.03 passes.
         """
         report = analyze_quant(_payload(
@@ -1380,9 +1380,8 @@ _QUANT_AFFINE = {"U32": 39_628_000_000, "BF16": 10_465_000_000}
 # deepseek-ai/DeepSeek-V4-Flash shape: FP4 experts over an FP8 backbone.
 # The F32 and I64 housekeeping buckets are not filler: with them the counts sum
 # to exactly `total`, which is precondition 1's trigger and the reason this
-# base's own bpw is suppressed. Omitting them left sigma 38.5M short of total,
-# so the guard never fired and the fixture quietly modelled a repo that does
-# not exist.
+# base's own bpw is suppressed. Drop them and sigma falls 38.5M short, the
+# guard stays silent, and the fixture models a repo that does not exist.
 _BASE_FP4 = {
     "I8": 141_733_920_768,
     "F8_E8M0": 8_858_737_664,
@@ -1556,10 +1555,10 @@ class TestQuantAuditGridVerdict:
     async def test_no_lineage_still_reports_the_repos_own_map(self):
         """Jundot/DeepSeek-V4-Flash-0731-oQ4e-mtp declares no base_model.
 
-        The audit used to return one line saying there was nothing to compare
-        against, discarding the repo's own declared block. That block names
-        147 affine modules, which is most of what a caller comparing sibling
-        quants wanted; only the other side of the comparison is missing.
+        Without this the audit returns one line saying there is nothing to
+        compare against and discards the repo's own declared block. That block
+        names 147 affine modules, which is most of what a caller comparing
+        sibling quants needs; only the other side is missing.
         """
         respx.get("https://huggingface.co/api/models/org/solo").mock(
             return_value=httpx.Response(200, json=_payload(
@@ -1587,10 +1586,10 @@ class TestQuantAuditGridVerdict:
         """A base count rejected as its own denominator cannot serve as one.
 
         deepseek-ai/DeepSeek-V4-Flash reports 158.1B storage elements against
-        ~291B logical weights, so precondition 1 suppresses its own bpw. Reusing
-        it for a child put NVFP4 conversions at 8.52 bpw against a true ~4.4,
-        reintroducing on the child the exact inflation the precondition exists
-        to stop on the parent.
+        ~291B logical weights, so precondition 1 suppresses its own bpw.
+        Reusing it for a child puts NVFP4 conversions at 8.52 bpw against a
+        true ~4.4, inflating the child by the same factor the precondition
+        catches on the parent.
         """
         # The quant's own bpw must be suppressed for the substitution branch to
         # be reachable at all: U32 present with total == sigma is precondition

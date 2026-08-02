@@ -569,22 +569,17 @@ def _scale_implied_packing(dtypes: dict[str, int]) -> float | None:
 def _declared_bits_from_groups(qc: dict) -> int | None:
     """Recover a declared width from a ``config_groups`` quantization block.
 
-    compressed-tensors and modelopt do not carry a top-level ``bits``; they
-    nest per-group widths under ``config_groups[*].weights.num_bits``, and that
-    key **survives the Hub's config whitelist** (verified on
-    ``nvidia/Qwen3.6-35B-A3B-NVFP4``), so this costs nothing.
+    compressed-tensors and modelopt carry no top-level ``bits``; they nest
+    per-group widths under ``config_groups[*].weights.num_bits``.  That key
+    survives the Hub's config whitelist (``nvidia/Qwen3.6-35B-A3B-NVFP4``), so
+    reading it costs no extra request.  Without it ``declared_bits`` is None
+    across every such repo and the declared-width cross-check in
+    ``analyze_quant`` has no ceiling to test a measured bpw against.
 
-    Without it ``declared_bits`` is None on every such repo and the
-    declared-width cross-check in ``analyze_quant`` degrades silently, exactly
-    as designed but on far more repos than intended.  That is how a 4-bit
-    NVFP4 release reported 10.03 bpw against a true ~5.4 and drew the
-    ``bpw >= 8.4`` upcast-bloat note: the Hub's ``total`` there is neither the
-    stored-element sum nor a logical weight count, and nothing else caught it.
-
-    Takes the **minimum** width across groups.  The cross-check asks whether
-    the measured bpw is beyond what any declared width could explain, so a
-    mixed 8/4 release must be tested against 4: taking the maximum would raise
-    the ceiling to 16 and wave the bogus figure straight through.
+    Takes the **minimum** width across groups.  The cross-check asks whether a
+    measured bpw exceeds what any declared width could explain, so a mixed 8/4
+    release is tested against 4; the maximum would raise the ceiling to 16 and
+    admit figures no group accounts for.
     """
     groups = qc.get("config_groups")
     if not isinstance(groups, dict):
@@ -609,15 +604,23 @@ def _scales_reported(dtypes: dict[str, int]) -> bool:
     reporting them for ``deepseek-ai/DeepSeek-V4-Flash``, the preview release of
     the same model in the same format.
 
-    Without this check ``fp_grid`` reads 0.0 off the gap and the audit reports
-    "no native FP grid to preserve" about an FP4 microscaled checkpoint, which
-    is the reassuring direction of wrong: it green-lights precisely the affine
-    regrid the detector exists to warn about.
+    A zero read off that gap is not evidence of an absent grid, and downstream
+    it becomes a confident all-clear that green-lights the affine regrid this
+    detector exists to warn about.
 
-    The test is arithmetic rather than a name match, because no naming fix can
-    reach this.  A scale array holds one entry per group, so it cannot be
-    smaller than payload / the coarsest group size anyone uses.  Falling under
-    that floor means the scales were never reported.
+    The test is arithmetic rather than a name match, because the data is absent
+    from the response rather than mislabelled in it.  A scale array holds one
+    entry per group, so it cannot fall below payload over the coarsest group
+    size in use.
+
+    **Known limit:** ``_MAX_PLAUSIBLE_GROUP`` assumes group-wise quantization.
+    Per-channel schemes put the group size at ``in_features`` and per-tensor
+    schemes at the whole tensor, so both fall under the floor with complete
+    histograms.  ``ixim/Qwen-Image-2512-Quanto-INT8-Full`` is per-channel at an
+    effective group of ~1,835 and is suppressed here incorrectly.
+    ``_histogram_is_storage_scoped`` is the load-bearing gate; this one is
+    decisive only where that check passes and the scale array is genuinely
+    unreported.
     """
     payload = sum(dtypes.get(d, 0) for d in _CONTAINER_DTYPES)
     if not payload:
@@ -634,25 +637,34 @@ def _histogram_is_storage_scoped(
 ) -> bool:
     """Does this histogram count stored elements, or logical parameters?
 
-    The sibling failure to ``_scales_reported``, and the more fundamental one.
     Scale arrays are quantization *metadata*, not model parameters, so a
-    histogram scoped to parameters structurally cannot evidence them: every
-    E8M0-derived signal read off one is unfounded, and the repos where it
-    happens to come out right are right by luck.
+    histogram scoped to parameters cannot evidence them at all.  Every
+    E8M0-derived signal read off one is unfounded, including the ones that
+    happen to come out right.
 
     Multiply each count by its dtype width and compare to the checkpoint.  A
-    storage-scoped histogram reconciles, because that is what it is counting.
-    A parameter-scoped one overshoots by the packing factor, since it reports
-    logical weights that are stored several to a container.  Measured across
-    one family: ``DeepSeek-V4-Flash`` 1.000, ``DeepSeek-V4-Flash-8bit`` 1.000,
-    two MLX conversions 1.057, against ``DeepSeek-V4-Flash-0731`` at 1.832 and
+    storage-scoped histogram reconciles, because that is what it counts.  A
+    parameter-scoped one overshoots by the packing factor, reporting logical
+    weights that are stored several to a container.  Measured across one
+    family: ``DeepSeek-V4-Flash`` 1.000, ``DeepSeek-V4-Flash-8bit`` 1.000, two
+    MLX conversions 1.057, against ``DeepSeek-V4-Flash-0731`` at 1.832 and
     ``openai/gpt-oss-120b`` at 1.879.
 
-    ``gpt-oss-120b`` is why this test is needed on top of ``_scales_reported``,
-    which waves it through: its ``U8`` bucket is packed mxfp4 payload rather
-    than a scale array, so it sits on both sides of that inequality and
-    satisfies it trivially.  Its ``fp_grid`` of 0.98 was payload over payload
-    plus BF16, and named the right grid for none of the right reasons.
+    This is the load-bearing gate rather than ``_scales_reported``, which
+    ``gpt-oss-120b`` satisfies trivially: its ``U8`` bucket is packed mxfp4
+    payload, not a scale array, so it sits on both sides of that inequality.
+
+    **Known limit:** the numerator covers every ``.safetensors`` in the repo
+    while ``canonical_bytes`` covers one checkpoint set, so the ratio tracks
+    canonical-set coverage as much as scoping and fires on any storage-scoped
+    repo whose canonical pick drops more than ~26% of the repo.
+    ``XiaomiMiMo/MiMo-V2-Flash-Base`` reconciles at 1.0000 against all
+    ``.safetensors`` and is suppressed here at 1.5504, because
+    ``_pick_canonical_set`` treats its 98 unsharded files as a duplicate of
+    the 94 sharded ones rather than the complementary half they are.  Dividing
+    by ``all_safetensors_bytes`` instead trades this for a miss on
+    ``gpt-oss-120b``, whose two sets *are* duplicates; the distinction lives in
+    the set partition, not here.
     """
     if not dtypes or canonical_bytes <= 0:
         return False
@@ -854,28 +866,24 @@ def analyze_quant(payload: dict) -> _QuantReport:
     # the histogram can carry one, and both ways it can fail need the byte
     # total to detect. A zero read off an absent scale bucket is not evidence
     # of an absent grid, and downstream it becomes a confident all-clear.
-    # The `U8` arm needs `U32` beside it. MLX splits a quantized module into a
-    # `U32` payload and a `U8` E8M0 scale array, so `U8` means scales only in
-    # that company. Where `U32` is absent, a large `U8` bucket is packed
-    # *payload*: NVFP4 stores `weight_packed:U8` with `weight_scale:F8_E4M3`,
-    # bitsandbytes stores `weight:U8` with `absmax:U8`. Counting it as scale
-    # metadata asserted "FP-microscaling grid present (E8M0 scales)" over
-    # `nvidia/Qwen3.6-35B-A3B-NVFP4` (fp_grid 0.90) and
-    # `RedHatAI/Qwen3.6-35B-A3B-NVFP4` (0.89), whose headers contain zero
-    # E8M0 tensors. Naming a dtype the file does not contain is worse than the
-    # silence this gate was written to fix, so a bare `U8` payload abstains.
+    # The `U8` arm counts as scales only with `U32` beside it. MLX splits a
+    # quantized module into a `U32` payload and a `U8` E8M0 scale array, so
+    # `U8` means scales in that company alone. Where `U32` is absent a large
+    # `U8` bucket is packed *payload*: NVFP4 stores `weight_packed:U8` with
+    # `weight_scale:F8_E4M3`, bitsandbytes stores `weight:U8` with
+    # `absmax:U8`. `nvidia/Qwen3.6-35B-A3B-NVFP4` and its RedHatAI mirror have
+    # that shape and contain zero E8M0 tensors.
     e8m0 = dtypes.get("F8_E8M0", 0)
     if "U32" in dtypes:
         e8m0 += dtypes.get("U8", 0)
     scale_like = e8m0 + dtypes.get("BF16", 0) + dtypes.get("F16", 0)
-    # Suppress only when `U8` would be the *sole* basis for the claim. An
-    # explicit `F8_E8M0` bucket stands on its own, and blanket-suppressing on
-    # a bare `U8` blinded the tool to the case it exists for:
+    # Suppress only where `U8` is the *sole* basis for the claim. An explicit
+    # `F8_E8M0` bucket is independent evidence and needs no `U32` beside it:
     # `nvidia/DeepSeek-V4-Flash-NVFP4` and `nvidia/DeepSeek-V4-Pro-NVFP4` are
-    # NVFP4 conversions that *retained* part of DeepSeek's native E8M0
-    # backbone (201M and 794M E8M0 elements), carry `U8` payload with no
-    # `U32`, and reconcile at ratio 1.000. They are the partially-preserved
-    # hybrid, and a guard aimed at NVFP4's payload silenced them.
+    # NVFP4 conversions retaining part of DeepSeek's native E8M0 backbone
+    # (201M and 794M E8M0 elements) with `U8` payload, no `U32`, and ratio
+    # 1.000. They are the partially-preserved hybrid this feature exists to
+    # find, so a guard aimed at NVFP4's payload must not reach them.
     u8_is_sole_basis = (
         "U8" in dtypes
         and "U32" not in dtypes
@@ -942,15 +950,13 @@ def _suppress_reason(report: _QuantReport, dtypes: dict[str, int]) -> str | None
         )
 
     # Precondition 1, second container. The U32 key is positive evidence of
-    # packing but not exhaustive, and §14.1a closed the gap with the declared-
-    # width cross-check while noting no real repo had exercised it.
-    # `deepseek-ai/DeepSeek-V4-Flash` is that repo, and it defeats both:
-    # it packs FP4 two-per-`I8` with the scales in their own `F8_E8M0` bucket
-    # (no U32 anywhere), lands at ratio exactly 1.0000, and declares
-    # `quant_method` with no `bits`, so the cross-check downstream has no
-    # declared width to test against. Unguarded it reports 8.08 bpw against a
-    # true ~4.39, rendering a native-FP4 vendor release as an 8-bit upload and
-    # inverting every requant verdict a caller draws from the comparison.
+    # packing but not exhaustive, and the declared-width cross-check below
+    # covers only repos that declare a width. `deepseek-ai/DeepSeek-V4-Flash`
+    # escapes both: it packs FP4 two-per-`I8` with the scales in their own
+    # `F8_E8M0` bucket so no U32 appears, it lands at ratio exactly 1.0000, and
+    # it declares `quant_method` with no `bits`. Unguarded it measures 8.08 bpw
+    # against a true ~4.39, which renders a native-FP4 vendor release as an
+    # 8-bit upload and inverts every requant verdict drawn against it.
     #
     # The scale array settles it without a declared width: 8.86B E8M0 scales
     # over a 141.7B-element I8 payload is 2.0001 weights per stored byte.
@@ -1187,14 +1193,12 @@ def _apply_quant_steering(
                 f"no lineage so there is nothing to compare against",
             )
 
-    # Presence, not preservation.  E8M0 scales prove *this* checkpoint carries
-    # an FP microscaling grid; they say nothing about whether it matches the
-    # base's, which cannot be known without fetching the base.  The comparative
-    # verdict therefore lives in `_run_quant_audit`, the only place both sides
-    # are in hand.  Claiming "preserved" here asserted a comparison that had
-    # not been made: it fired on vendor base repos about their own native
-    # format, and on a quant it fired in the same response as the audit's own
-    # "declares no base model, so there is no native format to compare against".
+    # Presence, not preservation.  E8M0 scales establish that *this* checkpoint
+    # carries an FP microscaling grid and say nothing about whether it matches
+    # the base's, which needs the base fetched.  The comparative verdict lives
+    # in `_run_quant_audit`, the only place both sides are in hand.  A
+    # preservation claim here would also fire on vendor base repos, where it is
+    # a statement about their own native format and vacuous.
     if report.is_quant and report.fp_grid is not None:
         if report.fp_grid > 0.5:
             note = "FP-microscaling grid present (E8M0 scales)"
@@ -1505,12 +1509,11 @@ async def _run_quant_audit(
     compute it against.
     """
     if not base_model:
-        # No lineage is not nothing. The repo's own declared block still names
-        # its grid and enumerates its modules, which is the substance of the
-        # comparison a caller wanted; only the other side is missing.
-        # `Jundot/DeepSeek-V4-Flash-0731-oQ4e-mtp` declares no base_model and
-        # would otherwise report nothing, while its config names 147 affine
-        # modules beside 389 mxfp8 and 138 mxfp4.
+        # No lineage still leaves one side of the comparison. The repo's own
+        # declared block names its grid and enumerates its modules, which is
+        # the substance a caller comparing sibling quants needs.
+        # `Jundot/DeepSeek-V4-Flash-0731-oQ4e-mtp` declares no base_model while
+        # its config names 147 affine modules beside 389 mxfp8 and 138 mxfp4.
         solo = []
         if repo and (cfg := await _fetch_raw_config(repo, rev)):
             block = _quant_block(cfg)
@@ -1545,15 +1548,12 @@ async def _run_quant_audit(
     if base.native_format:
         lines.append(f"base {base_model} weight format: {base.native_format}")
 
-    # The grid-preservation verdict this action exists to buy.  Both grids are
-    # in hand here and nowhere else in the codebase, so this is the only place
-    # the comparative claim can honestly be made.
-    # Tier 2 — the declared per-module map, which is what a preservation
-    # verdict actually needs. The dtype histogram is an aggregate whose domain
-    # the Hub chooses and does not document; these blocks enumerate the repo,
-    # so "no module is affine" is a claim about a complete domain rather than
-    # an absence read off a sample. §14.5 has always specified Tier 2 as part
-    # of this flag.
+    # Tier 2 (§14.5): the declared per-module map, which is what a preservation
+    # verdict rests on. Both sides are in hand here and nowhere else, so this
+    # is the only place the comparative claim can be made. The dtype histogram
+    # is an aggregate whose domain the Hub chooses and does not document, while
+    # these blocks enumerate the repo, so "no module is affine" is a claim
+    # about a complete domain rather than an absence read off a sample.
     base_cfg = await _fetch_raw_config(base_model)
     repo_cfg = await _fetch_raw_config(repo, rev) if repo else None
     base_block = _quant_block(base_cfg) if base_cfg else {}
@@ -1647,12 +1647,11 @@ async def _run_quant_audit(
     # and say that a substitution happened rather than passing the number off
     # as this repo's own.
     # Gated on the base's own bpw surviving, not merely on it having a count.
-    # A base whose parameter total failed §14.1a's preconditions was rejected
-    # as a denominator for itself, so it cannot serve as one for a child.
+    # A parameter total that failed §14.1a's preconditions was rejected as a
+    # denominator for the base itself and cannot serve as one for a child.
     # `deepseek-ai/DeepSeek-V4-Flash` reports 158.1B storage elements against
-    # ~291B logical weights; substituting it put NVFP4 conversions of that base
-    # at 8.52 bpw against a true ~4.4, reintroducing on the child exactly the
-    # inflation precondition 1 exists to stop on the parent.
+    # ~291B logical weights, so measuring a child against it inflates the
+    # child's bpw by the same factor precondition 1 catches on the parent.
     if (
         report.bpw is None
         and base.bpw is not None
