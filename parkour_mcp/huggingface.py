@@ -660,6 +660,122 @@ def _histogram_is_storage_scoped(
     return implied < canonical_bytes * _PARAMETER_SCOPED_RATIO
 
 
+def _quant_block(config: dict) -> dict:
+    """Pick the quantization block that actually carries the per-module map.
+
+    MLX writes its map under ``quantization``; some converters mirror only the
+    *scalars* into ``quantization_config`` for HF compatibility.
+    ``Vontra/DeepSeek-V4-Flash-0731-MXFP4-MLX`` is the case that matters: its
+    ``quantization_config`` is three keys, while ``quantization`` holds all
+    1,177 per-module entries.  Reading the conventional key alone loses the
+    whole census, so take whichever block is richer.
+    """
+    best: dict = {}
+    for key in ("quantization", "quantization_config"):
+        block = config.get(key)
+        if isinstance(block, dict) and len(block) > len(best):
+            best = block
+    return best
+
+
+def _declared_grid(block: dict) -> list[str]:
+    """Name the quantization grid families a config *declares*.
+
+    Declared rather than inferred, and a list rather than one label, because a
+    checkpoint can sit on two grids at once: ``nvidia/DeepSeek-V4-Flash-NVFP4``
+    declares both ``scale_fmt: ue8m0`` (retained from its DeepSeek base) and
+    ``moe_quant_algo: NVFP4``, which is the partially-preserved hybrid.
+
+    This deliberately does not key on E8M0 alone.  NVFP4 is a microscaling FP4
+    format with **E4M3** scales at group 16, so a vocabulary scoped to one
+    scale encoding calls it "no FP grid" and invites the affine regrid that
+    would destroy it.
+    """
+    families: set[str] = set()
+    scale_fmt = str(block.get("scale_fmt") or "").lower()
+    mode = str(block.get("mode") or "").lower()
+    method = str(block.get("quant_method") or "").lower()
+    algos = " ".join(
+        str(block.get(k) or "").lower()
+        for k in ("quant_algo", "moe_quant_algo", "kv_cache_quant_algo")
+    )
+
+    if "e8m0" in scale_fmt or mode.startswith("mxfp") or method in {"mxfp4", "mxfp8"}:
+        families.add("mx-e8m0")
+    if "nvfp4" in algos or "nvfp4" in method:
+        families.add("nvfp4-e4m3")
+    groups = block.get("config_groups")
+    if isinstance(groups, dict):
+        for group in groups.values():
+            weights = group.get("weights") if isinstance(group, dict) else None
+            if not isinstance(weights, dict):
+                continue
+            if weights.get("type") == "float" and weights.get("group_size") == 16:
+                families.add("nvfp4-e4m3")
+    if mode == "affine":
+        families.add("affine")
+    if method == "fp8" and block.get("weight_block_size"):
+        families.add("block-fp8")
+    return sorted(families)
+
+
+def _module_modes(block: dict) -> Counter | None:
+    """Census the *explicitly overridden* modules by quant mode.
+
+    Returns None when the block carries no per-module entries, so a caller can
+    tell "no overrides declared" from "overrides declared, none affine".
+
+    Read alongside ``block["mode"]``, never alone.  MLX lists only
+    *exceptions*, so Vontra's map counts 788 ``mxfp8`` and 389 unquantized
+    with no ``mxfp4`` entry at all, because ``mxfp4`` is the top-level mode
+    every unlisted module inherits.  Treating this census as the whole picture
+    would report a pure-mxfp4 conversion as containing no mxfp4.
+    """
+    census: Counter = Counter()
+    for key, value in block.items():
+        if key in {"bits", "group_size", "mode", "quant_method"}:
+            continue
+        if value is False:
+            census["unquantized"] += 1
+        elif isinstance(value, dict) and value.get("mode"):
+            census[str(value["mode"])] += 1
+    return census or None
+
+
+def _has_affine_module(block: dict) -> bool | None:
+    """Does any module sit on a uniform integer lattice? None if undecidable.
+
+    Answers the regrid question directly.  True when the default mode is
+    affine or any override names it; False only when the block enumerates
+    modules and none of them is affine.
+    """
+    # Default first: a block declaring `mode: affine` with no overrides at all
+    # is entirely affine, and consulting the override census first would call
+    # that undecidable.
+    if str(block.get("mode") or "").lower() == "affine":
+        return True
+    census = _module_modes(block)
+    if census is None:
+        return None
+    return any(k.startswith("affine") for k in census)
+
+
+async def _fetch_raw_config(repo: str, rev: str = "main") -> dict | None:
+    """Tier 2 — the repo's own ``config.json``, unprojected.
+
+    The Hub's ``expand=config`` runs a field whitelist that drops exactly the
+    fields this needs: ``deepseek-ai/DeepSeek-V4-Flash-0731`` projects to
+    ``{"quant_method": "fp8"}`` while its raw config, all 1.9 KB of it,
+    declares ``scale_fmt: "ue8m0"`` and ``expert_dtype: "fp4"``.  That single
+    field is the whole answer to the grid question the histogram could not
+    reach.
+    """
+    payload = await _hf_request(
+        f"/{repo}/raw/{rev}/config.json", repo=repo, base=_HF_SITE_BASE,
+    )
+    return payload if isinstance(payload, dict) else None
+
+
 def analyze_quant(payload: dict) -> _QuantReport:
     """Derive every Tier 0 quant signal from the flagship response.
 
@@ -1340,7 +1456,7 @@ async def _action_model(
     )
 
     if quant_audit:
-        audit = await _run_quant_audit(report, base_model)
+        audit = await _run_quant_audit(report, base_model, repo=repo, rev=rev)
         for line in audit:
             fm.append("note", line)
 
@@ -1376,7 +1492,11 @@ async def _action_model(
 
 
 async def _run_quant_audit(
-    report: _QuantReport, base_model: str | None,
+    report: _QuantReport,
+    base_model: str | None,
+    *,
+    repo: str = "",
+    rev: str = "main",
 ) -> list[str]:
     """Tier 1 — fetch the base model's own format for a grid verdict.
 
@@ -1385,10 +1505,32 @@ async def _run_quant_audit(
     compute it against.
     """
     if not base_model:
-        return [
-            ("quant_audit requested but this repo declares no base model, "
-            "so there is no native format to compare against"),
-        ]
+        # No lineage is not nothing. The repo's own declared block still names
+        # its grid and enumerates its modules, which is the substance of the
+        # comparison a caller wanted; only the other side is missing.
+        # `Jundot/DeepSeek-V4-Flash-0731-oQ4e-mtp` declares no base_model and
+        # would otherwise report nothing, while its config names 147 affine
+        # modules beside 389 mxfp8 and 138 mxfp4.
+        solo = []
+        if repo and (cfg := await _fetch_raw_config(repo, rev)):
+            block = _quant_block(cfg)
+            if grids := _declared_grid(block):
+                solo.append(f"this repo declares grid: {', '.join(grids)}")
+            if census := _module_modes(block):
+                listed = ", ".join(f"{v} {k}" for k, v in census.most_common())
+                default = block.get("mode")
+                tail = f" (unlisted modules inherit {default})" if default else ""
+                solo.append(f"this repo's per-module map: {listed}{tail}")
+            if _has_affine_module(block) is True:
+                solo.append(
+                    "this repo declares affine modules, so part of it sits on "
+                    "a uniform integer lattice",
+                )
+        solo.append(
+            "no base model is declared, so there is no native format to "
+            "compare the above against",
+        )
+        return solo
     params = {"blobs": "true", "expand": list(_FLAGSHIP_EXPANDS)}
     payload = await _hf_request(
         f"/models/{base_model}", params=params, repo=base_model,
@@ -1406,12 +1548,81 @@ async def _run_quant_audit(
     # The grid-preservation verdict this action exists to buy.  Both grids are
     # in hand here and nowhere else in the codebase, so this is the only place
     # the comparative claim can honestly be made.
-    if base.is_quant and base.fp_grid is None:
+    # Tier 2 — the declared per-module map, which is what a preservation
+    # verdict actually needs. The dtype histogram is an aggregate whose domain
+    # the Hub chooses and does not document; these blocks enumerate the repo,
+    # so "no module is affine" is a claim about a complete domain rather than
+    # an absence read off a sample. §14.5 has always specified Tier 2 as part
+    # of this flag.
+    base_cfg = await _fetch_raw_config(base_model)
+    repo_cfg = await _fetch_raw_config(repo, rev) if repo else None
+    base_block = _quant_block(base_cfg) if base_cfg else {}
+    repo_block = _quant_block(repo_cfg) if repo_cfg else {}
+    base_grids = _declared_grid(base_block)
+    repo_grids = _declared_grid(repo_block)
+
+    if base_grids:
+        lines.append(f"base declares grid: {', '.join(base_grids)}")
+    if repo_grids:
+        lines.append(f"this repo declares grid: {', '.join(repo_grids)}")
+    if census := _module_modes(repo_block):
+        listed = ", ".join(f"{v} {k}" for k, v in census.most_common())
+        default = repo_block.get("mode")
+        tail = f" (unlisted modules inherit {default})" if default else ""
+        lines.append(f"this repo's per-module map: {listed}{tail}")
+
+    fp_families = {"mx-e8m0", "nvfp4-e4m3"}
+    base_fp = fp_families & set(base_grids)
+    repo_fp = fp_families & set(repo_grids)
+    repo_affine = _has_affine_module(repo_block)
+
+    verdict_made = True
+    if base_fp and repo_fp:
+        shared = sorted(base_fp & repo_fp)
+        if shared:
+            lines.append(
+                f"grid preserved: base and this repo both declare "
+                f"{', '.join(shared)}"
+                + (", and no module is affine" if repo_affine is False else ""),
+            )
+        else:
+            lines.append(
+                f"grid CHANGED: the base declares {', '.join(sorted(base_fp))} "
+                f"and this repo declares {', '.join(sorted(repo_fp))}. Both are "
+                f"non-uniform FP lattices, so this is a regrid between float "
+                f"families rather than a collapse onto integers",
+            )
+    elif base_fp and repo_affine:
         lines.append(
-            "grid verdict unavailable: the Hub's dtype histogram for the base "
-            "reports no scale array large enough to be its own, so whether it "
-            "carries an FP microscaling grid cannot be read from metadata; "
-            "range-read a middle shard header to settle it",
+            f"grid NOT preserved: the base declares "
+            f"{', '.join(sorted(base_fp))} and this repo declares affine "
+            f"modules, so a non-uniform FP lattice was requantized onto a "
+            f"uniform one",
+        )
+    elif base_fp and not repo_grids:
+        lines.append(
+            f"grid verdict unavailable: the base declares "
+            f"{', '.join(sorted(base_fp))}, but this repo's config declares no "
+            f"quantization block to compare against",
+        )
+    elif base_cfg and not base_grids:
+        lines.append(
+            "base declares no FP microscaling grid, so there is none to "
+            "preserve",
+        )
+    else:
+        verdict_made = False
+
+    # Histogram fallback, only where the declared blocks said nothing. Kept
+    # narrow on purpose: it is the weaker source and the reason this tier
+    # exists.
+    if verdict_made:
+        pass
+    elif base.is_quant and base.fp_grid is None:
+        lines.append(
+            "grid verdict unavailable: neither repo declares a quantization "
+            "block this can read, and the Hub's dtype histogram for the base "
+            "does not carry its scale arrays",
         )
     elif base.fp_grid is not None and report.fp_grid is not None:
         base_mx, repo_mx = base.fp_grid > 0.5, report.fp_grid > 0.5
@@ -1435,7 +1646,19 @@ async def _run_quant_audit(
     # Precondition 1's stated remedy: substitute the base's parameter count,
     # and say that a substitution happened rather than passing the number off
     # as this repo's own.
-    if report.bpw is None and base.total_params and report.canonical_bytes:
+    # Gated on the base's own bpw surviving, not merely on it having a count.
+    # A base whose parameter total failed §14.1a's preconditions was rejected
+    # as a denominator for itself, so it cannot serve as one for a child.
+    # `deepseek-ai/DeepSeek-V4-Flash` reports 158.1B storage elements against
+    # ~291B logical weights; substituting it put NVFP4 conversions of that base
+    # at 8.52 bpw against a true ~4.4, reintroducing on the child exactly the
+    # inflation precondition 1 exists to stop on the parent.
+    if (
+        report.bpw is None
+        and base.bpw is not None
+        and base.total_params
+        and report.canonical_bytes
+    ):
         substituted = report.canonical_bytes * 8 / base.total_params
         lines.append(
             f"effective {substituted:.2f} bpw when measured against the base's "

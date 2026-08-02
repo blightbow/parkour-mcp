@@ -20,15 +20,18 @@ from parkour_mcp.huggingface import (
     _cache_file_body,
     _checkpoint_format,
     _classify_native_format,
+    _declared_grid,
     _family_stem,
     _fm_base,
     _format_dtype_fingerprint,
+    _has_affine_module,
     _hf_fast_path,
     _hf_request,
     _HFRateLimit,
     _histogram_is_storage_scoped,
     _partition_checkpoint_sets,
     _pick_canonical_set,
+    _quant_block,
     _scale_implied_packing,
     _scales_reported,
     _split_repo_path,
@@ -886,6 +889,55 @@ class TestNativeFormatClassification:
         ) == "affine"
 
 
+class TestDeclaredQuantBlock:
+    """The declared block enumerates modules, so it can support an absence."""
+
+    def test_richer_block_wins(self):
+        """Vontra mirrors only scalars into `quantization_config` while its
+        real 1,177-entry map lives under `quantization`. Reading the
+        conventional key alone loses the entire census."""
+        cfg = {
+            "quantization_config": {"bits": 4, "group_size": 32, "mode": "mxfp4"},
+            "quantization": {
+                "bits": 4, "group_size": 32, "mode": "mxfp4",
+                "layers.0.attn.wq_a": {"bits": 8, "group_size": 32, "mode": "mxfp8"},
+            },
+        }
+        assert "layers.0.attn.wq_a" in _quant_block(cfg)
+
+    def test_affine_default_with_no_overrides_is_decidable(self):
+        """A block declaring `mode: affine` and nothing else is all-affine.
+
+        Consulting the override census first returns None here and calls a
+        fully-affine repo undecidable, which loses the regrid verdict on the
+        simplest possible input.
+        """
+        assert _has_affine_module({"bits": 4, "group_size": 64, "mode": "affine"}) is True
+
+    def test_absence_needs_an_enumerated_domain(self):
+        """No overrides and a non-affine default is genuinely undecidable."""
+        assert _has_affine_module({"bits": 4, "mode": "mxfp4"}) is None
+
+    def test_pure_mx_map_proves_no_affine(self):
+        """Vontra's shape: mxfp4 default, mxfp8 overrides, nothing affine."""
+        assert _has_affine_module(_CFG_QUANT_PURE_MX["quantization"]) is False
+
+    def test_nvfp4_is_an_fp_grid_not_an_absence(self):
+        """E4M3 scales at group 16 are a microscaling FP grid. A vocabulary
+        scoped to E8M0 reports this as no FP grid and invites the regrid."""
+        block = _CFG_QUANT_NVFP4["quantization_config"]
+        assert _declared_grid(block) == ["nvfp4-e4m3"]
+
+    def test_hybrid_declares_both_grids(self):
+        """nvidia/DeepSeek-V4-Flash-NVFP4 retained part of its base's E8M0
+        backbone while converting the experts to NVFP4."""
+        block = {
+            "quant_method": "fp8", "fmt": "e4m3", "scale_fmt": "ue8m0",
+            "moe_quant_algo": "NVFP4", "quant_algo": "MIXED_PRECISION",
+        }
+        assert _declared_grid(block) == ["mx-e8m0", "nvfp4-e4m3"]
+
+
 class TestScalesReported:
     """A zero ``fp_grid`` is only a measurement if the scales were reported.
 
@@ -1326,11 +1378,18 @@ _QUANT_MX = {"U32": 36_434_673_664, "U8": 8_657_043_456, "BF16": 272_765_568}
 # The damage case: every scale is float, so the FP lattice is gone.
 _QUANT_AFFINE = {"U32": 39_628_000_000, "BF16": 10_465_000_000}
 # deepseek-ai/DeepSeek-V4-Flash shape: FP4 experts over an FP8 backbone.
+# The F32 and I64 housekeeping buckets are not filler: with them the counts sum
+# to exactly `total`, which is precondition 1's trigger and the reason this
+# base's own bpw is suppressed. Omitting them left sigma 38.5M short of total,
+# so the guard never fired and the fixture quietly modelled a repo that does
+# not exist.
 _BASE_FP4 = {
     "I8": 141_733_920_768,
     "F8_E8M0": 8_858_737_664,
     "F8_E4M3": 6_023_020_544,
     "BF16": 1_415_259_264,
+    "F32": 36_168_018,
+    "I64": 2_327_040,
 }
 # deepseek-ai/DeepSeek-V4-Flash-0731: the same vendor and the same FP4+FP8
 # format, but the Hub published no F8_E8M0 bucket for it.  The scales are in
@@ -1345,12 +1404,54 @@ _BASE_FP4_NO_SCALES = {
 }
 
 
-def _mock_audit_pair(quant_dtypes: dict, base_dtypes: dict = _BASE_FP4) -> None:
+# Real shapes, transcribed live. The base is deepseek-ai/DeepSeek-V4-Flash's
+# 1.9 KB block, whose `scale_fmt` is the whole answer to the grid question the
+# dtype histogram could not reach.
+_CFG_BASE_UE8M0 = {"quantization_config": {
+    "quant_method": "fp8", "fmt": "e4m3", "scale_fmt": "ue8m0",
+    "activation_scheme": "dynamic",
+}}
+# Vontra's shape: MLX writes the map under `quantization`, mxfp4 default with
+# mxfp8 overrides and no affine module anywhere.
+_CFG_QUANT_PURE_MX = {"quantization": {
+    "bits": 4, "group_size": 32, "mode": "mxfp4",
+    "layers.0.attn.wq_a": {"bits": 8, "group_size": 32, "mode": "mxfp8"},
+    "layers.0.ffn.gate": False,
+}}
+# The damage case: an affine default collapses the FP lattice onto integers.
+_CFG_QUANT_AFFINE = {"quantization": {
+    "bits": 4, "group_size": 64, "mode": "affine",
+    "layers.0.attn.wq_a": {"bits": 8, "group_size": 64, "mode": "affine"},
+}}
+# nvidia/Qwen3.6-35B-A3B-NVFP4: a microscaling FP4 grid with E4M3 scales at
+# group 16, which a vocabulary scoped to E8M0 would call "no FP grid".
+_CFG_QUANT_NVFP4 = {"quantization_config": {
+    "quant_method": "modelopt", "quant_algo": "MIXED_PRECISION",
+    "config_groups": {
+        "group_0": {"weights": {"num_bits": 4, "type": "float", "group_size": 16}},
+    },
+}}
+
+
+def _mock_audit_pair(
+    quant_dtypes: dict,
+    base_dtypes: dict = _BASE_FP4,
+    *,
+    quant_config: dict | None = None,
+    base_config: dict | None = None,
+    quant_total: int = 284_333_146_519,
+) -> None:
     """Mock a quant repo declaring lineage plus the FP4-native base it names."""
+    respx.get("https://huggingface.co/org/quant/raw/main/config.json").mock(
+        return_value=httpx.Response(200, json=quant_config or {}),
+    )
+    respx.get("https://huggingface.co/org/base/raw/main/config.json").mock(
+        return_value=httpx.Response(200, json=base_config or {}),
+    )
     respx.get("https://huggingface.co/api/models/org/quant").mock(
         return_value=httpx.Response(200, json=_payload(
             id="org/quant",
-            safetensors={"parameters": quant_dtypes, "total": 284_333_146_519},
+            safetensors={"parameters": quant_dtypes, "total": quant_total},
             siblings=[
                 {"rfilename": "model.safetensors.index.json", "size": 100},
                 *_shards("model", 33, int(144.44 * GIB)),
@@ -1387,33 +1488,130 @@ class TestQuantAuditGridVerdict:
 
     @respx.mock
     async def test_mx_over_fp4_base_reports_preserved(self):
-        _mock_audit_pair(_QUANT_MX)
+        """Both declare mx-e8m0, and the quant's map names no affine module."""
+        _mock_audit_pair(
+            _QUANT_MX,
+            quant_config=_CFG_QUANT_PURE_MX, base_config=_CFG_BASE_UE8M0,
+        )
         out = await huggingface("model", "org/quant", quant_audit=True)
         assert "grid preserved" in out
+        assert "no module is affine" in out
 
     @respx.mock
     async def test_affine_over_fp4_base_reports_damage(self):
         """The case the detector exists for: a native FP4 lattice requantized
         onto a uniform one.  No size or bpw signal shows this, and the
-        downloader has no way to notice it after the fact."""
-        _mock_audit_pair(_QUANT_AFFINE)
+        downloader has no way to notice it after the fact.
+
+        Reachable only because the declared map enumerates the repo's modules.
+        The dtype histogram cannot support the underlying absence claim, and
+        one shard header samples a fraction systematically biased toward the
+        expert tensors that carry no bias at all.
+        """
+        _mock_audit_pair(
+            _QUANT_AFFINE,
+            quant_config=_CFG_QUANT_AFFINE, base_config=_CFG_BASE_UE8M0,
+        )
         out = await huggingface("model", "org/quant", quant_audit=True)
+        # Assert the Tier 2 wording specifically. The histogram fallback emits
+        # the same "grid NOT preserved" headline from far weaker evidence, so
+        # the headline alone cannot tell which source ruled.
         assert "grid NOT preserved" in out
+        assert "this repo declares affine modules" in out
 
     @respx.mock
-    async def test_base_with_unreported_scales_declines_to_rule(self):
-        """A base whose scale bucket the Hub omitted yields no verdict.
+    async def test_float_to_float_regrid_is_not_called_damage(self):
+        """NVFP4 over an E8M0 base is a regrid, not a collapse onto integers.
 
-        Reported as a defect from real use: the audit told a caller "no native
-        FP grid to preserve" about deepseek-ai/DeepSeek-V4-Flash-0731, whose
-        shards carry 776 E8M0 tensors each.  That is the reassuring direction
-        of wrong, so it must say it cannot tell rather than clear the quant.
+        A vocabulary scoped to E8M0 alone reports NVFP4 as having no FP grid,
+        which invites exactly the affine requant that would destroy it. Both
+        sides are non-uniform float lattices and the verdict must say so.
         """
+        _mock_audit_pair(
+            _QUANT_AFFINE,
+            quant_config=_CFG_QUANT_NVFP4, base_config=_CFG_BASE_UE8M0,
+        )
+        out = await huggingface("model", "org/quant", quant_audit=True)
+        assert "grid CHANGED" in out
+        assert "nvfp4-e4m3" in out
+        assert "grid NOT preserved" not in out
+
+    @respx.mock
+    async def test_declared_config_beats_an_unreadable_histogram(self):
+        """deepseek-ai/DeepSeek-V4-Flash-0731's shape: the Hub publishes no
+        E8M0 bucket for it, so Tier 0 abstains, but its 1.9 KB config declares
+        `scale_fmt: ue8m0` outright. The declared block is what the verdict
+        rests on, so the audit answers instead of shrugging.
+        """
+        _mock_audit_pair(
+            _QUANT_MX, base_dtypes=_BASE_FP4_NO_SCALES,
+            quant_config=_CFG_QUANT_PURE_MX, base_config=_CFG_BASE_UE8M0,
+        )
+        out = await huggingface("model", "org/quant", quant_audit=True)
+        assert "base declares grid" in out
+        assert "mx-e8m0" in out
+        assert "grid preserved" in out
+
+    @respx.mock
+    async def test_no_lineage_still_reports_the_repos_own_map(self):
+        """Jundot/DeepSeek-V4-Flash-0731-oQ4e-mtp declares no base_model.
+
+        The audit used to return one line saying there was nothing to compare
+        against, discarding the repo's own declared block. That block names
+        147 affine modules, which is most of what a caller comparing sibling
+        quants wanted; only the other side of the comparison is missing.
+        """
+        respx.get("https://huggingface.co/api/models/org/solo").mock(
+            return_value=httpx.Response(200, json=_payload(
+                id="org/solo",
+                safetensors={"parameters": _QUANT_AFFINE, "total": 50_093_000_000},
+                siblings=[
+                    {"rfilename": "model.safetensors.index.json", "size": 100},
+                    *_shards("model", 30, int(167.12 * GIB)),
+                ],
+            )),
+        )
+        respx.get("https://huggingface.co/org/solo/raw/main/README.md").mock(
+            return_value=httpx.Response(200, text="# Solo"),
+        )
+        respx.get("https://huggingface.co/org/solo/raw/main/config.json").mock(
+            return_value=httpx.Response(200, json=_CFG_QUANT_AFFINE),
+        )
+        out = await huggingface("model", "org/solo", quant_audit=True)
+        assert "this repo declares grid: affine" in out
+        assert "per-module map" in out
+        assert "no base model is declared" in out
+
+    @respx.mock
+    async def test_no_substitution_from_a_rejected_base_count(self):
+        """A base count rejected as its own denominator cannot serve as one.
+
+        deepseek-ai/DeepSeek-V4-Flash reports 158.1B storage elements against
+        ~291B logical weights, so precondition 1 suppresses its own bpw. Reusing
+        it for a child put NVFP4 conversions at 8.52 bpw against a true ~4.4,
+        reintroducing on the child the exact inflation the precondition exists
+        to stop on the parent.
+        """
+        # The quant's own bpw must be suppressed for the substitution branch to
+        # be reachable at all: U32 present with total == sigma is precondition
+        # 1's exact signature.
+        _mock_audit_pair(
+            _QUANT_AFFINE, base_dtypes=_BASE_FP4,
+            quant_config=_CFG_QUANT_AFFINE, base_config=_CFG_BASE_UE8M0,
+            quant_total=50_093_000_000,
+        )
+        out = await huggingface("model", "org/quant", quant_audit=True)
+        assert "effective bits-per-weight not reported" in out
+        assert "when measured against the base's parameter count" not in out
+
+    @respx.mock
+    async def test_no_declared_blocks_falls_back_and_says_so(self):
+        """With both configs empty the histogram fallback runs, and its
+        message must not assert a specific cause it cannot know."""
         _mock_audit_pair(_QUANT_AFFINE, base_dtypes=_BASE_FP4_NO_SCALES)
         out = await huggingface("model", "org/quant", quant_audit=True)
         assert "grid verdict unavailable" in out
         assert "no native FP grid to preserve" not in out
-        assert "grid NOT preserved" not in out
 
 
 def test_presplit_failure_skips_cache():
