@@ -155,6 +155,45 @@ class TestPrecondition1DenominatorValidity:
         assert report.bpw_suppressed is not None
         assert "double the declared 4-bit" in report.bpw_suppressed
 
+    def test_config_groups_supplies_the_declared_width(self):
+        """nvidia/Qwen3.6-35B-A3B-NVFP4: no top-level `bits`, so no ceiling.
+
+        compressed-tensors and modelopt nest widths under
+        `config_groups[*].weights.num_bits`, which survives the Hub's config
+        whitelist. Without reading it `declared_bits` is None, the
+        declared-width cross-check degrades silently, and this 4-bit release
+        reported 10.03 bpw against a true ~5.4 and drew the `bpw >= 8.4`
+        upcast-bloat note against its own vendor.
+
+        The minimum width is the right ceiling: tested against the group_0 8,
+        the bogus 10.03 passes.
+        """
+        report = analyze_quant(_payload(
+            safetensors={
+                "parameters": {
+                    "BF16": 1_825_916_784,
+                    "F8_E4M3": 3_332_177_920,
+                    "U8": 16_423_321_600,
+                },
+                "total": 18_683_860_336,
+            },
+            siblings=[
+                {"rfilename": "model.safetensors.index.json", "size": 100},
+                *_shards("model", 3, int(21.81 * GIB)),
+            ],
+            config={"quantization_config": {
+                "quant_method": "modelopt",
+                "config_groups": {
+                    "group_0": {"weights": {"num_bits": 8}},
+                    "group_1": {"weights": {"num_bits": 4}},
+                },
+            }},
+        ))
+        assert report.declared_bits == 4
+        assert report.bpw is None
+        assert report.bpw_suppressed is not None
+        assert "double the declared 4-bit" in report.bpw_suppressed
+
     def test_i8_nibble_packing_suppresses_bpw(self):
         """deepseek-ai/DeepSeek-V4-Flash: FP4 packed two-per-I8, no U32.
 
@@ -905,6 +944,45 @@ class TestScalesReported:
         assert report.fp_grid is None
         # The number that *is* trustworthy here must still come through.
         assert report.bpw == pytest.approx(4.39, abs=0.02)
+
+    def test_bare_u8_payload_is_not_a_scale_array(self):
+        """NVFP4 stores packed payload in U8 and its scales in F8_E4M3.
+
+        nvidia/Qwen3.6-35B-A3B-NVFP4 and the RedHatAI mirror both scored
+        fp_grid ~0.90 and printed "FP-microscaling grid present (E8M0 scales)"
+        over headers containing zero E8M0 tensors: `weight_packed:U8` beside
+        `weight_scale:F8_E4M3`. Asserting a dtype the file does not contain is
+        worse than the silence the surrounding gates were written to fix.
+
+        MLX pairs a U32 payload with a U8 scale array, so U8 means scales only
+        in that company. Bare U8 abstains.
+        """
+        nvfp4 = {
+            "BF16": 1_825_916_784,
+            "F8_E4M3": 3_332_177_920,
+            "U8": 16_423_321_600,
+        }
+        report = analyze_quant(_payload(
+            safetensors={"parameters": nvfp4, "total": 18_683_860_336},
+            siblings=[
+                {"rfilename": "model.safetensors.index.json", "size": 100},
+                *_shards("model", 3, int(21.81 * GIB)),
+            ],
+            config={"quantization_config": {"quant_method": "modelopt"}},
+        ))
+        assert report.fp_grid is None
+
+    def test_u8_beside_u32_still_counts_as_mlx_scales(self):
+        """The guard must not break the MLX convention it exists to serve."""
+        report = analyze_quant(_payload(
+            safetensors={"parameters": _PURE_MX, "total": 59_059_787_710},
+            siblings=[
+                {"rfilename": "model.safetensors.index.json", "size": 100},
+                *_shards("model", 34, int(155.61 * GIB)),
+            ],
+            config={"quantization_config": {"bits": 4}},
+        ))
+        assert report.fp_grid == pytest.approx(0.927, abs=0.002)
 
     def test_parameter_scoped_histogram_abstains_but_keeps_bpw(self):
         """openai/gpt-oss-120b end to end: no grid signal, bpw untouched.

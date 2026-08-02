@@ -566,6 +566,37 @@ def _scale_implied_packing(dtypes: dict[str, int]) -> float | None:
     return (scales * _MX_GROUP_SIZE) / payload
 
 
+def _declared_bits_from_groups(qc: dict) -> int | None:
+    """Recover a declared width from a ``config_groups`` quantization block.
+
+    compressed-tensors and modelopt do not carry a top-level ``bits``; they
+    nest per-group widths under ``config_groups[*].weights.num_bits``, and that
+    key **survives the Hub's config whitelist** (verified on
+    ``nvidia/Qwen3.6-35B-A3B-NVFP4``), so this costs nothing.
+
+    Without it ``declared_bits`` is None on every such repo and the
+    declared-width cross-check in ``analyze_quant`` degrades silently, exactly
+    as designed but on far more repos than intended.  That is how a 4-bit
+    NVFP4 release reported 10.03 bpw against a true ~5.4 and drew the
+    ``bpw >= 8.4`` upcast-bloat note: the Hub's ``total`` there is neither the
+    stored-element sum nor a logical weight count, and nothing else caught it.
+
+    Takes the **minimum** width across groups.  The cross-check asks whether
+    the measured bpw is beyond what any declared width could explain, so a
+    mixed 8/4 release must be tested against 4: taking the maximum would raise
+    the ceiling to 16 and wave the bogus figure straight through.
+    """
+    groups = qc.get("config_groups")
+    if not isinstance(groups, dict):
+        return None
+    widths = [
+        n for g in groups.values() if isinstance(g, dict)
+        for w in [g.get("weights")] if isinstance(w, dict)
+        for n in [w.get("num_bits")] if isinstance(n, int) and n > 0
+    ]
+    return min(widths) if widths else None
+
+
 def _scales_reported(dtypes: dict[str, int]) -> bool:
     """Does this histogram account for the checkpoint's scale arrays at all?
 
@@ -660,7 +691,9 @@ def analyze_quant(payload: dict) -> _QuantReport:
     qc = qc if isinstance(qc, dict) else {}
     report.quant_config_empty = report.quant_config_present and not qc
     bits = qc.get("bits")
-    report.declared_bits = bits if isinstance(bits, int) else None
+    report.declared_bits = (
+        bits if isinstance(bits, int) else _declared_bits_from_groups(qc)
+    )
     report.quant_method = _safe_identifier(qc.get("quant_method"))
 
     auto_map = config.get("auto_map")
@@ -705,10 +738,23 @@ def analyze_quant(payload: dict) -> _QuantReport:
     # the histogram can carry one, and both ways it can fail need the byte
     # total to detect. A zero read off an absent scale bucket is not evidence
     # of an absent grid, and downstream it becomes a confident all-clear.
-    e8m0 = dtypes.get("U8", 0) + dtypes.get("F8_E8M0", 0)
+    # The `U8` arm needs `U32` beside it. MLX splits a quantized module into a
+    # `U32` payload and a `U8` E8M0 scale array, so `U8` means scales only in
+    # that company. Where `U32` is absent, a large `U8` bucket is packed
+    # *payload*: NVFP4 stores `weight_packed:U8` with `weight_scale:F8_E4M3`,
+    # bitsandbytes stores `weight:U8` with `absmax:U8`. Counting it as scale
+    # metadata asserted "FP-microscaling grid present (E8M0 scales)" over
+    # `nvidia/Qwen3.6-35B-A3B-NVFP4` (fp_grid 0.90) and
+    # `RedHatAI/Qwen3.6-35B-A3B-NVFP4` (0.89), whose headers contain zero
+    # E8M0 tensors. Naming a dtype the file does not contain is worse than the
+    # silence this gate was written to fix, so a bare `U8` payload abstains.
+    e8m0 = dtypes.get("F8_E8M0", 0)
+    if "U32" in dtypes:
+        e8m0 += dtypes.get("U8", 0)
     scale_like = e8m0 + dtypes.get("BF16", 0) + dtypes.get("F16", 0)
     if (
         scale_like
+        and not ("U8" in dtypes and "U32" not in dtypes)
         and _histogram_is_storage_scoped(dtypes, report.canonical_bytes)
         and _scales_reported(dtypes)
     ):
