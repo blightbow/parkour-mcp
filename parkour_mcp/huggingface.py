@@ -752,9 +752,22 @@ def analyze_quant(payload: dict) -> _QuantReport:
     if "U32" in dtypes:
         e8m0 += dtypes.get("U8", 0)
     scale_like = e8m0 + dtypes.get("BF16", 0) + dtypes.get("F16", 0)
+    # Suppress only when `U8` would be the *sole* basis for the claim. An
+    # explicit `F8_E8M0` bucket stands on its own, and blanket-suppressing on
+    # a bare `U8` blinded the tool to the case it exists for:
+    # `nvidia/DeepSeek-V4-Flash-NVFP4` and `nvidia/DeepSeek-V4-Pro-NVFP4` are
+    # NVFP4 conversions that *retained* part of DeepSeek's native E8M0
+    # backbone (201M and 794M E8M0 elements), carry `U8` payload with no
+    # `U32`, and reconcile at ratio 1.000. They are the partially-preserved
+    # hybrid, and a guard aimed at NVFP4's payload silenced them.
+    u8_is_sole_basis = (
+        "U8" in dtypes
+        and "U32" not in dtypes
+        and not dtypes.get("F8_E8M0")
+    )
     if (
         scale_like
-        and not ("U8" in dtypes and "U32" not in dtypes)
+        and not u8_is_sole_basis
         and _histogram_is_storage_scoped(dtypes, report.canonical_bytes)
         and _scales_reported(dtypes)
     ):
