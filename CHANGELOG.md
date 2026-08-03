@@ -5,6 +5,21 @@ All notable changes to parkour-mcp will be documented in this file.
 Format: https://keepachangelog.com/en/1.1.0/
 Versioning: https://semver.org/spec/v2.0.0.html
 
+## [2.1.4] 2026-08-02
+
+### Fixed
+- the quant audit no longer clears a base as having no floating-point grid to preserve when the Hub simply did not report its scale arrays, a false all-clear that invited the one requantization most likely to silently damage an FP4-native model.
+- the microscaling-grid signal is now withheld on every repo whose published histogram counts parameters instead of stored bytes, rather than being reported from arithmetic that could not have established it.
+- the tool no longer tells a reader that an NVFP4 release carries a microscaling grid it does not have, nor accuses a vendor's own 4-bit release of upcast bloat at nearly double its true bits-per-weight.
+- a quantization that keeps part of its base's native microscaling backbone is measured again instead of being silently discarded, without restoring the false grid claim over releases that carry no such scales.
+- quant_audit's grid-preservation verdict was inferred from a dtype histogram that cannot support it, leaving it silent on bases whose scale arrays the Hub omits and ranking a partly-affine quantization above a bit-exact one; it now rules from each repo's declared per-module map, separating a preserved grid from a float-to-float regrid from a collapse onto a uniform integer lattice.
+- a checkpoint split across both unsharded files and per-weight parts is measured whole rather than half, so repos shipping that layout no longer report roughly two-thirds of their true bits-per-weight or lose their quantization-grid signal to a partition artefact.
+- a per-channel or per-tensor quantization whose metadata is complete now reports its quantization-grid measurement instead of having it withheld by a bound that only ever applied to group-wise schemes.
+
+
+### Documentation
+- Make quant-detection comments declarative
+
 ## [2.1.3] 2026-08-01
 
 ### Fixed
