@@ -100,6 +100,7 @@ class TestUrlDetection:
 # Authenticated API requests
 # ---------------------------------------------------------------------------
 
+@pytest.mark.requires_live("github-api")
 class TestGitHubRequest:
     @skip_no_token
     @pytest.mark.asyncio
@@ -210,6 +211,7 @@ class TestGitHubRequest:
 
     @skip_no_token
     @pytest.mark.asyncio
+    @pytest.mark.requires_live("github-raw")
     async def test_raw_file_fetch(self):
         """Verify raw.githubusercontent.com serves file content."""
         async with httpx.AsyncClient(timeout=15.0) as client:
@@ -233,6 +235,7 @@ class TestGitHubRequest:
 # CITATION.cff + shelf integration
 # ---------------------------------------------------------------------------
 
+@pytest.mark.requires_live("github-api")
 class TestCitationCff:
     @skip_no_token
     @pytest.mark.asyncio

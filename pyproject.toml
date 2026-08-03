@@ -102,6 +102,7 @@ testpaths = ["parkour_mcp", "tests", "scripts"]
 markers = [
     "live: live integration tests hitting real endpoints (deselected by default, run with -m live)",
     "perf: performance regression tests using captured fixtures (deselected by default, run with -m perf)",
+    "requires_live(*keys): third-party hosts this test needs; probed once per session by the liveness gate in tests/conftest.py, which fails the test by name and status code when a host is not serving",
 ]
 addopts = "-m 'not live and not perf' --ruff --ty"
 

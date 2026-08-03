@@ -30,6 +30,7 @@ WIKI_URL = "https://wiki.ultimacodex.com/wiki/Ultima_VIII_books"
 # --- MediaWiki detection ---
 
 class TestLiveMediawikiDetection:
+    @pytest.mark.requires_live("ultimacodex")
     @pytest.mark.asyncio
     async def test_detects_ultimacodex_wiki(self):
         result = await _detect_mediawiki(WIKI_URL)
@@ -40,6 +41,7 @@ class TestLiveMediawikiDetection:
         assert result["sitename"] == "Ultima Codex"
         assert "MediaWiki" in result["generator"]
 
+    @pytest.mark.requires_live("httpbin")
     @pytest.mark.asyncio
     async def test_non_wiki_url_returns_none_fast(self):
         result = await _detect_mediawiki("https://httpbin.org/html")
@@ -48,6 +50,7 @@ class TestLiveMediawikiDetection:
 
 # --- MediaWiki page fetch ---
 
+@pytest.mark.requires_live("ultimacodex")
 class TestLiveMediawikiPageFetch:
     @pytest.mark.asyncio
     async def test_full_page_fetch(self):
@@ -64,6 +67,7 @@ class TestLiveMediawikiPageFetch:
 
 # --- MediaWiki HTML → markdown ---
 
+@pytest.mark.requires_live("ultimacodex")
 class TestLiveMediawikiMarkdown:
     @pytest.mark.asyncio
     async def test_full_page_to_markdown(self):
@@ -85,6 +89,7 @@ class TestLiveMediawikiMarkdown:
 # --- web_fetch_direct ---
 
 class TestLiveWebFetchDirect:
+    @pytest.mark.requires_live("ultimacodex")
     @pytest.mark.asyncio
     async def test_wiki_full_page_truncated(self):
         result = await web_fetch_direct(WIKI_URL, max_tokens=200)
@@ -106,6 +111,7 @@ class TestLiveWebFetchDirect:
         assert fenced_line("Sections:") in fence
         assert "Honor Lost" in fence
 
+    @pytest.mark.requires_live("ultimacodex")
     @pytest.mark.asyncio
     async def test_wiki_single_section(self):
         result = await web_fetch_direct(WIKI_URL, section="Honor Lost", max_tokens=500)
@@ -115,6 +121,7 @@ class TestLiveWebFetchDirect:
         assert fenced_heading(4, "Honor Lost") in fence
         assert "Meltzars" in fence
 
+    @pytest.mark.requires_live("ultimacodex")
     @pytest.mark.asyncio
     async def test_wiki_multiple_sections(self):
         result = await web_fetch_direct(
@@ -127,12 +134,14 @@ class TestLiveWebFetchDirect:
         assert fenced_heading(4, "Honor Lost") in fence
         assert fenced_heading(5, "The Spell of Divination") in fence
 
+    @pytest.mark.requires_live("httpbin")
     @pytest.mark.asyncio
     async def test_json_endpoint(self):
         result = await web_fetch_direct("https://httpbin.org/json")
         assert "content_type: json" in result
         assert "slideshow" in result
 
+    @pytest.mark.requires_live("httpbin")
     @pytest.mark.asyncio
     async def test_html_endpoint_markdown_default(self):
         result = await web_fetch_direct("https://httpbin.org/html")
@@ -142,6 +151,7 @@ class TestLiveWebFetchDirect:
         assert fenced_heading(1, "Herman Melville - Moby-Dick") in fence
         assert "<document" not in result  # not XML
 
+    @pytest.mark.requires_live("httpbin")
     @pytest.mark.asyncio
     async def test_404_returns_error(self):
         result = await web_fetch_direct("https://httpbin.org/status/404")
@@ -152,6 +162,7 @@ class TestLiveWebFetchDirect:
 # --- requires_js (headless-browser render) ---
 
 class TestLiveRequiresJs:
+    @pytest.mark.requires_live("ultimacodex")
     @pytest.mark.asyncio
     async def test_wiki_full_page_via_api(self):
         """MediaWiki fast path should return content without launching browser."""
@@ -167,6 +178,7 @@ class TestLiveRequiresJs:
         assert fenced_line("Sections:") in fence
         assert "Honor Lost" in fence
 
+    @pytest.mark.requires_live("ultimacodex")
     @pytest.mark.asyncio
     async def test_wiki_section_fetch_via_api(self):
         result = await web_fetch_direct(
@@ -179,6 +191,7 @@ class TestLiveRequiresJs:
         # Should NOT contain browser: key (fast path skips browser)
         assert "browser:" not in result
 
+    @pytest.mark.requires_live("ultimacodex")
     @pytest.mark.asyncio
     async def test_wiki_multiple_sections_via_api(self):
         result = await web_fetch_direct(
@@ -192,6 +205,7 @@ class TestLiveRequiresJs:
         assert fenced_heading(4, "Honor Lost") in fence
         assert fenced_heading(5, "The Spell of Divination") in fence
 
+    @pytest.mark.requires_live("httpbin")
     @pytest.mark.asyncio
     async def test_non_wiki_uses_browser(self):
         """Non-wiki URL should fall through to the browser path."""
@@ -201,6 +215,7 @@ class TestLiveRequiresJs:
         assert "browser:" in result
         assert "generator: MediaWiki" not in result
 
+    @pytest.mark.requires_live("httpbin")
     @pytest.mark.asyncio
     async def test_premature_requires_js_emits_tip(self):
         """Mechanism #3: cold requires_js with no JS-shell evidence fires the tip."""

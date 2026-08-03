@@ -4,6 +4,7 @@ import pathlib
 import sys
 import time
 
+import httpx
 import pytest
 
 from parkour_mcp.common import init_tool_names
@@ -799,3 +800,97 @@ S2_SNIPPET_CORPUS_RESPONSE = {
         },
     ],
 }
+
+
+# ---------------------------------------------------------------------------
+# Liveness gate for third-party hosts used by the live suite
+# ---------------------------------------------------------------------------
+
+# Each key names a host the live suite depends on; the value is a URL a healthy
+# host answers 2xx for.  It is deliberately *not* a URL any test asserts
+# against: `httpbin` carries a test that expects a 404, and probing that would
+# report a healthy host as down.
+#
+# `www.maytag.com` is absent on purpose.  Its reachability cannot be
+# established independently of the behaviour `TestLiveAkamaiHttp2` asserts:
+# Akamai resets a plain connection, returns 403 to HTTP/2 with a browser UA,
+# and only `guarded_fetch`'s full header set gets 200.  A probe weak enough to
+# be independent reports the host down while it is serving; a probe strong
+# enough to succeed *is* the test.  That one test reports its own transport
+# failure clearly enough to stand alone.
+_LIVE_PROBES = {
+    "ultimacodex": "https://wiki.ultimacodex.com/wiki/Ultima_VIII_books",
+    "httpbin": "https://httpbin.org/json",
+    "github-api": "https://api.github.com/",
+    "github-raw": (
+        "https://raw.githubusercontent.com/pallets/flask/main/README.md"
+    ),
+}
+
+_PROBE_TIMEOUT = 15.0
+
+# key -> None when serving, else a one-line reason.  Populated once per session:
+# a host that is down is down for every test that needs it, and re-probing per
+# test turns one outage into dozens of slow timeouts.
+_probe_results: dict[str, str | None] = {}
+
+
+def _probe_host(key: str) -> str | None:
+    """Return None when the host is serving, else why it is not."""
+    if key in _probe_results:
+        return _probe_results[key]
+    url = _LIVE_PROBES[key]
+    try:
+        with httpx.Client(timeout=_PROBE_TIMEOUT, follow_redirects=True) as client:
+            response = client.get(url)
+        reason = None if response.status_code < 400 else f"HTTP {response.status_code}"
+    except Exception as exc:  # noqa: BLE001 - any transport failure means down
+        reason = f"{type(exc).__name__}"
+    _probe_results[key] = reason
+    return reason
+
+
+def pytest_runtest_setup(item):
+    """Short-circuit a test whose third-party host is not serving.
+
+    Without this an outage surfaces as a spray of assertion errors that read
+    exactly like a regression, and diagnosing it costs a manual walk of every
+    failing test before the cause is even a hypothesis.  Reporting it once per
+    host, by name and status code, leaves no ambiguity.
+
+    **Fails rather than skips, deliberately.**  pytest's own guidance names
+    skip as the idiom for "an external resource which is not available at the
+    moment", and for an ordinary suite that is right.  These tests gate a
+    release, where a quiet skip converts "we could not verify this" into a
+    green run, and "all tests passed" only means something once you know which
+    tests ran.  A suite that silently sheds its live coverage during an outage
+    would ship unverified and say nothing about it.
+
+    **Reports as ERROR, not FAILED, and that is the accurate label.**  pytest
+    classifies a setup-phase failure as an error, which reads as "this test did
+    not run" rather than "this test ran and its assertions failed".  That is
+    exactly the distinction the gate exists to draw, so the check stays in
+    setup rather than being pushed into the call phase to force a FAILED.
+
+    **Probes at runtime rather than collection time.**  Collection-time
+    conditions are ordinarily preferable because they surface in the collection
+    output, but collection runs for every invocation, so probing there would
+    fire four network requests on every mocked run.  The marker only ever
+    attaches to live tests, so setup is the earliest point that costs nothing
+    when the live suite is deselected.
+    """
+    for marker in item.iter_markers(name="requires_live"):
+        for key in marker.args:
+            if key not in _LIVE_PROBES:
+                pytest.fail(
+                    f"requires_live({key!r}) names no host in _LIVE_PROBES; "
+                    f"known keys: {sorted(_LIVE_PROBES)}",
+                    pytrace=False,
+                )
+            if reason := _probe_host(key):
+                pytest.fail(
+                    f"liveness gate: {_LIVE_PROBES[key]} unreachable ({reason}). "
+                    f"Third-party host is not serving, so this test was not run "
+                    f"and its result says nothing about this repo.",
+                    pytrace=False,
+                )
