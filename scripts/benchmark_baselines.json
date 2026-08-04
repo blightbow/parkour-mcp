@@ -1,105 +1,105 @@
 {
-  "captured_at": "2026-04-15T16:40:29.179382+00:00",
+  "captured_at": "2026-08-04T07:38:05.401354+00:00",
   "hardware": "Darwin arm64",
   "python": "3.14.4",
   "generic_http": {
     "small": {
       "tier": "small",
       "url": "https://peps.python.org/pep-0008/",
-      "html_bytes": 121734,
-      "md_bytes": 49222,
+      "html_bytes": 121843,
+      "md_bytes": 48980,
       "n_slices": 42,
       "n_sections": 63,
-      "fetch_ms": 172.31204104609787,
-      "html_to_markdown_ms": 6.79829204455018,
-      "splitter_ms": 1.0539169888943434,
-      "sections_ms": 0.7511249277740717,
-      "ancestry_ms": 0.07970794104039669,
-      "tantivy_ms": 5.142041947692633
+      "fetch_ms": 34.3790000770241,
+      "html_to_markdown_ms": 3.635833039879799,
+      "splitter_ms": 0.5742080975323915,
+      "sections_ms": 0.4848330281674862,
+      "ancestry_ms": 0.0643748790025711,
+      "tantivy_ms": 5.3770828526467085
     },
     "medium": {
       "tier": "medium",
       "url": "https://tc39.es/ecma262/",
-      "html_bytes": 7365937,
-      "md_bytes": 3337080,
-      "n_slices": 2533,
-      "n_sections": 2368,
-      "fetch_ms": 334.6126659307629,
-      "html_to_markdown_ms": 202.0189999602735,
-      "splitter_ms": 1858.6344169452786,
-      "sections_ms": 37.58150013163686,
-      "ancestry_ms": 90.65787494182587,
-      "tantivy_ms": 12.731042224913836
+      "html_bytes": 7586383,
+      "md_bytes": 3467480,
+      "n_slices": 2643,
+      "n_sections": 2443,
+      "fetch_ms": 57.561750058084726,
+      "html_to_markdown_ms": 244.62370807304978,
+      "splitter_ms": 2166.341375093907,
+      "sections_ms": 42.96125005930662,
+      "ancestry_ms": 102.56841592490673,
+      "tantivy_ms": 16.220750054344535
     },
     "pathological": {
       "tier": "pathological",
       "url": "https://html.spec.whatwg.org/",
-      "html_bytes": 15198635,
-      "md_bytes": 8084502,
-      "n_slices": 6152,
-      "n_sections": 1221,
-      "fetch_ms": 1055.2912910934538,
-      "html_to_markdown_ms": 361.8824169971049,
-      "splitter_ms": 4259.69154201448,
-      "sections_ms": 102.3290001321584,
-      "ancestry_ms": 115.95483403652906,
-      "tantivy_ms": 25.258874986320734
+      "html_bytes": 15548707,
+      "md_bytes": 8215138,
+      "n_slices": 6265,
+      "n_sections": 1236,
+      "fetch_ms": 656.2297500204295,
+      "html_to_markdown_ms": 550.090332981199,
+      "splitter_ms": 5180.235625011846,
+      "sections_ms": 119.27495780400932,
+      "ancestry_ms": 125.38258288986981,
+      "tantivy_ms": 28.337374795228243
     }
   },
   "fast_paths": {
     "mediawiki": {
       "name": "mediawiki",
       "url": "https://en.wikipedia.org/wiki/Transformer_(deep_learning_architecture)",
-      "end_to_end_ms": 304.9191248137504,
+      "end_to_end_ms": 408.6804580874741,
       "result_bytes": 1130
     },
     "arxiv": {
       "name": "arxiv",
       "url": "https://arxiv.org/abs/1706.03762",
-      "end_to_end_ms": 972.6865000557154,
-      "result_bytes": 8504
+      "end_to_end_ms": 1108.2733748480678,
+      "result_bytes": 8616
     },
     "ietf": {
       "name": "ietf",
       "url": "https://www.rfc-editor.org/rfc/rfc9110.html",
-      "end_to_end_ms": 1351.9042080733925,
-      "result_bytes": 24762
+      "end_to_end_ms": 276.97312482632697,
+      "result_bytes": 24732
     },
     "doi": {
       "name": "doi",
       "url": "https://doi.org/10.1038/nature14539",
-      "end_to_end_ms": 2292.7700830623507,
-      "result_bytes": 646
+      "end_to_end_ms": 1596.9624160788953,
+      "result_bytes": 23995
     },
     "reddit": {
       "name": "reddit",
       "url": "https://www.reddit.com/r/Python/top/",
-      "end_to_end_ms": 231.59291688352823,
-      "result_bytes": 913
+      "end_to_end_ms": 216.26004204154015,
+      "result_bytes": 692
     },
     "discourse": {
       "name": "discourse",
       "url": "https://meta.discourse.org/t/about-the-meta-category/1",
-      "end_to_end_ms": 996.4872498530895,
+      "end_to_end_ms": 1439.699542010203,
       "result_bytes": 2765
     },
     "github_blob": {
       "name": "github_blob",
       "url": "https://github.com/python/cpython/blob/v3.12.0/Lib/asyncio/base_events.py",
-      "end_to_end_ms": 275.1043748576194,
-      "result_bytes": 25061
+      "end_to_end_ms": 75.26383409276605,
+      "result_bytes": 25237
     },
     "github_issue": {
       "name": "github_issue",
       "url": "https://github.com/python/cpython/issues/100000",
-      "end_to_end_ms": 1285.5957911815494,
+      "end_to_end_ms": 1314.285040833056,
       "result_bytes": 654
     },
     "github_pull": {
       "name": "github_pull",
       "url": "https://github.com/python/cpython/pull/1",
-      "end_to_end_ms": 3022.5303329061717,
-      "result_bytes": 3847
+      "end_to_end_ms": 3010.038415901363,
+      "result_bytes": 4041
     }
   }
 }

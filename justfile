@@ -63,15 +63,23 @@ install-hooks:
     chmod +x scripts/git-hooks/*
     @echo "Git hooks installed. pre-push will run live tests on version tag pushes."
 
-# Usage: just tag v1.2.3 — runs version-drift check + mocked + live suites,
-# then creates annotated tag (no push). Mocked suite runs first because it's
-# fast and includes pytest-ruff, which catches format/lint regressions that
-# CI's `uv run pytest` would also fail on. Skipping this step let a ruff E402
-# regression escape to the v1.1.1 release tag. The sync check catches
-# drift between pyproject.toml, manifest.json, and server.json before the
-# tag escapes, since the CI workflow's tag-vs-pyproject check only sees
-# the one file.
+# Usage: just tag v1.2.3 — runs doc + version drift checks, then the mocked
+# and live suites, then creates the annotated tag (no push). Mocked suite runs
+# before live because it's fast and includes pytest-ruff, which catches
+# format/lint regressions that CI's `uv run pytest` would also fail on.
+# Skipping this step let a ruff E402 regression escape to the v1.1.1 release
+# tag. The sync check catches drift between pyproject.toml, manifest.json, and
+# server.json before the tag escapes, since the CI workflow's tag-vs-pyproject
+# check only sees the one file.
+#
+# docs-drift goes first: it is the cheapest gate (no network, ~1 s) and it is
+# the only one that catches prose describing code that has since moved. It
+# runs here rather than in CI because CI only sees a tag that already exists,
+# and a stale doc is not worth deleting and recutting a tag over — it is worth
+# never tagging in the first place.
 tag version:
+    @echo "Checking docs against code (cog, drift anchors, manifest tools)..."
+    just docs-drift
     @echo "Checking pyproject.toml / manifest.json / server.json sync..."
     uv run python3 scripts/sync_versions.py --check
     @echo "Running mocked test suite (incl. ruff lint) before creating tag {{version}}..."

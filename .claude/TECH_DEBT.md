@@ -62,6 +62,18 @@ than it does:
   unchanged at 6 throughout. Gate on the finding count, never the comment count.
   Keep suppressed imports short enough not to wrap; see the four sites in
   `doi.py` and `mediawiki.py`, whose reasons live in a block comment above.
+- **drift** and **cog** (`just docs-drift`, which also runs
+  `check_manifest_tools.py`) gate tag creation from the `tag` recipe in
+  the justfile, and again from `scripts/git-hooks/pre-push` for anyone
+  who tags by hand instead. Both are pre-tag on purpose: CI only ever
+  sees a tag that already exists, and a stale doc is not worth deleting
+  and recutting a tag over. Neither runs in CI, so a fresh clone that
+  tags and pushes without `just tag` is ungated — the same hole the
+  hook paragraph below describes. A drift failure is resolved by
+  reviewing the doc against the code and restamping with
+  `drift link <doc> --doc-is-still-accurate`, never by restamping
+  blind; `drift link` refuses a stale anchor without that flag
+  precisely so the review cannot be skipped.
 - **vulture** (`just lint-deep`) gates version-tag pushes via
   `scripts/git-hooks/pre-push`, which is the only place it runs — CI's
   tag-push job is `uv run pytest` plus the semgrep install that the test
@@ -167,20 +179,26 @@ matters; nobody has.
 - **Location**: `semantic-text-splitter` (`>=0.29.0`), driven from
   `parkour_mcp/_pipeline.py`; introduced in `db1519d`.
 - **Measured cost** (`scripts/benchmark_baselines.json`, captured
-  2026-04-15 on Darwin arm64 / Python 3.14.4):
+  2026-08-04 on Darwin arm64 / Python 3.14.4):
 
-  | tier | fetch | h2md | **split** | sections | tantivy | total |
-  |---|---:|---:|---:|---:|---:|---:|
-  | small | 172 | 7 | **1** | 1 | 5 | 186 ms |
-  | medium | 335 | 202 | **1,859** | 38 | 13 | 2.5 s |
-  | pathological | 1,055 | 362 | **4,260** | 102 | 25 | 5.9 s |
+  | tier | fetch | h2md | **split** | sections | ancestry | tantivy | total |
+  |---|---:|---:|---:|---:|---:|---:|---:|
+  | small | 34 | 4 | **1** | 0 | 0 | 5 | 45 ms |
+  | medium | 58 | 245 | **2,166** | 43 | 103 | 16 | 2.6 s |
+  | pathological | 656 | 550 | **5,180** | 119 | 125 | 28 | 6.7 s |
 
-  On the pathological tier the splitter is 72% of pipeline wall-clock, and
+  On the pathological tier the splitter is 78% of pipeline wall-clock, and
   the only phase above a second.
+
+  Baselines and fixtures are captured in the **same run**. They were three
+  days apart before (fixtures 2026-04-12, baselines 2026-04-15), so the
+  recorded phase times described a different document than the one
+  `test_perf.py` replays, and the gap read as an unexplained regression.
+  `--update-baselines` and `--capture-fixtures` belong together.
 - **Scope**: generic HTTP path only, as before — every fast path bypasses
   it. Fast-path end-to-end times are all well under 2.5 s (`fast_paths` in
   the same baseline file).
-- **Why deferred**: 5.9 s end-to-end on the worst page on the open web is
+- **Why deferred**: 6.7 s end-to-end on the worst page on the open web is
   not a user-visible problem, and it is paid once per page per session
   behind `_PageCache`. There is no obvious cheaper substitute either: the
   splitter is what produces semantic slice boundaries and ancestry, which
@@ -198,10 +216,12 @@ matters; nobody has.
   dropped 96% of the WHATWG fixture during the port
   (`kreuzberg-dev/html-to-markdown#275`).
 - **Keeping this honest**: regenerate with
-  `uv run python3 scripts/benchmark_pipeline.py --update-baselines` and
-  update the tables above in the same commit. The numbers here are prose
-  and rot silently; the JSON is what `test_perf.py` asserts against, so a
-  mismatch means this entry is wrong, not the suite.
+  `uv run python3 scripts/benchmark_pipeline.py --update-baselines --capture-fixtures`
+  and update the tables above in the same commit. Pass both flags: baselines
+  measured against one document and fixtures captured from another produce a
+  gate that drifts on its own. The numbers here are prose and rot silently;
+  the JSON is what `test_perf.py` asserts against, so a mismatch means this
+  entry is wrong, not the suite.
 
 ## YouTube tool — deferred enhancements
 

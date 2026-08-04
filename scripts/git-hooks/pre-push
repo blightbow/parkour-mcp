@@ -12,6 +12,12 @@
 # v2.0.0 its findings accumulated without ever failing a gate.  It is the
 # cheapest of the three (no network, sub-second), so it goes first.
 #
+# The docs-drift scan is the same shape of problem: `just docs-drift` existed
+# but nothing invoked it, so a doc anchored to code that moved in a July lint
+# sweep sat stale until someone ran the recipe by hand.  `just tag` now runs it
+# before creating a tag; this hook repeats it for the path that skips `just
+# tag` and tags by hand.  Also no network, ~1 s.
+#
 # Live tests hit real endpoints, so they can't run unattended in CI without
 # credentials.  Running them at tag-push time is our stand-in: format drift
 # that would otherwise escape to a release gets caught at the last moment.
@@ -46,7 +52,23 @@ echo
 
 repo_root="$(git rev-parse --show-toplevel)"
 
-# Dead-code scan runs first — sub-second, and the only place it runs at all.
+# Doc-drift scan runs first — ~1 s, no network, and it is the gate most
+# likely to be stale because docs rot silently while tests stay green.
+echo "pre-push: checking docs against code (cog, drift anchors, manifest tools)..."
+if ! just --justfile "$repo_root/justfile" --working-directory "$repo_root" docs-drift; then
+    echo
+    echo "pre-push: DOC-DRIFT CHECK FAILED — refusing to push version tag"
+    echo "pre-push:"
+    echo "pre-push: A doc describes code that has since moved.  Read the doc"
+    echo "pre-push: section and the code side by side, update the prose if it"
+    echo "pre-push: is wrong, then restamp with:"
+    echo "pre-push:     drift link <doc-path> --doc-is-still-accurate"
+    echo "pre-push: For a cog mismatch, run 'just docs-drift-fix' instead."
+    exit 1
+fi
+
+echo
+# Dead-code scan runs next — sub-second, and the only place it runs at all.
 echo "pre-push: running vulture dead-code scan..."
 if ! uv run --directory "$repo_root" vulture parkour_mcp/ .vulture_whitelist.py; then
     echo

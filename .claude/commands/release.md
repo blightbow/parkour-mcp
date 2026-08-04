@@ -141,9 +141,17 @@ into the release commit. The release touches `pyproject.toml`,
 only — `CHANGELOG.md`. An RC does not modify `CHANGELOG.md`, so omit it.
 Confirm the staged set with `git status` before committing.
 
-`just tag` runs `sync_versions.py --check`, the mocked test suite (with
-ruff lint), and the live test suite before creating the annotated tag.
-Expect ~1-2 minutes for live tests.
+`just tag` runs `just docs-drift` (cog blocks, drift anchors, manifest
+tool list), `sync_versions.py --check`, the mocked test suite (with ruff
+lint), and the live test suite before creating the annotated tag. Expect
+~1-2 minutes for live tests.
+
+A `docs-drift` failure means a doc describes code that has since moved.
+Read the doc section and the code side by side, fix the prose if it is
+wrong, then restamp with `drift link <doc-path> --doc-is-still-accurate`.
+A cog mismatch is regenerated with `just docs-drift-fix`. Do not reach
+for `--no-verify`: no tag exists yet at this point, so there is nothing
+to rescue by pushing past it.
 
 ## Step 6: Hand off
 

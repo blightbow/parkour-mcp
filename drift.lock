@@ -3,7 +3,7 @@ version = 1
 [[bindings]]
 doc = "docs/frontmatter-standard.md"
 target = "parkour_mcp/markdown.py#FMEntries"
-sig = "09f972f94e3a2660"
+sig = "da712235e9cedc39"
 
 [[bindings]]
 doc = "docs/frontmatter-standard.md"
