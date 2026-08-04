@@ -15,6 +15,7 @@ from parkour_mcp.markdown import (
     _fence_content,
     _filter_markdown_by_sections,
     _format_retraction_banner,
+    _promote_list_headings,
     _resolve_toc_slice,
     _slugify,
     html_to_markdown,
@@ -283,6 +284,108 @@ class TestCleanHeadings:
         assert _slugify(name) == (
             "13-2-5-36-attribute-value-double-quoted-state"
         )
+
+
+class TestPromoteListHeadings:
+    """Accordion headings buried in list items become real sections.
+
+    Disclosure widgets wrap each section's ``<h2>`` in an ``<li>``, which
+    converts to ``*   ## Title``.  Section extraction anchors headings at
+    line start, so without promotion the whole page reads as one section.
+    """
+
+    def test_heading_in_list_item_is_promoted(self):
+        html = (
+            "<html><body><ul>"
+            "<li><h2>What Is Personal Data</h2><p>Body one.</p></li>"
+            "<li><h2>Your Privacy Rights</h2><p>Body two.</p></li>"
+            "</ul></body></html>"
+        )
+        _, markdown = html_to_markdown(html)
+        names = [s["name"] for s in _extract_sections_from_markdown(markdown)]
+        assert names == ["What Is Personal Data", "Your Privacy Rights"]
+
+    def test_promoted_item_body_is_dedented(self):
+        """The item body must not survive as a four-space indented code block."""
+        html = (
+            "<html><body><ul>"
+            "<li><h2>Section</h2><p>Prose that belongs to the section.</p></li>"
+            "</ul></body></html>"
+        )
+        _, markdown = html_to_markdown(html)
+        body = markdown.split("## Section", 1)[1]
+        prose = next(line for line in body.split("\n") if line.strip())
+        assert not prose.startswith(" "), f"body left indented: {prose!r}"
+
+    def test_ordered_list_marker_is_promoted(self):
+        html = "<html><body><ol><li><h2>Step One</h2><p>Do it.</p></li></ol></body></html>"
+        _, markdown = html_to_markdown(html)
+        assert [s["name"] for s in _extract_sections_from_markdown(markdown)] == ["Step One"]
+
+    def test_ordinary_list_is_untouched(self):
+        html = (
+            "<html><body><h1>Doc</h1><ul>"
+            "<li>First item</li><li>Second item</li>"
+            "</ul></body></html>"
+        )
+        _, markdown = html_to_markdown(html)
+        assert "*   First item" in markdown or "* First item" in markdown
+        assert [s["name"] for s in _extract_sections_from_markdown(markdown)] == ["Doc"]
+
+    def test_indented_code_comment_is_not_promoted(self):
+        """Four-space indented ``# comment`` lines have no list marker.
+
+        Real regression: Django's queryset docs indent Python examples, and
+        ``_find_fenced_code_ranges`` does not cover them because they are not
+        fenced.  Requiring a marker is what keeps them out.
+        """
+        html = (
+            "<html><body><h1>Docs</h1>"
+            "<pre><code># Without select_related(), this queries per row\n"
+            "for e in Entry.objects.all():\n"
+            "    print(e.blog)\n</code></pre></body></html>"
+        )
+        _, markdown = html_to_markdown(html)
+        assert [s["name"] for s in _extract_sections_from_markdown(markdown)] == ["Docs"]
+
+    def test_fenced_list_heading_is_not_promoted(self):
+        """A markdown sample inside a fenced block stays sample text."""
+        markdown = (
+            "# Real\n\n"
+            "```markdown\n"
+            "*   ## Not A Heading\n"
+            "```\n"
+        )
+        assert _promote_list_headings(markdown) == markdown
+
+    def test_repeated_names_from_a_toc_stay_addressable(self):
+        """A ``<ul>`` of headings acting as a TOC duplicates later sections.
+
+        Promotion cannot tell a navigational heading list from an accordion,
+        so both become sections.  Duplicates must remain individually
+        addressable via the parent-disambiguated display name rather than
+        collapsing into one entry.
+        """
+        markdown = (
+            "# Doc\n\n"
+            "## Contents\n\n"
+            "*   ### Alpha\n"
+            "*   ### Beta\n\n"
+            "## Body\n\n"
+            "### Alpha\n\nReal alpha content.\n"
+        )
+        sections = _extract_sections_from_markdown(_promote_list_headings(markdown))
+        assert [s["name"] for s in sections] == [
+            "Doc", "Contents", "Alpha", "Beta", "Body", "Alpha",
+        ]
+        rendered = "\n".join(_build_section_list(sections))
+        assert "Alpha (Contents)" in rendered
+        assert "Alpha (Body)" in rendered
+
+    def test_no_candidates_returns_input_unchanged(self):
+        """The bail-out must be identity, not a rebuilt string."""
+        markdown = "# Title\n\nBody text.\n\n*   plain item\n"
+        assert _promote_list_headings(markdown) is markdown
 
 
 class TestHtmlTitleExtraction:

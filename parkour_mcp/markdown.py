@@ -172,6 +172,78 @@ def _strip_heading_line(match: "re.Match[str]") -> str:
     return f"{match.group(1)} {_strip_heading_markdown(match.group(2))}"
 
 
+# Matches a list item whose content begins with an ATX heading, capturing the
+# marker prefix (group 1) and the heading itself (group 2).  Accordion and
+# disclosure widgets wrap each section's ``<h2>`` in an ``<li>``, which htmd
+# renders faithfully as ``*   ## Section Title``.  ``_HEADING_RE`` anchors at
+# line start, so those headings are invisible to section extraction.
+#
+# An explicit list marker is required.  Matching bare indentation instead would
+# capture ``# comment`` lines inside four-space indented code blocks, which are
+# not fenced and so are not covered by ``_find_fenced_code_ranges``.
+_LIST_HEADING_RE = re.compile(
+    r"^([ \t]*(?:[-*+]|\d+[.)])[ \t]+)(#{1,6}[ \t]+\S.*)$", re.MULTILINE
+)
+
+
+def _promote_list_headings(markdown: str) -> str:
+    """Lift headings out of the list items that contain them.
+
+    The heading line loses its list marker and the rest of the item is
+    dedented by the marker's width, so the item's body becomes ordinary
+    prose rather than a four-space indented code block.
+
+    A blank line does not end an item; the item ends at the first non-blank
+    line indented less than the marker width.  Promotion runs one level
+    deep: a heading nested inside an already-promoted item keeps its
+    relative position and is left alone.
+
+    Returns *markdown* unchanged when it contains no such headings, which
+    is the overwhelmingly common case and avoids splitting large documents
+    into lines.
+    """
+    if not _LIST_HEADING_RE.search(markdown):
+        return markdown
+
+    code_ranges = _find_fenced_code_ranges(markdown)
+    lines = markdown.split("\n")
+
+    # Line-start offsets in the unmodified string, so the fenced-code test
+    # below runs in the same coordinate space the ranges were measured in.
+    offsets: list[int] = []
+    pos = 0
+    for line in lines:
+        offsets.append(pos)
+        pos += len(line) + 1
+
+    out = list(lines)
+    i = 0
+    total = len(lines)
+    while i < total:
+        match = _LIST_HEADING_RE.match(lines[i])
+        if not match or any(s <= offsets[i] < e for s, e in code_ranges):
+            i += 1
+            continue
+
+        width = len(match.group(1))
+        out[i] = match.group(2)
+
+        j = i + 1
+        while j < total:
+            line = lines[j]
+            if not line.strip():
+                j += 1
+                continue
+            indent = len(line) - len(line.lstrip(" \t"))
+            if indent < width:
+                break
+            out[j] = line[width:]
+            j += 1
+        i = j
+
+    return "\n".join(out)
+
+
 # Built once; ``htmd.Options`` is an immutable configuration snapshot that
 # replicates the prior ``TextOnlyConverter`` semantics via flat fields
 # (``skip_tags`` decomposes noise, ``image_placeholder`` renders images as
@@ -249,6 +321,11 @@ def html_to_markdown(html: str) -> tuple[str, str]:
     """
     markdown = htmd.convert_html(html, _HTMD_OPTIONS)  # ty: ignore[unresolved-attribute]
     markdown = re.sub(r"\n{3,}", "\n\n", markdown).strip()
+    # Lift accordion headings out of their list items before anything reads
+    # heading lines, so the promoted headings get the same inline-markup
+    # cleanup and land in the cached markdown the splitter and section
+    # extraction both consume.
+    markdown = _promote_list_headings(markdown)
     # Strip inline markup from heading lines once, at conversion time, so
     # downstream section-name extraction sees plain text without paying a
     # per-call strip cost. Matches the pre-port ``_clean_headings`` output.
