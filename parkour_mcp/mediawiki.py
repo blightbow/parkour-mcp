@@ -32,6 +32,11 @@ logger = logging.getLogger(__name__)
 
 _MEDIAWIKI_API_PATHS = ["/api.php", "/w/api.php"]
 
+# Characters that end the authority component of a URL.  A `wiki` value
+# containing any of them is not a bare host, and concatenating it would move
+# the API path into a fragment, query, or userinfo section.
+_HOST_FORBIDDEN_CHARS = frozenset("#?/@\\ \t\r\n")
+
 # Shared rate limiter for all MediaWiki API calls — backs the
 # `_fetch_mediawiki_page` and `_search_mediawiki` helpers below.
 # Back-fills a pre-existing gap: mediawiki.py had no client-side limiter
@@ -532,6 +537,18 @@ async def _resolve_wiki_base(wiki: str) -> tuple[str, str]:
         host = parsed.netloc
     else:
         host = wiki
+
+    # The host is concatenated into API URLs, so anything that can terminate
+    # the authority has to be rejected rather than silently swallowing the
+    # API path: "evil.com#.wikipedia.org" builds
+    # "https://evil.com#.wikipedia.org/w/api.php", which is sent as a bare
+    # request to evil.com/ with the path in the fragment.  Rejecting also
+    # keeps the Wikimedia suffix test below from matching on text that is
+    # not part of the host at all.
+    if any(c in _HOST_FORBIDDEN_CHARS for c in host):
+        raise ValueError(
+            f"wiki must be a hostname or a full URL, got {wiki!r}"
+        )
 
     # Short-circuit for Wikimedia-hosted sites: they always use
     # ``/w/api.php``.  This avoids an unnecessary probe round-trip for

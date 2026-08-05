@@ -168,6 +168,28 @@ class TestMediawikiAddressGuard:
         with pytest.raises(BlockedAddress, match="127.0.0.1"):
             await _detect_mediawiki("http://127.0.0.1/wiki/Main_Page")
 
+    @pytest.mark.parametrize("wiki", [
+        "evil.com#.wikipedia.org",
+        "evil.com?.wikimedia.org",
+        "evil.com/.wikipedia.org",
+        "user@evil.com",
+    ])
+    @pytest.mark.asyncio
+    async def test_rejects_hosts_that_terminate_the_authority(self, wiki):
+        """The host is concatenated into API URLs.  'evil.com#.wikipedia.org'
+        passed the Wikimedia suffix test, skipped the probe, and built
+        'https://evil.com#.wikipedia.org/w/api.php' — which goes out as a
+        bare request to evil.com/ with the API path lost in the fragment,
+        rendered under an api: label that reads as Wikimedia."""
+        with pytest.raises(ValueError, match="hostname or a full URL"):
+            await _resolve_wiki_base(wiki)
+
+    @pytest.mark.asyncio
+    async def test_accepts_ordinary_hosts(self):
+        host, api_base = await _resolve_wiki_base("en.wikipedia.org")
+        assert host == "en.wikipedia.org"
+        assert api_base == "https://en.wikipedia.org/w/api.php"
+
     @pytest.mark.asyncio
     async def test_resolve_wiki_base_surfaces_refusal(self):
         """_resolve_wiki_base bridges to ValueError so its callers render an
