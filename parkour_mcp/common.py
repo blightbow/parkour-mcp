@@ -241,12 +241,24 @@ _ALLOW_PRIVATE_IPS = _parse_truthy_env("MCP_ALLOW_PRIVATE_IPS")
 
 
 def _is_private_ip(addr: str) -> bool:
-    """Check whether an IP address string is private, loopback, or reserved."""
+    """Check whether an address is one we refuse to connect to.
+
+    ``is_global`` carries the test.  It is false for every range IANA
+    records as not globally reachable, which covers loopback, RFC 1918
+    private space, link-local, RFC 6598 shared address space (carrier-grade
+    NAT, and the range Alibaba Cloud serves its metadata endpoint from),
+    the benchmarking and documentation ranges, and 240.0.0.0/4.
+
+    The other two disjuncts are not redundant with it.  Multicast reports
+    ``is_global`` true, and so does NAT64 (``64:ff9b::/96``) which
+    ``is_reserved`` catches, so dropping either would newly admit an
+    address the predicate is meant to refuse.
+    """
     try:
         ip = ipaddress.ip_address(addr)
     except ValueError:
         return False
-    return ip.is_private or ip.is_loopback or ip.is_reserved or ip.is_link_local
+    return not ip.is_global or ip.is_multicast or ip.is_reserved
 
 
 def check_url_ssrf(url: str) -> str | None:

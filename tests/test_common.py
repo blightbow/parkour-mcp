@@ -78,6 +78,15 @@ class TestIsPrivateIp:
         "fe80::1",         # IPv6 link-local
         "fc00::1",         # IPv6 unique local
         "fd12::1",         # IPv6 unique local
+        "100.64.0.1",      # RFC 6598 shared address space (carrier-grade NAT)
+        "100.100.100.200", # RFC 6598, and Alibaba Cloud's metadata endpoint
+        "224.0.0.1",       # IPv4 multicast, which reports is_global true
+        "239.0.0.1",       # IPv4 administratively-scoped multicast
+        "ff02::1",         # IPv6 link-local multicast
+        "64:ff9b::7f00:1", # NAT64 of 127.0.0.1, also is_global true
+        "198.18.0.1",      # RFC 2544 benchmarking
+        "240.0.0.1",       # reserved for future use
+        "203.0.113.5",     # TEST-NET-3
     ])
     def test_private_addresses(self, addr):
         assert _is_private_ip(addr) is True
