@@ -6,11 +6,17 @@ import re
 import urllib.parse
 from typing import Annotated
 
-import httpx
 from bs4 import BeautifulSoup
 from pydantic import Field
 
-from .common import _API_HEADERS, RateLimiter, tool_name
+from .common import (
+    _API_HEADERS,
+    BlockedAddress,
+    RateLimiter,
+    guarded_client,
+    proxy_warning,
+    tool_name,
+)
 from .markdown import (
     _TRUST_ADVISORY,
     FMEntries,
@@ -73,7 +79,9 @@ async def _detect_mediawiki(url: str) -> dict | None:
 
     base_url = f"{parsed.scheme}://{parsed.netloc}"
 
-    async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+    # guarded_client, not a bare AsyncClient: `url` reaches here from the
+    # caller's `wiki` or `title`, so this probe picks its own destination.
+    async with guarded_client(timeout=10.0, follow_redirects=True) as client:
         for api_path in _MEDIAWIKI_API_PATHS:
             api_base = base_url + api_path
             try:
@@ -114,6 +122,12 @@ async def _detect_mediawiki(url: str) -> dict | None:
                     "generator": siteinfo.get("generator", ""),
                 }
 
+            except BlockedAddress:
+                # Not the same fact as "this endpoint is not MediaWiki".
+                # Swallowing it would report a refused destination as an
+                # unrecognized wiki and try the next API path against a host
+                # we already declined to contact.
+                raise
             except Exception:
                 logger.debug(
                     "MediaWiki siteinfo probe failed for %s", api_base, exc_info=True
@@ -140,7 +154,7 @@ async def _fetch_mediawiki_page(
     Returns {title, html, sections_meta} or None.
     """
     await _mediawiki_limiter.wait()
-    async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+    async with guarded_client(timeout=30.0, follow_redirects=True) as client:
         resp = await client.get(
             api_base,
             params={
@@ -533,7 +547,13 @@ async def _resolve_wiki_base(wiki: str) -> tuple[str, str]:
     # URL to a well-known page.  This handles bare MediaWiki installs
     # that put their API at ``/api.php`` rather than ``/w/api.php``.
     probe_url = f"https://{host}/wiki/Main_Page"
-    info = await _detect_mediawiki(probe_url)
+    try:
+        info = await _detect_mediawiki(probe_url)
+    except BlockedAddress as e:
+        # Callers already turn ValueError into a user-facing error string;
+        # routing through it keeps the refusal reason in the message rather
+        # than crashing the tool with a transport exception.
+        raise ValueError(str(e)) from e
     if info is None:
         raise ValueError(
             f"Could not resolve wiki {wiki!r} — no MediaWiki API found "
@@ -579,7 +599,7 @@ async def _search_mediawiki(
         "srprop": "snippet|size|wordcount|timestamp",
         "format": "json",
     }
-    async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+    async with guarded_client(timeout=15.0, follow_redirects=True) as client:
         resp = await client.get(api_base, params=params, headers=_API_HEADERS)
         resp.raise_for_status()
         data = resp.json()
@@ -709,6 +729,7 @@ async def _handle_search(
         "action": "search",
         "query": query,
         "total_results": total,
+        "warning": proxy_warning(),
     })
     if namespace != 0:
         fm_entries["namespace"] = namespace
@@ -763,6 +784,11 @@ async def _handle_references(
 
     try:
         wiki_info, wiki_page = await _cached_mediawiki_fetch(url)
+    except BlockedAddress as e:
+        # An expected refusal, not a failure: log it quietly so a blocked
+        # host does not fill the log with tracebacks.
+        logger.debug("MediaWiki references target refused: %s", e)
+        return f"Error: {e}"
     except Exception as e:
         logger.exception("MediaWiki references fetch failed")
         return f"Error: Could not fetch {url}: {e}"
@@ -779,6 +805,7 @@ async def _handle_references(
     fm_entries = FMEntries({
         "source": url,
         "trust": _TRUST_ADVISORY,
+        "warning": proxy_warning(),
     })
 
     if footnotes is not None:

@@ -15,8 +15,10 @@ from parkour_mcp.mediawiki import (
     _fetch_mediawiki_page,
     _format_citations,
     _format_inline_citations,
+    _handle_references,
     _handle_search,
     _mediawiki_html_to_markdown,
+    _resolve_wiki_base,
 )
 
 from .conftest import (
@@ -151,6 +153,41 @@ class TestDetectMediawiki:
 
 
 # --- _clean_display_title ---
+
+class TestMediawikiAddressGuard:
+    """`wiki` and a URL-shaped `title` both let the caller choose the host,
+    so every path that probes one gets the address check.  No respx mock: a
+    refused destination must never reach a transport."""
+
+    @pytest.mark.asyncio
+    async def test_detect_refuses_loopback(self):
+        """The refusal must not be swallowed as 'not a MediaWiki site'.
+        Those are different facts, and conflating them both misreports the
+        reason and tries the next API path against a refused host."""
+        from parkour_mcp.common import BlockedAddress
+        with pytest.raises(BlockedAddress, match="127.0.0.1"):
+            await _detect_mediawiki("http://127.0.0.1/wiki/Main_Page")
+
+    @pytest.mark.asyncio
+    async def test_resolve_wiki_base_surfaces_refusal(self):
+        """_resolve_wiki_base bridges to ValueError so its callers render an
+        error string instead of crashing on a transport exception."""
+        with pytest.raises(ValueError, match="private/reserved"):
+            await _resolve_wiki_base("127.0.0.1")
+
+    @pytest.mark.asyncio
+    async def test_references_reports_the_refusal(self):
+        """The references action takes a URL-shaped title verbatim, so it
+        reaches a caller-chosen host without going through
+        _resolve_wiki_base's https-only construction."""
+        result = await _handle_references(
+            title="http://127.0.0.1/wiki/X", wiki="en",
+            footnotes=[1], citations=None, max_tokens=1000,
+        )
+        assert result.startswith("Error:")
+        assert "private/reserved" in result
+        assert "untrusted content" not in result
+
 
 class TestCleanDisplayTitle:
     def test_strips_html_tags(self):

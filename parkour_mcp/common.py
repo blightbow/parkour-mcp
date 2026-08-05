@@ -337,14 +337,14 @@ async def _resolve_and_check(host: str, port: int) -> list[str]:
         addresses = [host]
 
     if not addresses:
-        raise BlockedAddress(f"Error: {host} did not resolve to any address.")
+        raise BlockedAddress(f"{host} did not resolve to any address.")
 
     if not _ALLOW_PRIVATE_IPS:
         for address in addresses:
             if _is_private_ip(address):
                 _logger.debug("blocked connect: %s resolved to %s", host, address)
                 raise BlockedAddress(
-                    "Error: Blocked request to private/reserved address "
+                    "Blocked request to private/reserved address "
                     f"({host} -> {address})."
                 )
     return addresses
