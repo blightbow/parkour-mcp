@@ -25,6 +25,7 @@ from .common import (
     _FETCH_HEADERS,
     ResponseTooLarge,
     _classify_content_type,
+    check_url_scheme,
     guarded_fetch,
 )
 from .discourse import _detect_discourse_headers
@@ -276,6 +277,13 @@ async def _render_js(
     ``premature`` is set by the caller when the agent reached for a render
     without evidence the page needs one; it emits a one-time teaching tip.
     """
+    # Re-checked here rather than trusted from the caller: this is the only
+    # path whose consumer honors a non-http scheme, because ``page.goto``
+    # reads ``file://`` URLs and returns their contents as page text.
+    scheme_error = check_url_scheme(url)
+    if scheme_error:
+        return scheme_error
+
     timeout = _PLAYWRIGHT_TIMEOUT_MS
     want_slicing = search is not None or slices is not None
 

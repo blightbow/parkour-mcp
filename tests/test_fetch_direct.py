@@ -331,6 +331,52 @@ class TestWebFetchDirectErrors:
         assert "ConnectError" in result
 
 
+class TestSchemeGate:
+    """Non-http schemes are refused at the tool boundary, on every path.
+
+    The static path is refused by httpx on its own, but the headless-browser
+    path hands the URL to ``page.goto()``, which reads ``file://`` URLs and
+    returns their contents as page text.  These assert the refusal happens
+    before dispatch, so no path depends on its consumer's scheme handling.
+
+    No respx mock is needed: a refused URL never reaches a transport.
+    """
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("kwargs", [
+        {},
+        {"requires_js": True},
+        {"actions": [{"action": "wait", "selector": "body"}]},
+    ], ids=["static", "requires_js", "actions"])
+    async def test_file_url_refused_on_every_dispatch_path(self, kwargs):
+        result = await web_fetch_direct("file:///etc/hosts", **kwargs)
+        assert result.startswith("Error:")
+        assert "Unsupported URL scheme" in result
+
+    @pytest.mark.asyncio
+    async def test_file_url_refused_by_sections(self):
+        result = await web_fetch_sections("file:///etc/hosts")
+        assert result.startswith("Error:")
+        assert "Unsupported URL scheme" in result
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("url", [
+        "gopher://127.0.0.1:6379/_INFO",
+        "dict://127.0.0.1:11211/stat",
+        "ftp://example.com/pub",
+    ])
+    async def test_other_non_http_schemes_refused(self, url):
+        result = await web_fetch_direct(url)
+        assert result.startswith("Error:")
+        assert "Unsupported URL scheme" in result
+
+    @pytest.mark.asyncio
+    async def test_scheme_relative_url_refused(self):
+        result = await web_fetch_direct("//example.com/page")
+        assert result.startswith("Error:")
+        assert "must be absolute" in result
+
+
 class TestWebFetchDirectMediawikiFastPath:
     @pytest.mark.asyncio
     @respx.mock

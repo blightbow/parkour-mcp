@@ -10,6 +10,7 @@ import respx
 from parkour_mcp.common import (
     _is_private_ip,
     _parse_truthy_env,
+    check_url_scheme,
     check_url_ssrf,
     guarded_fetch,
     load_credential,
@@ -170,6 +171,51 @@ class TestCheckUrlSsrf:
         with patch("parkour_mcp.common.socket.getaddrinfo", return_value=fake_addrinfo):
             result = check_url_ssrf("http://dual-homed.example.com/")
             assert result is not None
+
+
+class TestCheckUrlScheme:
+    """Unit tests for check_url_scheme."""
+
+    @pytest.mark.parametrize("url", [
+        "http://example.com/page",
+        "https://example.com/page",
+        "HTTPS://EXAMPLE.COM/PAGE",
+    ])
+    def test_allows_http_and_https(self, url):
+        assert check_url_scheme(url) is None
+
+    @pytest.mark.parametrize("url", [
+        "file:///etc/passwd",
+        "gopher://127.0.0.1:6379/_INFO",
+        "dict://127.0.0.1:11211/stat",
+        "ftp://example.com/pub",
+        "data:text/html,<h1>inline</h1>",
+        "javascript:alert(1)",
+    ])
+    def test_rejects_other_schemes(self, url):
+        result = check_url_scheme(url)
+        assert result is not None
+        assert "Unsupported URL scheme" in result
+
+    def test_rejects_missing_scheme(self):
+        result = check_url_scheme("example.com/page")
+        assert result is not None
+        assert "must be absolute" in result
+
+    def test_env_override_does_not_relax_scheme(self):
+        """MCP_ALLOW_PRIVATE_IPS opts into private *hosts* for local network
+        crawling.  It must not also re-open non-network schemes, or enabling
+        local crawling would silently restore arbitrary local file reads."""
+        with patch("parkour_mcp.common._ALLOW_PRIVATE_IPS", new=True):
+            assert check_url_ssrf("http://127.0.0.1/admin") is None
+            assert check_url_scheme("file:///etc/passwd") is not None
+
+    def test_address_guard_does_not_cover_file_urls(self):
+        """The two checks are not redundant.  A file:// URL has no hostname,
+        so check_url_ssrf finds nothing to resolve and passes it through;
+        scheme is the only property that distinguishes it."""
+        assert check_url_ssrf("file:///etc/passwd") is None
+        assert check_url_scheme("file:///etc/passwd") is not None
 
 
 class TestGuardedFetchHttp2Fallback:

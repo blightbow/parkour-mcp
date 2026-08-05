@@ -292,6 +292,42 @@ def check_url_ssrf(url: str) -> str | None:
 
 
 # ---------------------------------------------------------------------------
+# URL scheme allowlist
+# ---------------------------------------------------------------------------
+
+# The only schemes any fetcher accepts.  Deliberately independent of
+# check_url_ssrf and of MCP_ALLOW_PRIVATE_IPS: that variable opts into
+# private *hosts* for local network crawling, and must never also opt into
+# schemes that do not describe a network destination at all.
+_ALLOWED_URL_SCHEMES = frozenset({"http", "https"})
+
+
+def check_url_scheme(url: str) -> str | None:
+    """Validate that *url* uses a fetchable scheme.
+
+    ``file://`` is the case this exists for.  httpx rejects it, so the
+    static path is safe on its own, but the headless-browser path hands the
+    URL to ``page.goto()``, which reads local files and returns their
+    contents as page text.
+
+    No address-based guard can catch that: a ``file://`` URL has no
+    hostname, so ``check_url_ssrf`` finds nothing to resolve and passes it
+    through.  Scheme is the only property that distinguishes it.
+
+    Returns an error string if the scheme is rejected, or None if allowed.
+    """
+    scheme = urlparse(url).scheme.lower()
+    if not scheme:
+        return "Error: URL must be absolute and begin with http:// or https://."
+    if scheme not in _ALLOWED_URL_SCHEMES:
+        return (
+            f"Error: Unsupported URL scheme '{scheme}://'. "
+            "Only http and https can be fetched."
+        )
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Tool display names — profile-aware lookup for hint/note/see_also strings
 # ---------------------------------------------------------------------------
 

@@ -32,6 +32,7 @@ from .common import (
     _MAX_SECTIONS_RESPONSE_BYTES,
     ResponseTooLarge,
     _classify_content_type,
+    check_url_scheme,
     check_url_ssrf,
     guarded_fetch,
     s2_enabled,
@@ -181,7 +182,11 @@ async def web_fetch_direct(
 
     source_url, fragment_warning = _resolve_fragment_source(url, fragment, section)
 
-    # --- SSRF check (must run before any fast path that makes HTTP requests) ---
+    # --- Scheme + SSRF checks (before any fast path that makes HTTP requests) ---
+    scheme_error = check_url_scheme(url)
+    if scheme_error:
+        return scheme_error
+
     ssrf_error = check_url_ssrf(url)
     if ssrf_error:
         return ssrf_error
@@ -811,7 +816,11 @@ async def web_fetch_sections(url: str, slice: int = 0) -> str:
     url, fragment = _extract_fragment(url)
     section_names = [fragment] if fragment else None
 
-    # --- SSRF check (must run before any fast path that makes HTTP requests) ---
+    # --- Scheme + SSRF checks (before any fast path that makes HTTP requests) ---
+    scheme_error = check_url_scheme(url)
+    if scheme_error:
+        return scheme_error
+
     ssrf_error = check_url_ssrf(url)
     if ssrf_error:
         return ssrf_error
