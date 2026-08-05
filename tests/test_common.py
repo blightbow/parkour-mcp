@@ -4,6 +4,7 @@ import asyncio
 import socket
 from unittest.mock import AsyncMock, patch
 
+import httpcore
 import httpx
 import pytest
 import respx
@@ -14,6 +15,7 @@ from parkour_mcp.common import (
     _GuardedTransport,
     _is_private_ip,
     _parse_truthy_env,
+    _PinningBackend,
     _resolve_and_check,
     check_url_scheme,
     check_url_ssrf,
@@ -321,6 +323,58 @@ class TestGuardedTransport:
         for transport in client._mounts.values():
             assert isinstance(transport, _GuardedTransport)
             assert transport.pinned is False
+
+    @pytest.mark.asyncio
+    async def test_falls_through_to_the_next_validated_address(self):
+        """Pinning bypasses anyio's Happy Eyeballs (RFC 6555), which resolves
+        and walks the address list itself.  Without an equivalent walk here a
+        host whose first address is unreachable fails outright, which is the
+        dual-stack case the RFC exists for.  Falling through costs no reach:
+        _resolve_and_check refuses the whole name if any address is refused,
+        so everything in the list already passed."""
+        tried: list[str] = []
+
+        class _Inner(httpcore.AsyncNetworkBackend):
+            async def connect_tcp(
+                self, host, port, timeout=None, local_address=None,
+                socket_options=None,
+            ):
+                tried.append(host)
+                if host == "142.250.80.46":
+                    raise httpcore.ConnectError("unreachable")
+                return "stream"
+
+        fake = [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("142.250.80.46", 0)),
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("1.1.1.1", 0)),
+        ]
+        loop = asyncio.get_running_loop()
+        with patch.object(loop, "getaddrinfo", new=AsyncMock(return_value=fake)):
+            result = await _PinningBackend(_Inner()).connect_tcp("dual.example", 443)
+
+        assert result == "stream"
+        assert tried == ["142.250.80.46", "1.1.1.1"]
+
+    @pytest.mark.asyncio
+    async def test_last_address_failure_propagates(self):
+        """Exhausting the list must raise, not fall out of the loop."""
+        class _Inner(httpcore.AsyncNetworkBackend):
+            async def connect_tcp(
+                self, host, port, timeout=None, local_address=None,
+                socket_options=None,
+            ):
+                raise httpcore.ConnectError("unreachable")
+
+        fake = [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("142.250.80.46", 0)),
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("1.1.1.1", 0)),
+        ]
+        loop = asyncio.get_running_loop()
+        with (
+            patch.object(loop, "getaddrinfo", new=AsyncMock(return_value=fake)),
+            pytest.raises(httpcore.ConnectError),
+        ):
+            await _PinningBackend(_Inner()).connect_tcp("dual.example", 443)
 
     def test_blocked_address_is_a_request_error(self):
         """Callers already handle httpx.RequestError, so a blocked target

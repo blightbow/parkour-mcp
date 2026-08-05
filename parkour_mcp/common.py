@@ -386,12 +386,39 @@ class _PinningBackend(httpcore.AsyncNetworkBackend):
         # ``host`` arrives already IDNA-encoded by httpx, so this resolves
         # exactly the name the connection would otherwise have used.
         addresses = await _resolve_and_check(host, port)
-        # TLS is applied by a separate httpcore step carrying the original
-        # hostname, so SNI and certificate verification are unaffected.
-        return await self._inner.connect_tcp(
-            addresses[0], port, timeout=timeout,
-            local_address=local_address, socket_options=socket_options,
-        )
+
+        # Pinning to one address bypasses the Happy Eyeballs fallback
+        # (RFC 6555) that anyio performs when it resolves the name itself,
+        # so walk the list here instead.  Without this a host whose first
+        # address is unreachable, the dual-stack case the RFC exists for,
+        # fails outright where it would previously have connected.
+        #
+        # Falling through costs no reach: _resolve_and_check refuses the
+        # whole name when any single address is refused, so every address
+        # reaching this loop has already passed the check.
+        #
+        # Order is the resolver's, which on both glibc and macOS is already
+        # RFC 6724 destination-address sorted.  anyio re-sorts to force an
+        # IPv6 address first, which discards that.  The parallel race is
+        # deliberately not reproduced: attempts are sequential, so a
+        # blackholed first address costs its connect timeout rather than
+        # RFC 8305's 250 ms stagger.  TLS is applied by a separate httpcore
+        # step carrying the original hostname, so SNI and certificate
+        # verification are unaffected either way.
+        last = len(addresses) - 1
+        for index, address in enumerate(addresses):
+            try:
+                return await self._inner.connect_tcp(
+                    address, port, timeout=timeout,
+                    local_address=local_address, socket_options=socket_options,
+                )
+            except (httpcore.ConnectError, httpcore.ConnectTimeout):
+                if index == last:
+                    raise
+                _logger.debug(
+                    "connect to %s (%s) failed; trying next address", address, host,
+                )
+        raise AssertionError("unreachable: _resolve_and_check rejects an empty list")
 
     async def connect_unix_socket(
         self, path: str, timeout: float | None = None, socket_options=None,
