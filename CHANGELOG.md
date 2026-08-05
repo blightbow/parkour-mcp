@@ -5,6 +5,38 @@ All notable changes to parkour-mcp will be documented in this file.
 Format: https://keepachangelog.com/en/1.1.0/
 Versioning: https://semver.org/spec/v2.0.0.html
 
+## [2.2.0] 2026-08-05
+
+### Added
+- pages that bury their section headings in accordion or disclosure list items now expose a full heading tree, so web_fetch_sections lists their real sections and both section= extraction and BM25 ancestry breadcrumbs work on collapsible policy, FAQ, and documentation pages instead of treating the whole document as one section.
+- section= gains an auto_expand option that returns the named heading together with everything filed under it, so a chapter of documentation, a policy clause with its sub-clauses, or a Reddit comment with its reply thread arrives in one call, while the default stays surgical so an unqualified request cannot silently spend two orders of magnitude more context than intended.
+
+
+### Fixed
+- the documentation examples for Reddit showed timestamps and section breadcrumbs that no longer matched what the tools produce, and could not be corrected because the script that regenerates them had been unable to run since Reddit moved to OAuth.
+- documentation rendered by Sphinx no longer reports its code comments as page sections, so the heading tree for sites like the Django and Python docs lists the real sections instead of dozens of phantom ones, and extracting a section no longer stops early at a comment inside an example.
+- a hostname resolving to several addresses now falls through to the next one when the first is unreachable, instead of failing the fetch outright, restoring the dual-stack resilience that connection pinning had removed.
+
+
+### Security
+- there was no way to report a vulnerability privately, so a security report had nowhere to go but a public issue; SECURITY.md now routes reports through GitHub private advisories, states acknowledgement and fix targets, and scopes the threat model for a tool that feeds untrusted web content to an LLM.
+- a file:// URL handed to the browser-rendering path read arbitrary local files and returned them as page content, putting credentials under ~/.config/parkour, ~/.aws, and ~/.ssh within reach of a fetch whose arguments an injected page had steered; only http and https are fetchable now.
+- the SSRF guard let through carrier-grade NAT space and multicast, so a fetch aimed at 100.100.100.200 reached Alibaba Cloud's instance metadata endpoint unchallenged; the address check now refuses anything IANA does not record as globally reachable.
+- an internationalized hostname resolved differently by the address check than by the HTTP client, letting a domain an attacker controls validate as public and then connect to loopback, and a redirect could reach an internal service the check never saw; validation now happens at the socket and connects to the address it just validated.
+- a Discourse forum URL pointing at a private address reached it unchecked, a base URL ending in '#' could steer the request to any path on that host, and a response could attribute forum content to a host it was never fetched from.
+- a MediaWiki wiki or page URL pointing at a private address reached it unchecked, most broadly through the references action where a URL-shaped title carried the caller's scheme, host, and port straight into an API probe, and a refused host now says so instead of reporting itself as an unrecognized wiki.
+- rendering a page with requires_js followed redirects into internal addresses that the address check never saw, and a configured egress proxy was silently bypassed while the response claimed the opposite control had weakened.
+- a wiki value like "evil.com#.wikipedia.org" was accepted as a Wikimedia host, skipped the API probe, sent its request to the wrong path on that host, and labelled the results as MediaWiki in the trusted frontmatter zone.
+- the documentation claimed the address check prevented the server from reaching internal networks and cloud metadata endpoints, which overstated it; it is now described as the safety default it is rather than a security boundary, and the two paths where the guarantee is weaker, behind a proxy and through the headless browser, are named instead of left to be assumed equivalent.
+
+
+### Documentation
+- Describe heading promotion in the module map
+
+
+### Miscellaneous
+- Gate live tests on a per-host liveness probe
+
 ## [2.1.4] 2026-08-02
 
 ### Fixed
