@@ -1,6 +1,6 @@
 [project]
 name = "parkour-mcp"
-version = "2.2.0"
+version = "2.2.1"
 description = "A content exploration toolkit that helps LLMs surface high signal, unsummarized web content."
 readme = "README.md"
 license = "MIT"

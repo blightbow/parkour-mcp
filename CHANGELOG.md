@@ -5,6 +5,12 @@ All notable changes to parkour-mcp will be documented in this file.
 Format: https://keepachangelog.com/en/1.1.0/
 Versioning: https://semver.org/spec/v2.0.0.html
 
+## [2.2.1] 2026-08-05
+
+### Security
+- Declare read-only workflow token permissions
+- the lockfile carried 41 known security advisories across 13 dependencies and now carries none, patching yt-dlp, soupsieve, urllib3, requests, and idna on live code paths, plus cryptography, starlette, pyjwt, and python-multipart behind the ASGI and OAuth surface that a stdio server never reaches.
+
 ## [2.2.0] 2026-08-05
 
 ### Added
