@@ -14,6 +14,12 @@ on:
       - "drift.lock"
       - ".github/workflows/docs-drift.yml"
 
+# Read-only: this workflow checks docs against code and writes nothing.
+# Declared explicitly rather than inherited, so a change to the repository
+# default cannot silently widen what the token can do.
+permissions:
+  contents: read
+
 jobs:
   check:
     runs-on: ubuntu-latest
