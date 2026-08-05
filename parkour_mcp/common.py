@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 
 import httpcore
 import httpx
+from httpx._utils import get_environment_proxies
 
 # ---------------------------------------------------------------------------
 # Package / runtime versions (used in User-Agent strings)
@@ -454,14 +455,47 @@ def guarded_client(**kwargs) -> httpx.AsyncClient:
     ``httpx.AsyncClient`` resolves and connects with no address check, so
     every caller-reachable destination must come through here.
 
+    Environment proxies are reproduced explicitly.  httpx computes
+    ``allow_env_proxies = trust_env and transport is None``, so passing a
+    transport at all makes it skip ``HTTPS_PROXY`` and friends entirely.
+    Left alone that would silently drop a configured egress proxy, which in
+    a deployment where the proxy *is* the egress control removes that
+    control, and would also leave every transport reporting ``pinned`` when
+    a proxy is in play.
+
     Accepts the same keyword arguments as ``httpx.AsyncClient``.
     """
+    # httpx routes these around the guard rather than through it: an
+    # explicit `proxy=` builds a plain AsyncHTTPTransport for the mount, and
+    # `transport=` / `mounts=` replace ours outright.  Refusing them is
+    # louder than silently returning a client that does not check anything.
+    for unsupported in ("transport", "mounts"):
+        if unsupported in kwargs:
+            raise TypeError(
+                f"guarded_client() does not accept {unsupported}=: it would "
+                "replace the transport that performs the address check"
+            )
+
     kwargs.setdefault("timeout", 30.0)
     http2 = kwargs.pop("http2", False)
     verify = kwargs.pop("verify", True)
-    return httpx.AsyncClient(
-        transport=_GuardedTransport(http2=http2, verify=verify), **kwargs,
-    )
+    explicit_proxy = kwargs.pop("proxy", None)
+
+    def _transport(proxy: str | None = None) -> _GuardedTransport:
+        return _GuardedTransport(http2=http2, verify=verify, proxy=proxy)
+
+    if explicit_proxy is not None:
+        mounts: dict[str, httpx.AsyncBaseTransport | None] = {
+            "all://": _transport(explicit_proxy),
+        }
+    else:
+        # A None value means "reach this pattern directly" (NO_PROXY), which
+        # still wants a guarded transport, just an unproxied one.
+        mounts = {
+            pattern: _transport(proxy_url)
+            for pattern, proxy_url in get_environment_proxies().items()
+        }
+    return httpx.AsyncClient(transport=_transport(), mounts=mounts, **kwargs)
 
 
 # Standard proxy variables, in the spellings httpx honours via trust_env.

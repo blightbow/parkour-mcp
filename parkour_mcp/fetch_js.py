@@ -12,7 +12,6 @@ import os
 from pathlib import Path
 from urllib.parse import urlparse
 
-import httpx
 from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
 
@@ -23,9 +22,12 @@ from ._pipeline import (
 )
 from .common import (
     _FETCH_HEADERS,
+    BlockedAddress,
     ResponseTooLarge,
     _classify_content_type,
+    _resolve_and_check,
     check_url_scheme,
+    guarded_client,
     guarded_fetch,
 )
 from .discourse import _detect_discourse_headers
@@ -290,7 +292,7 @@ async def _render_js(
     # --- Content-type pre-check (skip browser for non-HTML) ---
     if not actions:
         try:
-            async with httpx.AsyncClient(follow_redirects=True, timeout=10.0) as client:
+            async with guarded_client(follow_redirects=True, timeout=10.0) as client:
                 head_resp = await client.head(url, headers=_FETCH_HEADERS)
                 head_resp.raise_for_status()
 
@@ -377,25 +379,51 @@ async def _render_js(
             )
             page = await context.new_page()
 
+            # The browser resolves DNS and follows redirects in its own
+            # process, so the address check the httpx transport performs
+            # cannot reach it.  Route every request through an equivalent
+            # check instead, and register it *before* navigating: the
+            # initial goto's own redirect chain is the interesting one, and
+            # a handler installed afterwards never sees it.
+            _initial_host = urlparse(url).hostname
+            # Read by the closure below; flipped once the caller's own
+            # navigation has completed so its redirect chain is not treated
+            # as an in-page cross-origin steer.
+            _navigated = False
+
+            async def _guard_navigation(route):
+                request_url = route.request.url
+                parsed = urlparse(request_url)
+                if route.request.is_navigation_request():
+                    # Address, not hostname string: a redirect to a new name
+                    # that resolves internally, or a rebind that keeps the
+                    # name identical, both defeat a name comparison.
+                    host = parsed.hostname
+                    if host:
+                        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+                        try:
+                            await _resolve_and_check(host, port)
+                        except BlockedAddress as e:
+                            logger.debug("Blocked navigation to %s: %s", request_url, e)
+                            await route.abort("blockedbyclient")
+                            return
+                    # Post-load, keep the browser on the origin the caller
+                    # asked for; a public third-party host is still not
+                    # somewhere an injected page gets to steer the render.
+                    if _navigated and host != _initial_host:
+                        logger.debug(
+                            "Blocked cross-origin navigation: %s -> %s",
+                            _initial_host, request_url,
+                        )
+                        await route.abort("blockedbyclient")
+                        return
+                await route.continue_()
+
+            await page.route("**/*", _guard_navigation)
+
             # Wait for load event - gives JS time to create framework elements
             await page.goto(url, wait_until="load", timeout=timeout)
-
-            # Block cross-origin navigations after initial load to prevent
-            # JS redirects from steering the browser to internal services.
-            _initial_host = urlparse(url).hostname
-
-            async def _block_cross_origin_nav(route):
-                if (route.request.is_navigation_request()
-                        and urlparse(route.request.url).hostname != _initial_host):
-                    logger.debug(
-                        "Blocked cross-origin navigation: %s -> %s",
-                        _initial_host, route.request.url,
-                    )
-                    await route.abort("blockedbyclient")
-                else:
-                    await route.continue_()
-
-            await page.route("**/*", _block_cross_origin_nav)
+            _navigated = True
 
             # Check for live app frameworks that use persistent connections
             for marker in LIVE_APP_MARKERS:

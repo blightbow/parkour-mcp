@@ -17,6 +17,7 @@ from parkour_mcp.common import (
     _resolve_and_check,
     check_url_scheme,
     check_url_ssrf,
+    guarded_client,
     guarded_fetch,
     load_credential,
     proxy_in_effect,
@@ -282,6 +283,44 @@ class TestGuardedTransport:
     async def test_env_override_disables_address_check(self):
         with patch("parkour_mcp.common._ALLOW_PRIVATE_IPS", new=True):
             assert await _resolve_and_check("127.0.0.1", 80) == ["127.0.0.1"]
+
+    def test_guarded_client_honors_environment_proxy(self, no_proxy_env, monkeypatch):
+        """httpx computes `allow_env_proxies = trust_env and transport is
+        None`, so passing a transport makes it skip HTTPS_PROXY entirely.
+        guarded_client reproduces the proxy map itself; without that a
+        configured egress proxy is silently dropped, every transport reports
+        pinned, and proxy_warning() describes a degradation that did not
+        happen while staying silent about the one that did."""
+        monkeypatch.setenv("HTTPS_PROXY", "http://egress:3128")
+        client = guarded_client()
+        assert client._mounts, "environment proxy was dropped"
+        for transport in client._mounts.values():
+            assert isinstance(transport, _GuardedTransport)
+            assert transport.pinned is False
+
+    def test_guarded_client_pins_when_unproxied(self, no_proxy_env):
+        client = guarded_client()
+        assert client._mounts == {}
+        transport = client._transport
+        assert isinstance(transport, _GuardedTransport)
+        assert transport.pinned is True
+
+    @pytest.mark.parametrize("kwarg", ["transport", "mounts"])
+    def test_guarded_client_refuses_guard_replacing_kwargs(self, kwarg):
+        """Both would replace the transport that performs the check, and
+        httpx would accept them silently."""
+        with pytest.raises(TypeError, match="address check"):
+            guarded_client(**{kwarg: httpx.AsyncHTTPTransport()})
+
+    def test_explicit_proxy_still_gets_a_guarded_transport(self, no_proxy_env):
+        """httpx builds a plain AsyncHTTPTransport for an explicit proxy=
+        mount, so the proxy has to be routed through _GuardedTransport
+        instead of handed to AsyncClient."""
+        client = guarded_client(proxy="http://egress:3128")
+        assert client._mounts
+        for transport in client._mounts.values():
+            assert isinstance(transport, _GuardedTransport)
+            assert transport.pinned is False
 
     def test_blocked_address_is_a_request_error(self):
         """Callers already handle httpx.RequestError, so a blocked target
