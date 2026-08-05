@@ -126,23 +126,48 @@ signal throughout the content.
 
 ## SSRF Protection
 
-Outbound HTTP fetches are guarded by `check_url_ssrf()` (`common.py`),
-which `web_fetch_direct` runs before dispatching to either its static
-path or the headless-browser renderer. It resolves hostnames and checks
-all addresses against private/loopback/reserved/link-local ranges (IPv4
-and IPv6).  This prevents the MCP server from being used to probe
-internal networks or cloud metadata endpoints.
+This is a **safety default, not a security boundary.** parkour runs on
+the user's own machine with the user's own privileges, and
+`MCP_ALLOW_PRIVATE_IPS=1` exists precisely so local network crawling is
+a supported use. The control exists so that content the agent was
+steered toward by a fetched page cannot quietly pivot to localhost or a
+cloud metadata endpoint. A genuine boundary would need egress
+enforcement outside this process.
 
-- Applied before all generic HTTP fetches (after fast-path detection, so
-  API-backed sources like GitHub and arXiv are unaffected)
-- Set `MCP_ALLOW_PRIVATE_IPS=1` to disable for local network crawling
-- DNS resolution uses `socket.getaddrinfo()` with `AF_UNSPEC` to cover
-  both IPv4 and IPv6
-- DNS failures pass through — httpx reports the error naturally
+The check lives at the socket. `common.py#_PinningBackend` resolves a
+hostname once, refuses the name if *any* resolved address is
+non-global, multicast, or reserved, and then connects to the address it
+just validated. Validating a URL string and letting a lower layer
+resolve it again is the shape behind three separate bypasses: the two
+layers can disagree on how to encode an internationalized name, DNS can
+change between the two lookups, and a redirect can introduce a
+destination the first check never saw. One resolution has none of those.
 
-Playwright (`fetch_js.py`) additionally blocks cross-origin navigation
-after the initial page load via `page.route()`, preventing JavaScript
-redirects from steering the browser to internal services.
+- Applied to every destination reached through `common.py#guarded_client`,
+  including each hop of a redirect chain, because httpx invokes the
+  transport once per hop
+- `common.py#check_url_ssrf` still runs at the tool boundary as a fast,
+  friendly refusal; the transport is what actually enforces
+- `common.py#check_url_scheme` allowlists http and https. It is
+  deliberately independent of `MCP_ALLOW_PRIVATE_IPS`, which opts into
+  private *hosts*, never into schemes that name no network destination
+- Set `MCP_ALLOW_PRIVATE_IPS=1` to disable the address check for local
+  network crawling
+- Multiple resolved addresses are tried in turn, so pinning does not cost
+  the dual-stack fallback that the resolver's ordering provides
+
+Two paths are weaker, and say so rather than implying otherwise:
+
+- **Behind a proxy**, the proxy performs the resolution that reaches the
+  network, so the check cannot be bound to the socket. It moves up to
+  the transport's request handler, which still sees the real
+  destination, and the response carries a frontmatter `warning` that the
+  control is degraded for that fetch.
+- **The headless-browser path** resolves DNS in the browser's own
+  process. `fetch_js.py` registers a route guard *before* navigating and
+  checks the resolved address of every navigation request, so redirects
+  are covered, but this is a parallel implementation rather than the
+  same code path.
 
 ## Hint Field Types
 
