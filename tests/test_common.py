@@ -1,20 +1,34 @@
 """Tests for parkour_mcp.common module."""
 
+import asyncio
 import socket
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
 import respx
 
 from parkour_mcp.common import (
+    _PROXY_ENV_VARS,
+    BlockedAddress,
+    _GuardedTransport,
     _is_private_ip,
     _parse_truthy_env,
+    _resolve_and_check,
     check_url_scheme,
     check_url_ssrf,
     guarded_fetch,
     load_credential,
+    proxy_in_effect,
 )
+
+
+@pytest.fixture
+def no_proxy_env(monkeypatch):
+    """Clear proxy variables so transport tests do not depend on the
+    developer's shell."""
+    for var in _PROXY_ENV_VARS:
+        monkeypatch.delenv(var, raising=False)
 
 
 class TestParseTruthyEnv:
@@ -225,6 +239,64 @@ class TestCheckUrlScheme:
         scheme is the only property that distinguishes it."""
         assert check_url_ssrf("file:///etc/passwd") is None
         assert check_url_scheme("file:///etc/passwd") is not None
+
+
+class TestGuardedTransport:
+    """The address check binds to the connection only when no proxy is
+    configured.  Behind a proxy the backend is handed the proxy's address
+    rather than the destination's, so the check moves a layer up and the
+    guarantee weakens; `pinned` is what records which applies."""
+
+    def test_pins_when_no_proxy(self, no_proxy_env):
+        assert _GuardedTransport().pinned is True
+
+    def test_does_not_pin_behind_proxy(self, no_proxy_env):
+        assert _GuardedTransport(proxy="http://127.0.0.1:8888").pinned is False
+
+    @pytest.mark.asyncio
+    async def test_blocks_private_literal(self):
+        with pytest.raises(BlockedAddress, match="127.0.0.1"):
+            await _resolve_and_check("127.0.0.1", 80)
+
+    @pytest.mark.asyncio
+    async def test_allows_public_literal(self):
+        assert await _resolve_and_check("8.8.8.8", 443) == ["8.8.8.8"]
+
+    @pytest.mark.asyncio
+    async def test_rejects_if_any_resolved_address_is_private(self):
+        """A name carrying both a public and a private record is refused.
+        Checking only the first would let whoever controls the zone choose
+        which record gets used."""
+        fake = [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("142.250.80.46", 0)),
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.1", 0)),
+        ]
+        loop = asyncio.get_running_loop()
+        with (
+            patch.object(loop, "getaddrinfo", new=AsyncMock(return_value=fake)),
+            pytest.raises(BlockedAddress, match="10.0.0.1"),
+        ):
+            await _resolve_and_check("dual-homed.example.com", 443)
+
+    @pytest.mark.asyncio
+    async def test_env_override_disables_address_check(self):
+        with patch("parkour_mcp.common._ALLOW_PRIVATE_IPS", new=True):
+            assert await _resolve_and_check("127.0.0.1", 80) == ["127.0.0.1"]
+
+    def test_blocked_address_is_a_request_error(self):
+        """Callers already handle httpx.RequestError, so a blocked target
+        surfaces through their existing error path rather than escaping."""
+        assert issubclass(BlockedAddress, httpx.RequestError)
+
+
+class TestProxyInEffect:
+    def test_false_when_unset(self, no_proxy_env):
+        assert proxy_in_effect() is False
+
+    @pytest.mark.parametrize("var", _PROXY_ENV_VARS)
+    def test_true_for_each_spelling(self, no_proxy_env, monkeypatch, var):
+        monkeypatch.setenv(var, "http://127.0.0.1:8888")
+        assert proxy_in_effect() is True
 
 
 class TestGuardedFetchHttp2Fallback:

@@ -11,6 +11,7 @@ from importlib.metadata import version as _pkg_version
 from pathlib import Path
 from urllib.parse import urlparse
 
+import httpcore
 import httpx
 
 # ---------------------------------------------------------------------------
@@ -304,6 +305,188 @@ def check_url_ssrf(url: str) -> str | None:
 
 
 # ---------------------------------------------------------------------------
+# Address-pinning transport
+# ---------------------------------------------------------------------------
+
+
+class BlockedAddress(httpx.TransportError):
+    """A connection target failed the address check.
+
+    Subclasses ``httpx.TransportError`` so every caller's existing
+    ``except httpx.RequestError`` arm already handles it.
+    """
+
+
+async def _resolve_and_check(host: str, port: int) -> list[str]:
+    """Resolve *host* and reject it if any resolved address is refused.
+
+    Rejecting on *any* refused address, rather than on the one the OS
+    happens to return first, is deliberate: a name with both a public and a
+    private record lets whoever controls the zone pick which one is used.
+
+    Returns the resolved addresses, first one first.
+    """
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        infos = await asyncio.get_running_loop().getaddrinfo(
+            host, port, family=socket.AF_UNSPEC, type=socket.SOCK_STREAM,
+        )
+        addresses = [str(info[4][0]) for info in infos]
+    else:
+        addresses = [host]
+
+    if not addresses:
+        raise BlockedAddress(f"Error: {host} did not resolve to any address.")
+
+    if not _ALLOW_PRIVATE_IPS:
+        for address in addresses:
+            if _is_private_ip(address):
+                _logger.debug("blocked connect: %s resolved to %s", host, address)
+                raise BlockedAddress(
+                    "Error: Blocked request to private/reserved address "
+                    f"({host} -> {address})."
+                )
+    return addresses
+
+
+class _PinningBackend(httpcore.AsyncNetworkBackend):
+    """Network backend that resolves once and connects to what it validated.
+
+    Validating a URL string and letting a lower layer resolve it again is
+    the shape behind three separate bypasses: the two layers can disagree on
+    how to encode an internationalized name, DNS can change between the two
+    lookups, and a redirect can introduce a destination the first check
+    never saw.  Resolving here removes the second lookup, so none of the
+    three has anywhere to happen.
+
+    Only installed when no proxy is configured.  With a proxy the backend is
+    handed the *proxy's* address rather than the destination's, so pinning
+    here would check the wrong host.  ``_GuardedTransport`` covers that case
+    a layer up.
+
+    Decorates the backend httpcore already selected rather than naming a
+    concrete one, so the connection behaviour stays httpcore's and only the
+    address decision is ours.  That also keeps whichever async library
+    httpcore picked, instead of pinning the choice to one of them.
+    """
+
+    def __init__(self, inner: httpcore.AsyncNetworkBackend) -> None:
+        self._inner = inner
+
+    async def connect_tcp(
+        self,
+        host: str,
+        port: int,
+        timeout: float | None = None,
+        local_address: str | None = None,
+        socket_options=None,
+    ):
+        # ``host`` arrives already IDNA-encoded by httpx, so this resolves
+        # exactly the name the connection would otherwise have used.
+        addresses = await _resolve_and_check(host, port)
+        # TLS is applied by a separate httpcore step carrying the original
+        # hostname, so SNI and certificate verification are unaffected.
+        return await self._inner.connect_tcp(
+            addresses[0], port, timeout=timeout,
+            local_address=local_address, socket_options=socket_options,
+        )
+
+    async def connect_unix_socket(
+        self, path: str, timeout: float | None = None, socket_options=None,
+    ):
+        # No address to check: a unix socket names a filesystem path, and
+        # httpx only reaches this when a caller configures uds= explicitly.
+        return await self._inner.connect_unix_socket(
+            path, timeout=timeout, socket_options=socket_options,
+        )
+
+    async def sleep(self, seconds: float) -> None:
+        await self._inner.sleep(seconds)
+
+
+class _GuardedTransport(httpx.AsyncHTTPTransport):
+    """Transport that address-checks every destination, including redirects.
+
+    Two layers, because they see different things:
+
+    * Without a proxy the check lives in :class:`_PinningBackend`, which
+      connects to the address it validated.  Nothing can change between the
+      check and the connection.
+    * With a proxy the backend only ever sees the proxy, so the check moves
+      to ``handle_async_request``, which sees the real destination.  That
+      check is advisory: the proxy performs the resolution that actually
+      reaches the network, and no local check can bind it.  ``pinned``
+      records which of the two applies so callers can say so.
+
+    httpx calls the transport once per redirect hop, so both layers cover
+    redirect chains with no redirect-specific code.
+    """
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        pool = self._pool
+        # httpx swaps in a proxy pool when a proxy is configured, and both
+        # proxy classes subclass AsyncConnectionPool, so a bare isinstance
+        # would match them too.
+        if isinstance(pool, httpcore.AsyncConnectionPool) and not isinstance(
+            pool, (httpcore.AsyncHTTPProxy, httpcore.AsyncSOCKSProxy)
+        ):
+            self.pinned = True
+            pool._network_backend = _PinningBackend(pool._network_backend)
+        else:
+            self.pinned = False
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        if not self.pinned:
+            # Proxied: the backend never sees this host, so check it here.
+            host = request.url.host
+            if host:
+                default_port = 443 if request.url.scheme == "https" else 80
+                await _resolve_and_check(host, request.url.port or default_port)
+        return await super().handle_async_request(request)
+
+
+def guarded_client(**kwargs) -> httpx.AsyncClient:
+    """Build an ``httpx.AsyncClient`` whose destinations are address-checked.
+
+    The sanctioned way to construct an outbound client.  A bare
+    ``httpx.AsyncClient`` resolves and connects with no address check, so
+    every caller-reachable destination must come through here.
+
+    Accepts the same keyword arguments as ``httpx.AsyncClient``.
+    """
+    kwargs.setdefault("timeout", 30.0)
+    http2 = kwargs.pop("http2", False)
+    verify = kwargs.pop("verify", True)
+    return httpx.AsyncClient(
+        transport=_GuardedTransport(http2=http2, verify=verify), **kwargs,
+    )
+
+
+# Standard proxy variables, in the spellings httpx honours via trust_env.
+_PROXY_ENV_VARS = (
+    "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
+    "http_proxy", "https_proxy", "all_proxy",
+)
+
+
+def proxy_in_effect() -> bool:
+    """Whether outbound requests may be routed through a proxy.
+
+    A proxy performs the resolution that actually reaches the network, so
+    the address check degrades from pinned to advisory whenever one is
+    configured.  Callers surface this so the weaker guarantee is visible
+    rather than assumed.
+
+    Approximate by design: it does not evaluate ``NO_PROXY``, so a
+    per-host exemption still reports True.  Over-reporting a caveat is the
+    safe direction to be wrong in.
+    """
+    return any(os.environ.get(var) for var in _PROXY_ENV_VARS)
+
+
+# ---------------------------------------------------------------------------
 # URL scheme allowlist
 # ---------------------------------------------------------------------------
 
@@ -500,7 +683,7 @@ async def guarded_fetch(
         headers = dict(_FETCH_HEADERS)
 
     async def _attempt(http2: bool) -> httpx.Response:
-        async with httpx.AsyncClient(
+        async with guarded_client(
             follow_redirects=follow_redirects,
             timeout=timeout,
             http2=http2,

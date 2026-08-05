@@ -377,6 +377,34 @@ class TestSchemeGate:
         assert "must be absolute" in result
 
 
+class TestProxyDegradationWarning:
+    """A proxy resolves and connects on our behalf, so the address check
+    cannot be bound to the socket.  The response says so rather than
+    letting the weaker guarantee pass unremarked."""
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_warns_when_proxy_configured(self, monkeypatch):
+        monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:8888")
+        respx.get("https://example.com/p").mock(
+            return_value=httpx.Response(200, html="<html><body><p>hi</p></body></html>")
+        )
+        result = await web_fetch_direct("https://example.com/p")
+        assert "private-address protection degraded" in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_silent_when_no_proxy(self, monkeypatch):
+        for var in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
+                    "http_proxy", "https_proxy", "all_proxy"):
+            monkeypatch.delenv(var, raising=False)
+        respx.get("https://example.com/p").mock(
+            return_value=httpx.Response(200, html="<html><body><p>hi</p></body></html>")
+        )
+        result = await web_fetch_direct("https://example.com/p")
+        assert "protection degraded" not in result
+
+
 class TestWebFetchDirectMediawikiFastPath:
     @pytest.mark.asyncio
     @respx.mock
