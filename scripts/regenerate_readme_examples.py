@@ -22,10 +22,9 @@ Requirements:
 """
 
 import asyncio
+import contextlib
 import logging
-
-import httpx
-import respx
+import time
 
 import parkour_mcp.reddit as _reddit_mod
 from parkour_mcp.arxiv import arxiv
@@ -44,6 +43,76 @@ init_tool_names("code")
 
 # Disable Reddit rate limiter for fixture-based generation
 _reddit_mod._reddit_limiter.min_interval = 0.0
+
+
+class _FixtureResponse:
+    """Minimal stand-in for a curl_cffi response, for fixture replay."""
+
+    def __init__(self, json_data):
+        self.status_code = 200
+        self.headers = {}
+        self.url = ""
+        self._json = json_data
+
+    def json(self):
+        return self._json
+
+    def raise_for_status(self):
+        return None
+
+
+class _FixtureSession:
+    """Replay one JSON fixture for every GET, standing in for AsyncSession.
+
+    The Reddit fast path speaks to ``oauth.reddit.com`` over ``curl_cffi``
+    with a Safari TLS profile, so ``respx`` cannot intercept it: respx patches
+    httpx.  Substituting the session class is the seam that works for both.
+
+    Deliberately narrower than ``tests/conftest.py#_FakeAsyncSession``, which
+    models per-URL response queues so tests can drive 401-then-200 refresh
+    sequences.  Regeneration replays a single fixture, so URL routing here
+    would be indirection with one destination.
+    """
+
+    def __init__(self, payload):
+        self._payload = payload
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_):
+        return None
+
+    async def get(self, _url, **_kwargs):
+        return _FixtureResponse(self._payload)
+
+
+@contextlib.contextmanager
+def reddit_fixture(payload):
+    """Serve *payload* to the Reddit fast path, with OAuth pre-seeded.
+
+    Seeding the token skips the mint round trip, which would otherwise need
+    its own fixture and would couple these examples to the grant flow.
+    """
+    saved = {
+        name: getattr(_reddit_mod, name)
+        for name in ("AsyncSession", "_oauth_token", "_oauth_token_headers",
+                     "_oauth_expires_at", "_oauth_backend")
+    }
+    # Substituting a double for the real session class is the whole mechanism;
+    # ty is right that _FixtureSession is not an AsyncSession, and that is the
+    # point. The tests do the same through monkeypatch.setattr, which is
+    # untyped and so never reaches this check.
+    _reddit_mod.AsyncSession = lambda *_a, **_kw: _FixtureSession(payload)  # ty: ignore[invalid-assignment]
+    _reddit_mod._oauth_token = "fixture-token"  # noqa: S105  # not a secret: fixture replay never authenticates
+    _reddit_mod._oauth_token_headers = {}
+    _reddit_mod._oauth_expires_at = time.monotonic() + 86400
+    _reddit_mod._oauth_backend = "mobile"
+    try:
+        yield
+    finally:
+        for name, value in saved.items():
+            setattr(_reddit_mod, name, value)
 
 # ── URLs used across examples ───────────────────────────────────────────────
 MDN_UA = "https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/User-Agent"
@@ -191,6 +260,14 @@ async def main() -> None:
         out,
     ))
 
+    # ── 3b. web_fetch_direct — same section, expanded to its subtree ─────
+    out = await web_fetch_direct(MDN_UA, section="Syntax", auto_expand=True)
+    results.append((
+        'web_fetch_direct(MDN_UA, section="Syntax", auto_expand=True)',
+        'guide: auto_expand section extraction',
+        out,
+    ))
+
     # ── 4. web_fetch_direct — Wikipedia BM25 search ─────────────────────
     out = await web_fetch_direct(WIKI_42, search="Hitchhiker Guide")
     results.append((
@@ -282,11 +359,7 @@ async def main() -> None:
     ))
 
     # ── Reddit examples (fixture-based, no network) ──────────────────
-    json_url = "https://old.reddit.com/r/Python/comments/1abc234/trusted_publishers_discussion/.json"
-    async with respx.MockRouter() as router:
-        router.get(json_url).mock(
-            return_value=httpx.Response(200, json=REDDIT_FIXTURE),
-        )
+    with reddit_fixture(REDDIT_FIXTURE):
 
         # 15. web_fetch_sections — Reddit comment tree
         out = await web_fetch_sections(REDDIT_THREAD_URL)
@@ -296,10 +369,7 @@ async def main() -> None:
             out,
         ))
 
-    async with respx.MockRouter() as router:
-        router.get(json_url).mock(
-            return_value=httpx.Response(200, json=REDDIT_FIXTURE),
-        )
+    with reddit_fixture(REDDIT_FIXTURE):
 
         # 16. web_fetch_direct — Reddit comment extraction
         out = await web_fetch_direct(REDDIT_THREAD_URL, section="ochpsln")
@@ -309,10 +379,19 @@ async def main() -> None:
             out,
         ))
 
-    async with respx.MockRouter() as router:
-        router.get(json_url).mock(
-            return_value=httpx.Response(200, json=REDDIT_FIXTURE),
+    with reddit_fixture(REDDIT_FIXTURE):
+
+        # 16b. web_fetch_direct — same comment, expanded to its reply thread
+        out = await web_fetch_direct(
+            REDDIT_THREAD_URL, section="ochpsln", auto_expand=True
         )
+        results.append((
+            'web_fetch_direct(REDDIT_THREAD_URL, section="ochpsln", auto_expand=True)',
+            'guide: Reddit comment with its reply thread',
+            out,
+        ))
+
+    with reddit_fixture(REDDIT_FIXTURE):
 
         # 17. web_fetch_direct — Reddit BM25 search
         out = await web_fetch_direct(REDDIT_THREAD_URL, search="trusted publisher")
