@@ -263,6 +263,11 @@ follow-up extraction of specific subthreads.""",
 
 Targeted extraction (preferred over fetching full pages):
 - section="Syntax" — extract a specific section by heading name
+- auto_expand=True — with section=, also return everything filed under
+  that heading (its subsections). Off by default: a heading's subtree can
+  be one to two orders of magnitude larger than its own content, so ask
+  for it when you want a whole chapter, a clause with its sub-clauses, or
+  a comment with its replies in one call
 - search="terms" — keyword search over ~500-token slices, ranked by BM25
 - slices=[3, 4, 5] — retrieve specific slices by index
 - URL fragments (#section-name) are resolved automatically as sections

@@ -722,8 +722,10 @@ async def _mediawiki_fast_path(
     url: str,
     section_names: list[str] | None,
     max_tokens: int,
+    *,
     extra_entries=None,
     cache_url: str | None = None,
+    auto_expand: bool = False,
 ) -> str | None:
     """Attempt to fetch a MediaWiki page via the API, bypassing browser/httpx.
 
@@ -801,7 +803,7 @@ async def _mediawiki_fast_path(
 
     return _process_markdown_sections(
         markdown_content, section_names, max_tokens, frontmatter_entries,
-        title=title, cache_url=cache_url, renderer="wiki",
+        title=title, cache_url=cache_url, renderer="wiki", auto_expand=auto_expand,
     )
 
 
@@ -1538,6 +1540,7 @@ def _process_markdown_sections(
     title: str | None = None,
     cache_url: str | None = None,
     renderer: str | None = None,
+    auto_expand: bool = False,
 ) -> str:
     """Apply section filtering, truncation, and frontmatter to markdown content.
 
@@ -1548,6 +1551,8 @@ def _process_markdown_sections(
         title: Page title for display inside the content fence (untrusted).
             Kept separate from frontmatter_entries because it is untrusted
             content that must never appear in server-generated metadata.
+        auto_expand: Return each requested heading with everything filed
+            under it rather than its own content alone.
         cache_url: When provided, populates the page cache with the full
             (pre-filtered) markdown so subsequent search/slices calls can
             use it.
@@ -1567,27 +1572,48 @@ def _process_markdown_sections(
 
     if section_names and all_sections:
         markdown_content, sections_requested_meta, unmatched = _filter_markdown_by_sections(
-            markdown_content, section_names, all_sections
+            markdown_content, section_names, all_sections, auto_expand=auto_expand
         )
         sections_not_found = unmatched or None
         # When sections aren't found, show available sections with slugs
         if sections_not_found:
             sections_available = _build_section_list(all_sections, include_slugs=True)
-        # Warn when extracted sections have subsections not included in the output
-        if sections_requested_meta and any(m.get("has_subsections") for m in sections_requested_meta):
+        # Advertise auto_expand when the caller landed on a parent and got
+        # only its own prose.  This is the discovery path for the parameter:
+        # without it the span semantics are invisible and the caller cannot
+        # tell a section with no content from one whose content is filed in
+        # children.
+        if not auto_expand and any(
+            m.get("has_subsections") for m in (sections_requested_meta or [])
+        ):
             _append_frontmatter_entry(
                 frontmatter_entries, "note",
-                "Section extraction returns only the selected heading's direct content. "
-                "Subsections are separate entries — request them by name to include them.",
+                "Returned the heading's own content only. Subsections are "
+                "separate entries: request them by name, or pass "
+                "auto_expand=True to include everything filed under the "
+                "requested heading.",
+            )
+        # Explain a request that produced fewer blocks than it named: the
+        # absorbed section is inside another requested section's subtree.
+        absorbed = [
+            f"'{m['name']}' (inside '{m['contained_in']}')"
+            for m in (sections_requested_meta or [])
+            if m.get("contained_in")
+        ]
+        if absorbed:
+            _append_frontmatter_entry(
+                frontmatter_entries, "note",
+                f"Already included in a broader section: {', '.join(absorbed)}. "
+                "auto_expand=True returns each heading with everything under it.",
             )
         # Warn when a matched section is heading-only (no body between this
-        # heading and the next).  Distinct from has_subsections: a header-only
-        # section may have no children at all (the next heading is a sibling
-        # at the same level), so the caller needs the section tree to find
-        # where the content actually lives.
+        # heading and the next).  Under auto_expand a header-only parent
+        # still renders its subsections, so the empty-fence problem narrows
+        # to dividers whose next heading is a sibling at the same level,
+        # where the caller needs the tree to find the content.
         header_only_names = [
             m["name"] for m in (sections_requested_meta or [])
-            if m.get("header_only")
+            if m.get("header_only") and not (auto_expand and m.get("has_subsections"))
         ]
         if header_only_names:
             quoted = ", ".join(f"'{n}'" for n in header_only_names)

@@ -113,6 +113,7 @@ async def web_fetch_direct(
     *,
     max_tokens: int = 5000,
     section: str | list[str] | None = None,
+    auto_expand: bool = False,
     search: str | None = None,
     slices: int | list[int] | None = None,
     requires_js: bool = False,
@@ -143,6 +144,13 @@ async def web_fetch_direct(
         url: The URL to fetch
         max_tokens: Limit on content length in approximate token count (default 5000)
         section: Section name or list of section names to extract from the page
+        auto_expand: Return each requested heading with everything filed under
+            it, down to the next heading at the same level or shallower.
+            Defaults to False, which returns the heading's own content and
+            leaves subsections to be requested by name. Expanding a heading
+            can be one to two orders of magnitude larger, so it is opt-in:
+            prefer it when you want a whole chapter, clause with its
+            sub-clauses, or comment with its replies in one call
         search: Search terms for BM25 keyword matching within cached page content
         slices: Slice index or list of indices to retrieve from cached page content
         requires_js: Render via a headless browser, for pages whose content is
@@ -322,7 +330,7 @@ async def web_fetch_direct(
                     cached = _page_cache.get(url)
                     if cached and cached.markdown:
                         return _process_markdown_sections(
-                            cached.markdown, section_names, max_tokens,
+                            cached.markdown, section_names, max_tokens, auto_expand=auto_expand,
                             frontmatter_entries=FMEntries({
                                 "source": source_url,
                                 "api": "Reddit (oauth.reddit.com)",
@@ -352,7 +360,7 @@ async def web_fetch_direct(
                     cached = _page_cache.get(url)
                     if cached and cached.markdown:
                         return _process_markdown_sections(
-                            cached.markdown, section_names, max_tokens,
+                            cached.markdown, section_names, max_tokens, auto_expand=auto_expand,
                             frontmatter_entries=FMEntries({
                                 "source": source_url,
                                 "api": "GitHub",
@@ -384,7 +392,7 @@ async def web_fetch_direct(
                     cached = _page_cache.get(url)
                     if cached and cached.markdown:
                         return _process_markdown_sections(
-                            cached.markdown, section_names, max_tokens,
+                            cached.markdown, section_names, max_tokens, auto_expand=auto_expand,
                             frontmatter_entries=FMEntries({
                                 "source": source_url,
                                 "api": "HuggingFace",
@@ -404,7 +412,7 @@ async def web_fetch_direct(
         result = await _mediawiki_fast_path(
             url, section_names, max_tokens,
             extra_entries=FMEntries({"source": source_url, "warning": fragment_warning}),
-            cache_url=url,
+            cache_url=url, auto_expand=auto_expand,
         )
         if result is not None:
             if want_slicing:
@@ -436,7 +444,7 @@ async def web_fetch_direct(
             fragment_warning=fragment_warning, section_names=section_names,
             search=search, slices=slices, slices_list=slices_list,
             max_tokens=max_tokens, actions=actions, max_elements=max_elements,
-            premature=premature,
+            premature=premature, auto_expand=auto_expand,
         )
 
     # --- HTTP fetch ---
@@ -480,7 +488,7 @@ async def web_fetch_direct(
                     cached = _page_cache.get(url)
                     if cached and cached.markdown:
                         return _process_markdown_sections(
-                            cached.markdown, section_names, max_tokens,
+                            cached.markdown, section_names, max_tokens, auto_expand=auto_expand,
                             frontmatter_entries=FMEntries({
                                 "source": source_url,
                                 "api": "Discourse",
@@ -566,7 +574,7 @@ async def web_fetch_direct(
 
     output = _process_markdown_sections(
         markdown_content, section_names, max_tokens, fm_entries,
-        title=title, cache_url=url, renderer="direct",
+        title=title, cache_url=url, renderer="direct", auto_expand=auto_expand,
     )
 
     # If search/slices was requested, the cache is now populated — dispatch

@@ -264,6 +264,7 @@ async def _render_js(
     actions: list | None,
     max_elements: int,
     premature: bool = False,
+    auto_expand: bool = False,
 ) -> str:
     """Render *url* through a headless browser and run the shared pipeline.
 
@@ -502,7 +503,7 @@ async def _render_js(
         frontmatter_entries.set_tip("incisive_premature_playwright")
     output = _process_markdown_sections(
         markdown_content, section_names, max_tokens, frontmatter_entries,
-        title=title, cache_url=url, renderer="js",
+        title=title, cache_url=url, renderer="js", auto_expand=auto_expand,
     )
 
     # If search/slices was requested, cache is now populated — dispatch

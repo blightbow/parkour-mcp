@@ -120,9 +120,36 @@ class TestWebFetchDirectMarkdown:
         result = await web_fetch_direct("https://example.com/page", section="Second Section")
         fm, fence = split_output(result)
         assert fenced_heading(2, "Second Section") in fence
-        # Second Section has a child Subsection — note should warn about depth
+        # Surgical by default: the child Subsection is a separate request.
+        assert "Some nested subsection content" not in fence
+        assert "This is a paragraph with enough text" not in fence
+        # The note is how a caller discovers auto_expand exists.
         assert "note:" in fm
-        assert "Subsections are separate entries" in fm
+        assert "auto_expand=True" in fm
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_html_section_extraction_auto_expand(self):
+        respx.get("https://example.com/page").mock(
+            return_value=httpx.Response(
+                200,
+                text=SAMPLE_HTML_PAGE,
+                headers={"content-type": "text/html"},
+            )
+        )
+
+        result = await web_fetch_direct(
+            "https://example.com/page", section="Second Section", auto_expand=True
+        )
+        fm, fence = split_output(result)
+        assert fenced_heading(2, "Second Section") in fence
+        # The child now travels with its parent.
+        assert fenced_heading(3, "Subsection") in fence
+        assert "Some nested subsection content" in fence
+        # Content above the requested section still stays out.
+        assert "This is a paragraph with enough text" not in fence
+        # Nothing left to advertise once the caller has opted in.
+        assert "auto_expand=True" not in fm
 
     @pytest.mark.asyncio
     @respx.mock

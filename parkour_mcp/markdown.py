@@ -677,6 +677,26 @@ def _find_parent_idx(sections: list[MarkdownSection], idx: int) -> int | None:
     return None
 
 
+def _subtree_end(sections: list[MarkdownSection], idx: int) -> int:
+    """End offset of a section including everything filed under it.
+
+    ``end_pos`` stops at the next heading of *any* level, so it covers the
+    heading's own prose and nothing else.  The subtree runs to the next
+    heading at the same level or shallower, which is what a caller naming a
+    section means: "Installation" is the whole installation chapter, not the
+    sentence before its first subheading.
+
+    The two spans are kept separate rather than folded together because
+    ``header_only`` is defined against the direct span — a parent whose prose
+    is empty is still header-only even when its children are full.
+    """
+    level = sections[idx]["level"]
+    for j in range(idx + 1, len(sections)):
+        if sections[j]["level"] <= level:
+            return sections[j]["start_pos"]
+    return sections[-1]["end_pos"]
+
+
 def _name_counts(sections: list[MarkdownSection]) -> dict[str, int]:
     """Count occurrences of each section name for disambiguation."""
     counts: dict[str, int] = {}
@@ -862,11 +882,23 @@ def _filter_markdown_by_sections(
     markdown: str,
     section_names: list[str],
     sections: list[MarkdownSection],
+    *,
+    auto_expand: bool = False,
 ) -> tuple[str, list[dict], list[str]]:
     """Filter markdown to only include requested sections.
 
     Matches requested names against section list (case-sensitive exact match,
     including disambiguation suffix from _build_section_list).
+
+    *auto_expand* selects the span each match contributes.  The default
+    returns the heading's own prose, stopping at the next heading of any
+    level; ``True`` returns the heading and everything filed under it, down
+    to the next heading at the same level or shallower.  Surgical is the
+    default because a subtree can be one to two orders of magnitude larger
+    (a Kubernetes release-note section measured 747 characters direct
+    against 30,807 expanded) and a caller that wanted the whole chapter can
+    ask for it, whereas one that wanted a paragraph cannot un-spend the
+    tokens.
 
     Returns (filtered_markdown, [{name, ancestry_path}], [unmatched_names]).
     """
@@ -946,22 +978,24 @@ def _filter_markdown_by_sections(
             meta["header_only"] = True
         return meta
 
-    matched_parts = []
-    matched_meta = []
+    matched: list[tuple[int, dict]] = []
+    seen: set[int] = set()
     unmatched = []
+
+    def _record(idx: int, meta: dict) -> None:
+        """Register a hit, ignoring a section named twice in one request."""
+        if idx in seen:
+            return
+        seen.add(idx)
+        matched.append((idx, meta))
 
     for req_name in section_names:
         req_name = _normalize_whitespace(req_name)
         if req_name in display_to_idx:
-            idx = display_to_idx[req_name]
-            sec = sections[idx]
-            matched_parts.append(markdown[sec["start_pos"]:sec["end_pos"]].strip())
-            matched_meta.append(_match(idx))
+            _record(display_to_idx[req_name], _match(display_to_idx[req_name]))
         elif req_name in slug_to_idx:
             idx = slug_to_idx[req_name]
-            sec = sections[idx]
-            matched_parts.append(markdown[sec["start_pos"]:sec["end_pos"]].strip())
-            matched_meta.append(_match(idx, fragment=req_name))
+            _record(idx, _match(idx, fragment=req_name))
         else:
             # Fuzzy fallback: slugify the fragment so it matches the same
             # canonical form as the heading slugs in slug_to_idx.  Handles
@@ -971,14 +1005,39 @@ def _filter_markdown_by_sections(
             fuzzy = _slugify(unquote(req_name))
             if fuzzy and fuzzy in slug_to_idx:
                 idx = slug_to_idx[fuzzy]
-                sec = sections[idx]
-                matched_parts.append(markdown[sec["start_pos"]:sec["end_pos"]].strip())
-                matched_meta.append(_match(idx, fragment=req_name))
+                _record(idx, _match(idx, fragment=req_name))
             else:
                 unmatched.append(req_name)
 
+    # Under auto_expand a parent already carries its child, so requesting
+    # both would emit the child twice.  Emit the outer span once and mark
+    # the inner request as absorbed, so the caller can see why it got fewer
+    # blocks than it named.  Direct spans never overlap, which makes the
+    # containment pass a no-op there rather than a special case.
+    spans = {
+        idx: (
+            sections[idx]["start_pos"],
+            _subtree_end(sections, idx) if auto_expand else sections[idx]["end_pos"],
+        )
+        for idx, _ in matched
+    }
+    matched_parts = []
+    for idx, meta in matched:
+        start, end = spans[idx]
+        container = next(
+            (
+                other for other, _ in matched
+                if other != idx and spans[other][0] <= start and end <= spans[other][1]
+            ),
+            None,
+        )
+        if container is not None:
+            meta["contained_in"] = sections[container]["name"]
+            continue
+        matched_parts.append(markdown[start:end].strip())
+
     result = "\n\n".join(matched_parts)
-    return result, matched_meta, unmatched
+    return result, [meta for _, meta in matched], unmatched
 
 
 # ---------------------------------------------------------------------------

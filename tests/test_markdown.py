@@ -689,6 +689,87 @@ class TestFilterMarkdownBySections:
         _, meta, _ = _filter_markdown_by_sections(SAMPLE_MARKDOWN, ["section-two"], sections)
         assert meta[0].get("has_subsections") is True
 
+    def test_default_is_surgical(self):
+        """Without auto_expand a parent yields its own prose, not its children."""
+        sections = _extract_sections_from_markdown(SAMPLE_MARKDOWN)
+        filtered, _meta, _ = _filter_markdown_by_sections(
+            SAMPLE_MARKDOWN, ["Section Two"], sections
+        )
+        assert "Content of section two" in filtered
+        assert "Subsection A" not in filtered
+
+    def test_auto_expand_carries_the_subtree(self):
+        sections = _extract_sections_from_markdown(SAMPLE_MARKDOWN)
+        filtered, _meta, _ = _filter_markdown_by_sections(
+            SAMPLE_MARKDOWN, ["Section Two"], sections, auto_expand=True
+        )
+        assert "Subsection A" in filtered
+        # Siblings on either side stay out even when expanding.
+        assert "Section One" not in filtered
+        assert "Section Three" not in filtered
+
+    def test_auto_expand_last_section_runs_to_eof(self):
+        markdown = "# Doc\n\n## Last\n\nLead.\n\n### Tail\n\nFinal words.\n"
+        sections = _extract_sections_from_markdown(markdown)
+        filtered, _meta, _ = _filter_markdown_by_sections(
+            markdown, ["Last"], sections, auto_expand=True
+        )
+        assert "Final words." in filtered
+
+    def test_auto_expand_parent_and_child_emits_one_block(self):
+        """The parent's subtree already carries the child, so do not repeat it."""
+        sections = _extract_sections_from_markdown(SAMPLE_MARKDOWN)
+        filtered, meta, _ = _filter_markdown_by_sections(
+            SAMPLE_MARKDOWN, ["Section Two", "Subsection A"], sections, auto_expand=True
+        )
+        assert filtered.count("Subsection A") == 1
+        # Both requests are still reported; the absorbed one says who ate it.
+        assert [m["name"] for m in meta] == ["Section Two", "Subsection A"]
+        assert "contained_in" not in meta[0]
+        assert meta[1]["contained_in"] == "Section Two"
+
+    def test_parent_and_child_stay_separate_without_auto_expand(self):
+        """Direct spans do not overlap, so neither request absorbs the other."""
+        sections = _extract_sections_from_markdown(SAMPLE_MARKDOWN)
+        _filtered, meta, _ = _filter_markdown_by_sections(
+            SAMPLE_MARKDOWN, ["Section Two", "Subsection A"], sections
+        )
+        assert all("contained_in" not in m for m in meta)
+
+    def test_child_requested_alone_is_not_absorbed(self):
+        sections = _extract_sections_from_markdown(SAMPLE_MARKDOWN)
+        filtered, meta, _ = _filter_markdown_by_sections(
+            SAMPLE_MARKDOWN, ["Subsection A"], sections, auto_expand=True
+        )
+        assert "contained_in" not in meta[0]
+        assert "Subsection A" in filtered
+
+    def test_same_section_named_twice_emits_once(self):
+        sections = _extract_sections_from_markdown(SAMPLE_MARKDOWN)
+        filtered, meta, _ = _filter_markdown_by_sections(
+            SAMPLE_MARKDOWN, ["Section One", "Section One"], sections
+        )
+        assert len(meta) == 1
+        assert filtered.count("Content of section one") == 1
+
+    def test_auto_expand_rescues_a_header_only_parent(self):
+        """A divider heading with children is empty by default, full expanded.
+
+        ``header_only`` is measured against the direct span either way, so the
+        flag stays set and only the rendered span changes.
+        """
+        markdown = "# Guide\n\n## Setup\n\n### macOS\n\nbrew install foo\n"
+        sections = _extract_sections_from_markdown(markdown)
+        direct, meta, _ = _filter_markdown_by_sections(markdown, ["Setup"], sections)
+        assert meta[0].get("header_only") is True
+        assert meta[0].get("has_subsections") is True
+        assert "brew install foo" not in direct
+        expanded, meta2, _ = _filter_markdown_by_sections(
+            markdown, ["Setup"], sections, auto_expand=True
+        )
+        assert meta2[0].get("header_only") is True
+        assert "brew install foo" in expanded
+
     def test_header_only_flag_propagates_when_section_has_no_body(self):
         """Heading-only sections (body empty between this heading and the next
         sibling at the same level) flag header_only=True so the pipeline can
