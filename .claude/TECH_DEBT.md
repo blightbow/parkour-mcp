@@ -179,13 +179,16 @@ matters; nobody has.
 - **Location**: `semantic-text-splitter` (`>=0.29.0`), driven from
   `parkour_mcp/_pipeline.py`; introduced in `db1519d`.
 - **Measured cost** (`scripts/benchmark_baselines.json`, captured
-  2026-08-04 on Darwin arm64 / Python 3.14.4):
+  2026-08-05 on Darwin arm64 / Python 3.14.4):
 
   | tier | fetch | h2md | **split** | sections | ancestry | tantivy | total |
   |---|---:|---:|---:|---:|---:|---:|---:|
-  | small | 34 | 4 | **1** | 0 | 0 | 5 | 45 ms |
-  | medium | 58 | 245 | **2,166** | 43 | 103 | 16 | 2.6 s |
-  | pathological | 656 | 550 | **5,180** | 119 | 125 | 28 | 6.7 s |
+  | small | 97 | 4 | **1** | 1 | 0 | 4 | 106 ms |
+  | medium | 613 | 266 | **2,196** | 41 | 98 | 14 | 3.2 s |
+  | pathological | 612 | 562 | **5,059** | 112 | 122 | 27 | 6.5 s |
+
+  `fetch` is network wall-clock against live endpoints and swings widely
+  between captures; the phases after it are the ones worth reading.
 
   On the pathological tier the splitter is 78% of pipeline wall-clock, and
   the only phase above a second.
@@ -198,7 +201,7 @@ matters; nobody has.
 - **Scope**: generic HTTP path only, as before — every fast path bypasses
   it. Fast-path end-to-end times are all well under 2.5 s (`fast_paths` in
   the same baseline file).
-- **Why deferred**: 6.7 s end-to-end on the worst page on the open web is
+- **Why deferred**: 6.5 s end-to-end on the worst page on the open web is
   not a user-visible problem, and it is paid once per page per session
   behind `_PageCache`. There is no obvious cheaper substitute either: the
   splitter is what produces semantic slice boundaries and ancestry, which

@@ -1,5 +1,5 @@
 {
-  "captured_at": "2026-08-04T07:38:05.401354+00:00",
+  "captured_at": "2026-08-05T06:54:56.101119+00:00",
   "hardware": "Darwin arm64",
   "python": "3.14.4",
   "generic_http": {
@@ -7,98 +7,98 @@
       "tier": "small",
       "url": "https://peps.python.org/pep-0008/",
       "html_bytes": 121843,
-      "md_bytes": 48980,
-      "n_slices": 42,
-      "n_sections": 63,
-      "fetch_ms": 34.3790000770241,
-      "html_to_markdown_ms": 3.635833039879799,
-      "splitter_ms": 0.5742080975323915,
-      "sections_ms": 0.4848330281674862,
-      "ancestry_ms": 0.0643748790025711,
-      "tantivy_ms": 5.3770828526467085
+      "md_bytes": 50076,
+      "n_slices": 46,
+      "n_sections": 43,
+      "fetch_ms": 96.8382079154253,
+      "html_to_markdown_ms": 4.23391698859632,
+      "splitter_ms": 0.5111249629408121,
+      "sections_ms": 0.5247499793767929,
+      "ancestry_ms": 0.06791693158447742,
+      "tantivy_ms": 4.046166082844138
     },
     "medium": {
       "tier": "medium",
       "url": "https://tc39.es/ecma262/",
       "html_bytes": 7586383,
-      "md_bytes": 3467480,
+      "md_bytes": 3467496,
       "n_slices": 2643,
       "n_sections": 2443,
-      "fetch_ms": 57.561750058084726,
-      "html_to_markdown_ms": 244.62370807304978,
-      "splitter_ms": 2166.341375093907,
-      "sections_ms": 42.96125005930662,
-      "ancestry_ms": 102.56841592490673,
-      "tantivy_ms": 16.220750054344535
+      "fetch_ms": 612.6159171108156,
+      "html_to_markdown_ms": 265.53783286362886,
+      "splitter_ms": 2195.512291043997,
+      "sections_ms": 41.45554197020829,
+      "ancestry_ms": 98.42970897443593,
+      "tantivy_ms": 13.871541945263743
     },
     "pathological": {
       "tier": "pathological",
       "url": "https://html.spec.whatwg.org/",
       "html_bytes": 15548707,
-      "md_bytes": 8215138,
+      "md_bytes": 8215344,
       "n_slices": 6265,
       "n_sections": 1236,
-      "fetch_ms": 656.2297500204295,
-      "html_to_markdown_ms": 550.090332981199,
-      "splitter_ms": 5180.235625011846,
-      "sections_ms": 119.27495780400932,
-      "ancestry_ms": 125.38258288986981,
-      "tantivy_ms": 28.337374795228243
+      "fetch_ms": 612.0778329204768,
+      "html_to_markdown_ms": 561.8608328513801,
+      "splitter_ms": 5059.002125170082,
+      "sections_ms": 112.14670795015991,
+      "ancestry_ms": 121.85191712342203,
+      "tantivy_ms": 26.917916955426335
     }
   },
   "fast_paths": {
     "mediawiki": {
       "name": "mediawiki",
       "url": "https://en.wikipedia.org/wiki/Transformer_(deep_learning_architecture)",
-      "end_to_end_ms": 408.6804580874741,
+      "end_to_end_ms": 461.73229184933007,
       "result_bytes": 1130
     },
     "arxiv": {
       "name": "arxiv",
       "url": "https://arxiv.org/abs/1706.03762",
-      "end_to_end_ms": 1108.2733748480678,
+      "end_to_end_ms": 940.2169580571353,
       "result_bytes": 8616
     },
     "ietf": {
       "name": "ietf",
       "url": "https://www.rfc-editor.org/rfc/rfc9110.html",
-      "end_to_end_ms": 276.97312482632697,
+      "end_to_end_ms": 246.91070895642042,
       "result_bytes": 24732
     },
     "doi": {
       "name": "doi",
       "url": "https://doi.org/10.1038/nature14539",
-      "end_to_end_ms": 1596.9624160788953,
-      "result_bytes": 23995
+      "end_to_end_ms": 1846.5757498051971,
+      "result_bytes": 24091
     },
     "reddit": {
       "name": "reddit",
       "url": "https://www.reddit.com/r/Python/top/",
-      "end_to_end_ms": 216.26004204154015,
-      "result_bytes": 692
+      "end_to_end_ms": 181.2880418729037,
+      "result_bytes": 407
     },
     "discourse": {
       "name": "discourse",
       "url": "https://meta.discourse.org/t/about-the-meta-category/1",
-      "end_to_end_ms": 1439.699542010203,
+      "end_to_end_ms": 978.5178750753403,
       "result_bytes": 2765
     },
     "github_blob": {
       "name": "github_blob",
       "url": "https://github.com/python/cpython/blob/v3.12.0/Lib/asyncio/base_events.py",
-      "end_to_end_ms": 75.26383409276605,
+      "end_to_end_ms": 231.91729211248457,
       "result_bytes": 25237
     },
     "github_issue": {
       "name": "github_issue",
       "url": "https://github.com/python/cpython/issues/100000",
-      "end_to_end_ms": 1314.285040833056,
+      "end_to_end_ms": 1292.8265838418156,
       "result_bytes": 654
     },
     "github_pull": {
       "name": "github_pull",
       "url": "https://github.com/python/cpython/pull/1",
-      "end_to_end_ms": 3010.038415901363,
+      "end_to_end_ms": 3004.5807091519237,
       "result_bytes": 4041
     }
   }

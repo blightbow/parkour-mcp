@@ -18,6 +18,7 @@ from parkour_mcp.markdown import (
     _promote_list_headings,
     _resolve_toc_slice,
     _slugify,
+    _wrap_bare_pre_in_code,
     html_to_markdown,
     md,
 )
@@ -284,6 +285,54 @@ class TestCleanHeadings:
         assert _slugify(name) == (
             "13-2-5-36-attribute-value-double-quoted-state"
         )
+
+
+class TestWrapBarePreInCode:
+    """htmd fences only ``<pre><code>``; a bare ``<pre>`` becomes plain text.
+
+    Sphinx and Pygments emit ``<pre><span class="k">…`` with no ``<code>``
+    wrapper, which put every ``#`` comment in a Python example at column zero
+    where section extraction read it as a heading.
+    """
+
+    def test_comment_in_bare_pre_is_not_a_section(self):
+        html = (
+            "<html><body><h1>Docs</h1>"
+            "<pre><span class='k'>for</span> e in qs:\n"
+            "# The name of the first blog\nprint(e)</pre>"
+            "</body></html>"
+        )
+        _, markdown = html_to_markdown(html)
+        assert [s["name"] for s in _extract_sections_from_markdown(markdown)] == ["Docs"]
+
+    def test_bare_pre_is_fenced(self):
+        _, markdown = html_to_markdown("<html><body><pre>x = 1</pre></body></html>")
+        assert "```" in markdown
+        assert "x = 1" in markdown
+
+    def test_existing_pre_code_is_not_double_wrapped(self):
+        html = "<html><body><pre><code>x = 1</code></pre></body></html>"
+        _, markdown = html_to_markdown(html)
+        assert "<code>" not in markdown
+        assert markdown.count("```") == 2
+
+    def test_attributes_and_spaced_close_tag_are_handled(self):
+        html = '<html><body><pre class="highlight" id="a"># c\nx = 1</pre ></body></html>'
+        _, markdown = html_to_markdown(html)
+        assert "```" in markdown
+        assert not _extract_sections_from_markdown(markdown)
+
+    def test_html_without_pre_is_returned_unchanged(self):
+        """The bail-out must be identity, not a rebuilt string."""
+        html = "<html><body><p>No preformatted content here.</p></body></html>"
+        assert _wrap_bare_pre_in_code(html) is html
+
+    def test_consecutive_pre_blocks_stay_separate(self):
+        """Non-greedy matching must not swallow the gap between two blocks."""
+        html = "<html><body><pre>first</pre><p>middle</p><pre>second</pre></body></html>"
+        _, markdown = html_to_markdown(html)
+        assert "middle" in markdown
+        assert markdown.count("```") == 4
 
 
 class TestPromoteListHeadings:

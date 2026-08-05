@@ -274,6 +274,38 @@ def _build_htmd_options():
 
 _HTMD_OPTIONS = _build_htmd_options()
 
+# Matches a ``<pre>`` whose first child is not ``<code>``, capturing the open
+# tag, the body, and the close tag.  ``<pre>`` cannot nest, so the first
+# following ``</pre>`` is always the right one and the non-greedy body is
+# unambiguous.
+_BARE_PRE_RE = re.compile(
+    r"(<pre\b[^>]*>)(?!\s*<code[\s>])(.*?)(</pre\s*>)",
+    re.DOTALL | re.IGNORECASE,
+)
+
+
+def _wrap_bare_pre_in_code(html: str) -> str:
+    """Give every ``<pre>`` a ``<code>`` child so htmd fences it.
+
+    htmd emits a code block only for ``<pre><code>``; a bare ``<pre>``
+    converts to plain text with no fence and no indent.  Sphinx and Pygments
+    emit ``<pre><span class="k">…`` with no ``<code>`` wrapper, so every
+    ``#`` comment in a Python example lands at column zero and
+    ``_extract_sections_from_markdown`` reads it as a heading.  Measured on
+    the Django queryset reference: 31 level-1 sections against the one real
+    ``<h1>``; on PEP 8, 21 against one.  Wrapping restores the fence, which
+    ``_find_fenced_code_ranges`` then excludes from heading extraction.
+
+    A ``<code>`` child that itself contains markup is fine — htmd fences on
+    the wrapper's presence, not its contents.
+
+    Rewriting inside ``<script>`` or ``<style>`` is possible in principle but
+    inert: both are in ``skip_tags``, so htmd discards them either way.
+    """
+    if "<pre" not in html:
+        return html
+    return _BARE_PRE_RE.sub(r"\1<code>\2</code>\3", html)
+
 # Byte budget for the head-only BS4 fallback parse. 32 KB is well above any
 # realistic <head> size and still parses in microseconds on html.parser.
 _HEAD_SCAN_BYTES = 32 * 1024
@@ -319,7 +351,9 @@ def html_to_markdown(html: str) -> tuple[str, str]:
     a small head-only BS4 parse for pages with no h1, and finally
     ``"Untitled"``.
     """
-    markdown = htmd.convert_html(html, _HTMD_OPTIONS)  # ty: ignore[unresolved-attribute]
+    markdown = htmd.convert_html(  # ty: ignore[unresolved-attribute]
+        _wrap_bare_pre_in_code(html), _HTMD_OPTIONS
+    )
     markdown = re.sub(r"\n{3,}", "\n\n", markdown).strip()
     # Lift accordion headings out of their list items before anything reads
     # heading lines, so the promoted headings get the same inline-markup
