@@ -486,6 +486,23 @@ def proxy_in_effect() -> bool:
     return any(os.environ.get(var) for var in _PROXY_ENV_VARS)
 
 
+_PROXY_DEGRADED_WARNING = (
+    "private-address protection degraded: a proxy is configured, so the "
+    "proxy resolves and connects, and the address check could not be "
+    "enforced at the socket"
+)
+
+
+def proxy_warning() -> str | None:
+    """The degradation warning when a proxy is configured, else None.
+
+    Lives here so every tool that fetches a caller-supplied host reports
+    the same caveat in the same words.  ``_build_frontmatter`` drops
+    ``None``, so callers can pass the result through unconditionally.
+    """
+    return _PROXY_DEGRADED_WARNING if proxy_in_effect() else None
+
+
 # ---------------------------------------------------------------------------
 # URL scheme allowlist
 # ---------------------------------------------------------------------------

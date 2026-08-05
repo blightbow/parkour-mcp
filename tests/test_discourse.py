@@ -6,6 +6,7 @@ import respx
 
 from parkour_mcp._pipeline import _discourse_fast_path
 from parkour_mcp.discourse import (
+    _base_url_from,
     _build_post_section_tree,
     _clean_raw,
     _detect_discourse_headers,
@@ -131,6 +132,70 @@ BASE_URL = "https://forum.example.com"
 # ---------------------------------------------------------------------------
 # _detect_discourse_headers
 # ---------------------------------------------------------------------------
+
+class TestBaseUrlNormalization:
+    """Endpoint paths are appended to the base as text, so the base has to
+    be reduced to an instance root before anything is concatenated onto it."""
+
+    @pytest.mark.parametrize(("raw", "expected"), [
+        ("https://meta.discourse.org", "https://meta.discourse.org"),
+        ("https://meta.discourse.org/", "https://meta.discourse.org"),
+        # A topic URL reduces to the root that serves it.
+        ("https://m.example.com/t/slug/123", "https://m.example.com"),
+        ("https://m.example.com/t/123", "https://m.example.com"),
+        ("https://m.example.com/t/slug/123/4", "https://m.example.com"),
+        # Subfolder installs keep their prefix.
+        ("https://example.com/forum", "https://example.com/forum"),
+        ("https://example.com/forum/t/slug/1", "https://example.com/forum"),
+    ])
+    def test_reduces_to_instance_root(self, raw, expected):
+        assert _base_url_from(raw) == expected
+
+    @pytest.mark.parametrize("raw", [
+        "https://example.com/admin/secrets#",
+        "https://example.com/admin/secrets?x=",
+        "https://example.com/admin/secrets#/t/1.json",
+    ])
+    def test_strips_fragment_and_query(self, raw):
+        """A base ending in '#' or '?' would swallow the appended endpoint
+        into a fragment or query, handing the caller the whole request path
+        instead of a Discourse endpoint."""
+        base = _base_url_from(raw)
+        assert "#" not in base
+        assert "?" not in base
+        # The endpoint suffix survives as a real path segment.
+        assert f"{base}/latest.json".endswith("/latest.json")
+
+
+class TestDiscourseAddressGuard:
+    """base_url is caller-supplied, so it gets the same address check the
+    generic fetch path applies.  No respx mock: a refused destination must
+    never reach a transport."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(("action", "kwargs"), [
+        ("topic", {"query": "http://127.0.0.1/t/x/1"}),
+        ("search", {"query": "q", "base_url": "http://127.0.0.1"}),
+        ("latest", {"query": "", "base_url": "http://127.0.0.1"}),
+    ])
+    async def test_refuses_loopback(self, action, kwargs):
+        result = await discourse(action=action, **kwargs)
+        assert result.startswith("Error:")
+        # BlockedAddress is what the transport raises; seeing it here proves
+        # the refusal came from the address check rather than from the
+        # connection merely failing.
+        assert "BlockedAddress" in result
+        # Nothing was fetched, so nothing was fenced.
+        assert "untrusted content" not in result
+
+    @pytest.mark.asyncio
+    async def test_refuses_non_http_scheme(self):
+        result = await discourse(
+            action="latest", query="", base_url="file:///etc/hosts",
+        )
+        assert result.startswith("Error:")
+        assert "Unsupported URL scheme" in result
+
 
 class TestDetectDiscourseHeaders:
     def test_present(self):

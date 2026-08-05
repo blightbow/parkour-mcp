@@ -35,7 +35,7 @@ from .common import (
     check_url_scheme,
     check_url_ssrf,
     guarded_fetch,
-    proxy_in_effect,
+    proxy_warning,
     s2_enabled,
     tool_name,
 )
@@ -561,12 +561,9 @@ async def web_fetch_direct(
     # the address check cannot be bound to the connection.  Say so rather
     # than let the weaker guarantee be assumed.  `warning`, not `note`: this
     # reports a degraded control for this request, not an explanation.
-    if proxy_in_effect():
-        fm_entries.append("warning", (
-            "private-address protection degraded: a proxy is configured, so "
-            "the proxy resolves and connects, and the address check could not "
-            "be enforced at the socket"
-        ))
+    _proxy_warning = proxy_warning()
+    if _proxy_warning:
+        fm_entries.append("warning", _proxy_warning)
 
     # arXiv /html/ auto-tracking: if this is a full paper fetch, track it
     # on the shelf so it shows up alongside papers found via ArXiv/S2 tools.

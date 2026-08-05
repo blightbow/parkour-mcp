@@ -15,12 +15,19 @@ import re
 from collections import defaultdict
 from datetime import datetime
 from typing import Annotated
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 
 import httpx
 from pydantic import Field
 
-from .common import _FETCH_HEADERS, RateLimiter, tool_name
+from .common import (
+    _FETCH_HEADERS,
+    RateLimiter,
+    check_url_scheme,
+    guarded_client,
+    proxy_warning,
+    tool_name,
+)
 from .markdown import _TRUST_ADVISORY, _build_frontmatter, _fence_content
 
 logger = logging.getLogger(__name__)
@@ -72,9 +79,40 @@ def _extract_topic_id(url: str) -> int | None:
 
 
 def _base_url_from(url: str) -> str:
-    """Extract ``scheme://host`` base URL from a full URL."""
+    """Reduce any Discourse URL to the instance root that serves it.
+
+    Accepts a topic URL or an instance root and returns the root either
+    way.  A trailing ``/t/...`` segment is removed, since that is what
+    distinguishes the two; on a root URL the removal is a no-op.  Any
+    remaining path prefix is kept, so subfolder installs survive:
+    ``https://example.com/forum/t/slug/1`` becomes ``.../forum``.
+
+    Params, query, and fragment are dropped, and that matters beyond
+    tidiness.  Endpoint paths are appended to this value as text, so a base
+    ending in ``#`` or ``?`` swallows the appended path into a fragment or
+    query that is never sent as a path, leaving a caller in control of the
+    whole request path rather than the few Discourse endpoints below.
+    """
     parsed = urlparse(url)
-    return f"{parsed.scheme}://{parsed.netloc}"
+    return urlunparse((
+        parsed.scheme, parsed.netloc,
+        _TOPIC_ID_RE.sub("", parsed.path).rstrip("/"), "", "", "",
+    ))
+
+
+def _resolve_base(raw: str) -> tuple[str, str] | str:
+    """Normalize a caller-supplied forum URL to ``(base_url, hostname)``.
+
+    Returns an error string instead when the URL cannot be used.
+    """
+    base = _base_url_from(raw)
+    scheme_error = check_url_scheme(base)
+    if scheme_error:
+        return scheme_error
+    hostname = urlparse(base).hostname
+    if not hostname:
+        return f"Error: Could not determine a forum host from {raw!r}."
+    return base, hostname
 
 
 # ---------------------------------------------------------------------------
@@ -86,7 +124,10 @@ async def _discourse_get(
 ) -> httpx.Response:
     """Rate-limited GET request to a Discourse endpoint."""
     await _get_limiter(hostname).wait()
-    async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
+    # guarded_client, not a bare AsyncClient: the host here comes from the
+    # caller, so the destination needs the same address check the generic
+    # fetch path applies.
+    async with guarded_client(follow_redirects=True, timeout=30.0) as client:
         resp = await client.get(url, headers=_FETCH_HEADERS, params=params)
         resp.raise_for_status()
         return resp
@@ -567,8 +608,10 @@ async def discourse(
         if topic_id is None:
             return "Error: Could not extract topic ID from the provided URL."
 
-        effective_base = base_url or _base_url_from(query)
-        hostname = urlparse(effective_base).hostname or ""
+        resolved = _resolve_base(base_url or query)
+        if isinstance(resolved, str):
+            return resolved
+        effective_base, hostname = resolved
 
         data = await _fetch_topic(effective_base, topic_id, hostname)
         if isinstance(data, str):
@@ -591,9 +634,14 @@ async def discourse(
 
         fm = _build_frontmatter({
             "title": title,
-            "source": query,
+            # Built from the base actually fetched, not from `query`.  When
+            # base_url and query disagree it is base_url that chooses the
+            # destination, so echoing `query` would attribute the content to
+            # a host it never came from.
+            "source": f"{effective_base}/t/{topic_id}",
             "api": "Discourse",
             "trust": _TRUST_ADVISORY,
+            "warning": proxy_warning(),
             "posts": data.get("posts_count", len(posts)),
             "hint": f"Use {tool_name('web_fetch_direct')} with section=N to extract a specific post, "
                     "or search= for keyword search across posts",
@@ -603,37 +651,45 @@ async def discourse(
     if action == "search":
         if not base_url:
             return "Error: base_url is required for search action."
-        hostname = urlparse(base_url).hostname or ""
+        resolved = _resolve_base(base_url)
+        if isinstance(resolved, str):
+            return resolved
+        effective_base, hostname = resolved
 
-        data = await _fetch_search(base_url, query, hostname)
+        data = await _fetch_search(effective_base, query, hostname)
         if isinstance(data, str):
             return data
 
-        result = _format_search_results(data, base_url, limit=limit)
+        result = _format_search_results(data, effective_base, limit=limit)
         fm = _build_frontmatter({
             "api": "Discourse",
             "action": "search",
             "query": query,
-            "source": base_url,
+            "source": effective_base,
             "trust": _TRUST_ADVISORY,
+            "warning": proxy_warning(),
         })
         return fm + "\n\n" + _fence_content(result)
 
     if action == "latest":
         if not base_url:
             return "Error: base_url is required for latest action."
-        hostname = urlparse(base_url).hostname or ""
+        resolved = _resolve_base(base_url)
+        if isinstance(resolved, str):
+            return resolved
+        effective_base, hostname = resolved
 
-        data = await _fetch_latest(base_url, hostname)
+        data = await _fetch_latest(effective_base, hostname)
         if isinstance(data, str):
             return data
 
-        result = _format_latest(data, base_url, limit=limit)
+        result = _format_latest(data, effective_base, limit=limit)
         fm = _build_frontmatter({
             "api": "Discourse",
             "action": "latest",
-            "source": base_url,
+            "source": effective_base,
             "trust": _TRUST_ADVISORY,
+            "warning": proxy_warning(),
         })
         return fm + "\n\n" + _fence_content(result)
 
