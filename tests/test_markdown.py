@@ -18,6 +18,7 @@ from parkour_mcp.markdown import (
     _promote_list_headings,
     _resolve_toc_slice,
     _slugify,
+    _unwrap_heading_anchors,
     _wrap_bare_pre_in_code,
     html_to_markdown,
     http_error_with_body,
@@ -334,6 +335,76 @@ class TestWrapBarePreInCode:
         _, markdown = html_to_markdown(html)
         assert "middle" in markdown
         assert markdown.count("```") == 4
+
+
+class TestUnwrapHeadingAnchors:
+    """An ``<a>`` around a heading straddles a block boundary, so htmd splits
+    the link syntax across it and leaves orphan markup on the heading line.
+    """
+
+    def test_masthead_heading_loses_the_orphan_link_close(self):
+        """Zabbix's logo block: the h1 follows an image inside the anchor."""
+        html = (
+            '<html><body><a href="https://www.zabbix.com/manuals" title="Zabbix">'
+            '<img src="/logo.svg" alt="logo"/><h1 class="title">Docs</h1></a>'
+            "</body></html>"
+        )
+        title, markdown = html_to_markdown(html)
+        assert title == "Docs"
+        assert "# Docs\n" in markdown + "\n"
+        assert "](" not in markdown
+
+    def test_card_link_heading_is_extractable_as_a_section(self):
+        """Heading-first is the shape that stops parsing as a heading at all."""
+        html = (
+            '<html><body><a href="/post/1"><h3>Card Title</h3><p>blurb</p></a>'
+            "</body></html>"
+        )
+        _, markdown = html_to_markdown(html)
+        assert [s["name"] for s in _extract_sections_from_markdown(markdown)] == [
+            "Card Title"
+        ]
+        assert "blurb" in markdown
+
+    def test_heading_inside_an_attribute_value_is_not_a_heading(self):
+        """WHATWG links to MDN with ``<h1>`` in the anchor's title attribute.
+
+        A ``[^>]*`` open-tag pattern ends at that value's ``>`` and reports a
+        heading, so unwrapping destroys a real link and splices attribute text
+        into the document.
+        """
+        html = (
+            '<html><body><p>See <a href="https://developer.mozilla.org/hge" '
+            'title="The <h1> to <h6> HTML elements represent headings.">'
+            "Heading elements</a>.</p></body></html>"
+        )
+        assert _unwrap_heading_anchors(html) is html
+        _, markdown = html_to_markdown(html)
+        assert "[Heading elements](https://developer.mozilla.org/hge" in markdown
+
+    def test_link_inside_a_heading_is_left_alone(self):
+        """The well-formed nesting converts cleanly and must not be touched."""
+        html = '<html><body><h1><a href="/u">Linked Heading</a></h1></body></html>'
+        assert _unwrap_heading_anchors(html) is html
+        title, _ = html_to_markdown(html)
+        assert title == "Linked Heading"
+
+    def test_html_without_anchors_is_returned_unchanged(self):
+        """The bail-out must be identity, not a rebuilt string."""
+        html = "<html><body><h1>Docs</h1><p>No anchors here.</p></body></html>"
+        assert _unwrap_heading_anchors(html) is html
+
+    def test_plain_anchors_around_the_match_keep_their_hrefs(self):
+        """Non-greedy matching must not swallow neighbouring links."""
+        html = (
+            '<html><body><p><a href="/before">before</a></p>'
+            '<a href="/card"><h2>Card</h2></a>'
+            '<p><a href="/after">after</a></p></body></html>'
+        )
+        _, markdown = html_to_markdown(html)
+        assert "[before](/before)" in markdown
+        assert "[after](/after)" in markdown
+        assert "## Card" in markdown
 
 
 class TestPromoteListHeadings:

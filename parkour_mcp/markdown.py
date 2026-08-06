@@ -306,6 +306,57 @@ def _wrap_bare_pre_in_code(html: str) -> str:
         return html
     return _BARE_PRE_RE.sub(r"\1<code>\2</code>\3", html)
 
+
+# Matches an ``<a>`` whose content includes a heading element, capturing that
+# content.  The open-tag pattern alternates over quoted attribute values rather
+# than using ``[^>]*``, because an attribute value may legally contain ``>``:
+# the WHATWG HTML spec links to MDN with
+# ``title="The <h1> to <h6> HTML elements represent…"``, and a ``[^>]*`` open
+# tag ends at the ``>`` of ``<h1>`` inside that value, reporting a heading that
+# is really attribute text.  Unwrapping on that reading deletes a real link and
+# splices the remainder of the attribute into the document.  Quote-aware
+# matching finds zero anchor-wrapped headings across the WHATWG and ECMA-262
+# fixtures and the one real instance on the Zabbix page that motivated this.
+#
+# ``<a>`` cannot nest (parsers close the open one), so the tempered body scan
+# stops at whichever ``</a>`` or ``<a>`` comes first and each anchor's interior
+# is scanned at most once.
+_ANCHOR_OPEN = r"""<a\b(?:[^>"']|"[^"]*"|'[^']*')*>"""
+_ANCHOR_BODY = r"""(?:(?!</a[\s>])(?!<a\b).)"""
+_ANCHOR_WRAPPED_HEADING_RE = re.compile(
+    rf"{_ANCHOR_OPEN}({_ANCHOR_BODY}*?<h[1-6][\s>]{_ANCHOR_BODY}*?)</a\s*>",
+    re.DOTALL | re.IGNORECASE,
+)
+
+
+def _unwrap_heading_anchors(html: str) -> str:
+    """Drop ``<a>`` wrappers that contain a heading, keeping their content.
+
+    A heading is a block element, so an ``<a>`` wrapped around one straddles a
+    block boundary and htmd splits the link syntax across it: Zabbix's masthead
+    (``<a href="/manuals" title="Zabbix"><img alt="logo"><h1>Docs</h1></a>``)
+    converts to ``[[Image: logo]\\n\\n# Docs](/manuals "Zabbix")``.  The heading
+    line carries an orphan ``](url "title")``, which becomes the section name,
+    the slice ancestry, and — via ``_FIRST_H1_RE`` — the page title.  When the
+    heading comes first instead, the orphan is a leading ``[`` and the line no
+    longer matches ``_HEADING_LINE_RE`` at all, so the heading stops being a
+    heading.  Card links (``<a><h3>Title</h3><p>blurb</p></a>``) take that
+    second shape and are the common case on the open web.
+
+    Post-conversion repair would have to cover both shapes and the closer can
+    land on a body line the heading-line pass never sees, so the wrapper is
+    removed before htmd runs.
+
+    The href is discarded rather than moved onto the heading, because
+    ``_strip_heading_markdown`` strips links out of heading lines anyway.
+    Non-heading siblings inside the wrapper lose their link with it; that is
+    the cost of making the heading addressable.
+    """
+    if "<a" not in html:
+        return html
+    return _ANCHOR_WRAPPED_HEADING_RE.sub(r"\1", html)
+
+
 # Byte budget for the head-only BS4 fallback parse. 32 KB is well above any
 # realistic <head> size and still parses in microseconds on html.parser.
 _HEAD_SCAN_BYTES = 32 * 1024
@@ -358,7 +409,7 @@ def html_to_markdown(html: str) -> tuple[str, str]:
     ``"Untitled"``.
     """
     markdown = htmd.convert_html(  # ty: ignore[unresolved-attribute]
-        _wrap_bare_pre_in_code(html), _HTMD_OPTIONS
+        _unwrap_heading_anchors(_wrap_bare_pre_in_code(html)), _HTMD_OPTIONS
     )
     markdown = re.sub(r"\n{3,}", "\n\n", markdown).strip()
     # Lift accordion headings out of their list items before anything reads
