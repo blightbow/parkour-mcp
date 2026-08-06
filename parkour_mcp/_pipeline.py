@@ -92,6 +92,115 @@ WIKI_CACHE_MAX_ENTRIES = 5
 
 
 # ---------------------------------------------------------------------------
+# Unspaced-script indexing
+# ---------------------------------------------------------------------------
+# Tantivy's ``default`` analyzer breaks on non-alphanumeric characters, which
+# is a word boundary only in scripts that put spaces between words.  Japanese,
+# Chinese and their neighbours write in scriptio continua, so a whole clause
+# arrives as one token: "ハーレムというか" indexes as a single term and the
+# query "ハーレム" matches nothing at all.  Whatever survives that is then
+# dropped by the default analyzer's RemoveLong filter, whose 40-*byte* ceiling
+# is barely 13 characters of UTF-8 CJK.  The net effect is that BM25 search
+# over a Japanese page returns no matches for any query, ever.
+#
+# The remedy is Lucene's, whose CJK analyzer pairs a tokenizer that isolates
+# each CJK character with CJKBigramFilter to re-join adjacent ones into
+# overlapping bigrams.  We reproduce it with tantivy's n-gram tokenizer over a
+# parallel field holding only the unspaced-script runs.  A dictionary
+# segmenter (lindera, jieba) would be the alternative, but tantivy-py cannot
+# load one without a from-source build -- see quickwit-oss/tantivy-py#25, open
+# since 2020 -- and the retrieval literature does not favour it anyway: NTCIR
+# evaluations across Japanese, Chinese and Korean repeatedly find character
+# bigrams match or beat dictionary segmentation for retrieval.
+#
+# Deliberate departures from Lucene's filter, each load-bearing:
+#
+# * ``min_gram=1`` emits unigrams alongside bigrams, where Lucene defaults to
+#   bigrams-only (``output_unigrams=false``) and falls back to a unigram only
+#   for a character that has no neighbour.  Tantivy's tokenizer has no such
+#   fallback, so bigrams-only would silently return nothing for a
+#   single-character query (猫) or an isolated character in a document.
+#   Silence is the exact failure being fixed here, and the same NTCIR work
+#   reports bigrams-plus-unigrams as the strongest configuration for Japanese
+#   and Korean.  It costs no precision either: the query parser builds a
+#   conjunctive query, so the extra unigram terms constrain it.
+#
+# * Scripts beyond Lucene's four (Han, Hangul, Hiragana, Katakana) are
+#   included.  Thai, Lao, Khmer, Myanmar and Tibetan fail identically under
+#   the default analyzer and have nowhere else to go; Lucene reaches for ICU's
+#   dictionary break iterator, which we likewise cannot load.  Bigrams are a
+#   weaker fit there -- a Thai orthographic unit is a cluster, not a codepoint,
+#   so some tokens come out as bare combining marks -- but the comparison is
+#   against zero recall, not against ICU.
+#
+# The one thing to know when reading a query plan: tantivy fixes every n-gram
+# at position 0 (documented on NgramTokenizer, and unchanged in 0.26), so the
+# phrase query the parser builds for a multi-token term cannot check adjacency
+# and decays into "contains all of these n-grams".  That is why the runs are
+# handed over as a multi-valued field rather than one joined string: separate
+# values sit POSITION_GAP apart, which re-imposes the constraint that a term's
+# n-grams all come from the *same* run.  A term is therefore matched within a
+# single punctuation-delimited clause, not scattered across the whole slice.
+
+_UNSPACED_RUN_RE = re.compile(
+    "["
+    "ぁ-ゟ"             # Hiragana (from HIRAGANA LETTER SMALL A)
+    "ァ-ヺ"             # Katakana (skipping U+30A0, a separator)
+    "ー-ヿ"             # Prolonged sound mark, iteration marks
+    "ㇰ-ㇿ"             # Katakana phonetic extensions
+    "㐀-䶿"             # CJK Unified Ideographs Extension A
+    "一-鿿"             # CJK Unified Ideographs
+    "豈-﫿"             # CJK Compatibility Ideographs
+    "ｦ-ﾟ"             # Halfwidth katakana (skipping U+FF65, a separator)
+    "\U00020000-\U0003ffff"     # CJK Unified Ideographs Extension B onward
+    "ᄀ-ᇿ"             # Hangul Jamo
+    "㄰-㆏"             # Hangul Compatibility Jamo
+    "ꥠ-꥿"             # Hangul Jamo Extended-A
+    "가-힣"             # Hangul syllables
+    "ힰ-퟿"             # Hangul Jamo Extended-B
+    "ก-ฺเ-๎"    # Thai letters and marks (no currency, no punctuation)
+    "ກ-ໍ"             # Lao letters and marks
+    "ཀ-ྼ"             # Tibetan letters and marks (no tsheg, no shad)
+    "က-၉ၐ-ႝ"    # Myanmar (no section marks)
+    "ក-៓"             # Khmer letters and marks (no khan, no bariyoosan)
+    "]+",
+)
+
+# The name the schema declares and ``_new_search_index`` registers.  Any index
+# over a schema carrying an unspaced field must be built through that helper:
+# tantivy resolves tokenizers per-index, and an unregistered name fails at
+# ``add_document`` time with a bare "Error getting tokenizer for field".
+UNSPACED_TOKENIZER = "unspaced_ngram"
+
+_UNSPACED_ANALYZER = tantivy.TextAnalyzerBuilder(
+    tantivy.Tokenizer.ngram(1, 2, prefix_only=False),
+).build()
+
+
+def _unspaced_runs(text: str) -> list[str]:
+    """Split out the runs of unspaced-script text, one per list entry.
+
+    The list is the payload for a multi-valued field, and the split is what
+    gives the search its adjacency constraint: tantivy spaces values
+    POSITION_GAP apart, so a query term's n-grams must all land inside one run
+    to match.  Joining the runs into a single string would forfeit that and
+    additionally coin n-grams straddling unrelated clauses.
+
+    Latin text, digits and punctuation are dropped.  The sibling
+    default-tokenized field already indexes them, and n-gramming them would
+    inflate the index without adding recall.
+    """
+    return _UNSPACED_RUN_RE.findall(text)
+
+
+def _new_search_index(schema) -> tantivy.Index:
+    """Build a tantivy index with the unspaced-script analyzer registered."""
+    index = tantivy.Index(schema)
+    index.register_tokenizer(UNSPACED_TOKENIZER, _UNSPACED_ANALYZER)
+    return index
+
+
+# ---------------------------------------------------------------------------
 # LRU MediaWiki page cache
 # ---------------------------------------------------------------------------
 # Avoids redundant API calls for the common workflow:
@@ -224,6 +333,7 @@ class _CacheEntry:
         "_slice_ancestry",
         "_slices",
         "_tantivy_index",
+        "_unspaced_chars",
         "group",
         "markdown",
         "renderer",
@@ -239,6 +349,13 @@ class _CacheEntry:
     # (e.g. "troubleshooting", "installation") rank section-relevant
     # slices above tangential prose mentions.  ``heading`` is not stored —
     # ancestry is kept separately on the cache entry for display.
+    #
+    # ``body_unspaced`` and ``heading_unspaced`` shadow that pair for text in
+    # scripts the default analyzer cannot break into words; see
+    # "Unspaced-script indexing" above.  They hold the same content viewed
+    # through a different analyzer rather than different content, so a query
+    # runs against all four fields and the shadows contribute only for the
+    # scripts they cover.
     _SCHEMA = None
 
     @classmethod
@@ -247,6 +364,12 @@ class _CacheEntry:
             builder = tantivy.SchemaBuilder()
             builder.add_text_field("body", stored=True)
             builder.add_text_field("heading", stored=False)
+            builder.add_text_field(
+                "body_unspaced", stored=False, tokenizer_name=UNSPACED_TOKENIZER,
+            )
+            builder.add_text_field(
+                "heading_unspaced", stored=False, tokenizer_name=UNSPACED_TOKENIZER,
+            )
             builder.add_unsigned_field("idx", stored=True)
             cls._SCHEMA = builder.build()
         return cls._SCHEMA
@@ -269,6 +392,7 @@ class _CacheEntry:
         self._presplit = presplit
         self._slices: list[str] = []
         self._slice_ancestry: list[str] = []
+        self._unspaced_chars = 0
         self._tantivy_index = None
         self._built = False
         self._build_failed = False
@@ -307,14 +431,20 @@ class _CacheEntry:
 
         # Build tantivy in-memory search index over slices
         schema = self._get_schema()
-        self._tantivy_index = tantivy.Index(schema)
+        self._tantivy_index = _new_search_index(schema)
         writer = self._tantivy_index.writer()
+        unspaced_chars = 0
         for i, text in enumerate(self._slices):
+            body_unspaced = _unspaced_runs(text)
+            unspaced_chars += sum(len(run) for run in body_unspaced)
             writer.add_document(tantivy.Document(
                 body=text,
                 heading=self._slice_ancestry[i],
+                body_unspaced=body_unspaced,
+                heading_unspaced=_unspaced_runs(self._slice_ancestry[i]),
                 idx=i,
             ))
+        self._unspaced_chars = unspaced_chars
         writer.commit()
         self._tantivy_index.reload()
         self._built = True
@@ -373,6 +503,11 @@ class _CacheEntry:
         ancestry_bytes = sum(len(a.encode("utf-8")) for a in self._slice_ancestry)
         # Tantivy index heuristic: stored fields + inverted index ≈ 0.7× text
         tantivy_est = int(slices_bytes * 0.7)
+        # The unspaced shadow field indexes ~2 n-grams per character, each up
+        # to 6 UTF-8 bytes, so it is charged against its character count
+        # rather than folded into the ratio above — a page in one of those
+        # scripts would otherwise be estimated at a fraction of its true size.
+        tantivy_est += self._unspaced_chars * 8
         return md_bytes + slices_bytes + ancestry_bytes + tantivy_est
 
     def search(self, query_str: str, limit: int = 50) -> tuple[list[int], list[str]]:
@@ -391,14 +526,22 @@ class _CacheEntry:
         (section-ancestry breadcrumb); heading matches are boosted 2×
         so navigation-style queries surface section-relevant slices
         above tangential prose mentions.
+
+        The ``*_unspaced`` shadow fields carry the same two texts under the
+        n-gram analyzer, and are searched unconditionally: they hold no Latin
+        characters, so a Latin query simply finds nothing there and scores as
+        it did before.  That keeps a mixed-script query working in one pass
+        without having to guess which script the caller meant.
         """
         self._ensure_built()
         if not self._tantivy_index or not self._slices:
             return [], []
         query, errors = self._tantivy_index.parse_query_lenient(
             query_str,
-            default_field_names=["body", "heading"],
-            field_boosts={"heading": 2.0},
+            default_field_names=[
+                "body", "heading", "body_unspaced", "heading_unspaced",
+            ],
+            field_boosts={"heading": 2.0, "heading_unspaced": 2.0},
         )
         warnings = [str(e) for e in errors] if errors else []
         searcher = self._tantivy_index.searcher()

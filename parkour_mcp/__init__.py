@@ -128,7 +128,11 @@ SEARCH_GRAMMAR_DOC = """search= operators (tantivy query language):
 - foo~                — fuzzy match (edit distance)
 Matching is case-insensitive; no stemming (search for both 'prompt' and
 'prompts' if you want either). Stray punctuation in natural-language
-queries is silently dropped."""
+queries is silently dropped. Scripts written without spaces between words
+(Japanese, Chinese, Korean, Thai) are indexed by character n-gram: write
+each term unspaced, as it appears in the text, and it will match inside a
+clause. Such a term matches within one punctuation-delimited clause, so
+do not join across a 、 or 。"""
 
 # Per-profile template variables — tool names and description overrides.
 # code profile: PascalCase (WebSearch, WebFetch)

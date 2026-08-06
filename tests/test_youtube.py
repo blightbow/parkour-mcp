@@ -3197,3 +3197,45 @@ class TestParseJson3:
         assert snippets[0].start == 1.2
         assert snippets[0].duration == 2.16
         assert snippets[1].text == "Second cue."
+
+
+class TestTranscriptUnspacedScriptSearch:
+    """Japanese captions are searchable.
+
+    Transcript windows are indexed by the same default analyzer that made
+    Japanese page search return nothing, so the fix has to reach the
+    transcript schema too — see ``_pipeline.py`` "Unspaced-script indexing".
+    """
+
+    @staticmethod
+    def _japanese_entry():
+        snippets = [
+            _FakeSnippet(0.0, 5.0, "ハーレムというか、女の子を増やすのは珍しいですね"),
+            _FakeSnippet(5.0, 5.0, "恋人を早い段階でくっつけるのはかなり珍しいです"),
+            _FakeSnippet(10.0, 5.0, "Harem stories usually delay the romance"),
+        ]
+        return _build_entry(language_code="ja", snippets=snippets)
+
+    @pytest.mark.parametrize("query", ["ハーレム", "女の子", "珍しい", "恋人"])
+    def test_japanese_query_matches(self, query):
+        matched, warnings = self._japanese_entry().search(query)
+        assert matched
+        assert warnings == []
+
+    def test_latin_query_still_matches(self):
+        matched, _ = self._japanese_entry().search("romance")
+        assert matched
+
+    def test_absent_term_misses(self):
+        matched, _ = self._japanese_entry().search("犬猫病院")
+        assert matched == []
+
+    def test_chapter_filter_accepts_japanese(self):
+        """Chapter scoping parses against its own shadow field."""
+        entry = self._japanese_entry()
+        entry.chapters = (
+            _yt_module.Chapter(start_time=0.0, end_time=15.0, title="第一章 導入"),
+        )
+        matched, warnings = entry.search(None, chapter="導入")
+        assert matched
+        assert warnings == []

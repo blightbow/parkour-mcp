@@ -916,16 +916,18 @@ class TestHeadingFieldBoost:
     def test_schema_includes_heading_field(self):
         """The tantivy schema exposes a ``heading`` field alongside
         ``body`` and ``idx`` — guard against accidental schema regression."""
-        from parkour_mcp._pipeline import _CacheEntry
+        import tantivy
+
+        from parkour_mcp._pipeline import _CacheEntry, _new_search_index
         # Reset the cached schema so we exercise the builder
         _CacheEntry._SCHEMA = None
         schema = _CacheEntry._get_schema()
         # tantivy's Schema exposes fields via to_dict or iteration — use
         # indexing-build round-trip to verify the field is present and
         # accepts values.
-        idx = __import__("tantivy").Index(schema)
+        idx = _new_search_index(schema)
         w = idx.writer()
-        w.add_document(__import__("tantivy").Document(
+        w.add_document(tantivy.Document(
             body="sample body", heading="sample heading", idx=0,
         ))
         w.commit()
@@ -937,6 +939,25 @@ class TestHeadingFieldBoost:
         )
         hits = idx.searcher().search(query, limit=5).hits
         assert len(hits) == 1
+
+    def test_schema_index_requires_registered_tokenizer(self):
+        """Building the index by hand instead of through
+        ``_new_search_index`` fails loudly.
+
+        The unspaced fields name a tokenizer that tantivy resolves per
+        index, so a bare ``tantivy.Index(schema)`` produces an index that
+        accepts no documents.  Pinning the failure keeps the helper from
+        being quietly bypassed at a future call site.
+        """
+        import tantivy
+
+        from parkour_mcp._pipeline import _CacheEntry
+        _CacheEntry._SCHEMA = None
+        idx = tantivy.Index(_CacheEntry._get_schema())
+        w = idx.writer()
+        w.add_document(tantivy.Document(body="body", heading="heading", idx=0))
+        with pytest.raises(ValueError, match="tokenizer"):
+            w.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -1070,3 +1091,129 @@ class TestSliceAncestryInOutput:
         )
         # At least some slices should have ancestry labels
         assert "(" in result  # parenthetical ancestry
+
+
+# ---------------------------------------------------------------------------
+# Unspaced-script search — CJK and friends
+# ---------------------------------------------------------------------------
+
+# Reported by Claude Desktop against a Japanese interview page: every query
+# returned "matched_slices: none".  Tantivy's default analyzer breaks on
+# non-alphanumerics only, so a Japanese clause indexes as one term and no
+# query can reach inside it; the n-gram shadow fields exist to fix that.
+
+_JA_HTML = """\
+<html><head><title>独占インタビュー</title></head><body>
+<h1>独占インタビュー「ラノベの素」</h1>
+<h2>海空りく先生『落第騎士の英雄譚』</h2>
+<p>ハーレムというか、女の子を増やすというのは珍しいですね。
+恋人を早い段階でくっつけるのはかなり珍しいと思います。
+編集さんと相談してステラとの関係を決めました。</p>
+<h2>English aside</h2>
+<p>Harem stories usually delay the romance. This one commits early.</p>
+</body></html>
+"""
+
+
+class TestUnspacedScriptSearch:
+    @pytest.mark.asyncio
+    @respx.mock
+    @pytest.mark.parametrize("query", [
+        "ハーレム",                       # katakana, mid-clause
+        "女の子",                         # kanji + hiragana + kanji
+        "ステラ",                         # proper noun
+        "編集",                           # two-kanji compound
+        "ハーレム 女の子 珍しい",          # the multi-term shape that was reported
+    ])
+    async def test_japanese_query_matches(self, query):
+        """A Japanese query finds the Japanese slice.
+
+        Before the n-gram shadow fields every one of these returned no
+        matches, which is the defect this guards.
+        """
+        respx.get("https://example.com/ja").mock(
+            return_value=httpx.Response(
+                200, text=_JA_HTML, headers={"content-type": "text/html"},
+            ),
+        )
+        result = await web_fetch_direct("https://example.com/ja", search=query)
+        matched = result.split("matched_slices:")[1].split("\n")[0]
+        assert "none" not in matched
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_latin_query_unaffected(self):
+        """Latin queries still resolve against the default-tokenized fields.
+
+        The shadow fields are searched unconditionally, so this also pins
+        that they contribute nothing to a Latin query rather than adding
+        spurious matches.
+        """
+        respx.get("https://example.com/ja").mock(
+            return_value=httpx.Response(
+                200, text=_JA_HTML, headers={"content-type": "text/html"},
+            ),
+        )
+        result = await web_fetch_direct("https://example.com/ja", search="romance")
+        matched = result.split("matched_slices:")[1].split("\n")[0]
+        assert "none" not in matched
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_absent_japanese_term_still_misses(self):
+        """Recall does not come at the cost of matching everything."""
+        respx.get("https://example.com/ja").mock(
+            return_value=httpx.Response(
+                200, text=_JA_HTML, headers={"content-type": "text/html"},
+            ),
+        )
+        result = await web_fetch_direct("https://example.com/ja", search="犬猫病院")
+        assert "matched_slices: none" in result
+
+    def test_single_character_query_matches(self):
+        """A one-character query resolves.
+
+        This is why the analyzer emits unigrams as well as bigrams: with
+        bigrams alone a single character produces no tokens and the search
+        fails silently, which is the failure mode under repair.
+        """
+        from parkour_mcp._pipeline import _CacheEntry
+        entry = _CacheEntry("https://example.invalid/c", "t", "猫が好きです。\n")
+        matched, warnings = entry.search("猫")
+        assert matched == [0]
+        assert warnings == []
+
+    def test_term_must_fall_within_one_run(self):
+        """A term's n-grams must all come from a single unspaced run.
+
+        Runs are handed to tantivy as separate values of a multi-valued
+        field, which spaces them POSITION_GAP apart.  Punctuation between
+        two halves of a term therefore blocks the match, where a single
+        joined string would have accepted it.
+        """
+        from parkour_mcp._pipeline import _CacheEntry
+        split = _CacheEntry("https://example.invalid/s", "t", "ハーレ、ーレム\n")
+        whole = _CacheEntry("https://example.invalid/w", "t", "ハーレム\n")
+        assert split.search("ハーレム")[0] == []
+        assert whole.search("ハーレム")[0] == [0]
+
+
+class TestUnspacedRuns:
+    @pytest.mark.parametrize("text,expected", [
+        # Matches the run split in Elasticsearch's own cjk_bigram example.
+        ("東京都は、日本の首都であり", ["東京都は", "日本の首都であり"]),
+        # Latin, digits and whitespace are separators, not content.
+        ("ステラ Stella 2026 ヴァーミリオン",
+         ["ステラ", "ヴァーミリオン"]),
+        # KATAKANA MIDDLE DOT separates name parts, so it breaks a run...
+        ("ステラ・ヴァーミリオン", ["ステラ", "ヴァーミリオン"]),
+        # ...while the prolonged sound mark is word-internal and must not.
+        ("ハーレム", ["ハーレム"]),
+        ("한국어를 검색합니다", ["한국어를", "검색합니다"]),
+        ("ภาษาไทย", ["ภาษาไทย"]),
+        ("nothing here but latin", []),
+        ("", []),
+    ])
+    def test_run_extraction(self, text, expected):
+        from parkour_mcp._pipeline import _unspaced_runs
+        assert _unspaced_runs(text) == expected

@@ -72,6 +72,8 @@ Tantivy index builds lazily on first `search()` call so the basic
 |---|---|---|---|---|---|---|
 | `body` | text | no | yes | no | `default` | Concatenated segment text within the window |
 | `chapter` | text | no | yes | no | `default` | Title of the chapter containing the window's start time, or empty |
+| `body_unspaced` | text | no | yes | no | `unspaced_ngram` | The unspaced-script runs of `body`, multi-valued |
+| `chapter_unspaced` | text | no | yes | no | `unspaced_ngram` | The unspaced-script runs of `chapter`, multi-valued |
 | `idx` | unsigned | yes | yes | no | (n/a) | Window index. The only field retrieved from search results |
 | `start_seconds` | f64 | no | yes | yes | (n/a) | Window start; `fast=True` enables range queries and time-ordering |
 | `end_seconds` | f64 | no | yes | yes | (n/a) | Window end; same |
@@ -88,6 +90,16 @@ Schema decisions:
   chapter titles as on transcript text. `chapter="intro"` matches
   windows whose chapter title contains "intro" via the default
   tokenizer.
+- **The `*_unspaced` shadow fields carry the same two texts under a
+  character n-gram analyzer.** The default tokenizer breaks on
+  non-alphanumerics only, which is not a word boundary in Japanese,
+  Chinese, Thai and their neighbours, so without them a caption track in
+  one of those languages matches no query at all. Each query is parsed
+  against a field and its shadow together. The runs, the analyzer, and
+  why it is n-grams rather than a dictionary segmenter are all in
+  `_pipeline.py` under "Unspaced-script indexing"; the index must be
+  built through `_pipeline.py#_new_search_index`, which registers the
+  analyzer that these fields name.
 - **`idx` is the only stored field**. Window text, timestamps, and
   ancestry are reconstructed from the Python-side `windows` tuple keyed
   by `idx`. Mirrors `_pipeline.py#_CacheEntry` exactly.

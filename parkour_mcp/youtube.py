@@ -30,7 +30,13 @@ import tantivy
 from pydantic import Field
 from youtube_transcript_api import YouTubeTranscriptApi
 
-from ._pipeline import _evict_group, register_group_cache
+from ._pipeline import (
+    UNSPACED_TOKENIZER,
+    _evict_group,
+    _new_search_index,
+    _unspaced_runs,
+    register_group_cache,
+)
 from .common import tool_name
 from .markdown import (
     _TRUST_ADVISORY,
@@ -932,11 +938,22 @@ class _TranscriptEntry:
         for time-ordered results. ``chapter`` lets callers scope search
         to a named chapter via a query parsed against the same default
         tokenizer as ``body``.
+
+        ``body_unspaced`` and ``chapter_unspaced`` shadow that pair under the
+        n-gram analyzer so captions in Japanese, Chinese and the other
+        scripts the default tokenizer cannot break into words remain
+        searchable; see ``_pipeline.py`` "Unspaced-script indexing".
         """
         if cls._SCHEMA is None:
             builder = tantivy.SchemaBuilder()
             builder.add_text_field("body", stored=False)
             builder.add_text_field("chapter", stored=False)
+            builder.add_text_field(
+                "body_unspaced", stored=False, tokenizer_name=UNSPACED_TOKENIZER,
+            )
+            builder.add_text_field(
+                "chapter_unspaced", stored=False, tokenizer_name=UNSPACED_TOKENIZER,
+            )
             builder.add_unsigned_field("idx", stored=True)
             builder.add_float_field("start_seconds", indexed=True, fast=True)
             builder.add_float_field("end_seconds", indexed=True, fast=True)
@@ -992,7 +1009,7 @@ class _TranscriptEntry:
         if self._built or not self.windows:
             return
         schema = self._get_schema()
-        self._tantivy_index = tantivy.Index(schema)
+        self._tantivy_index = _new_search_index(schema)
         writer = self._tantivy_index.writer()
         for i, window in enumerate(self.windows):
             body_text = " ".join(seg.text for seg in window.segments)
@@ -1000,6 +1017,8 @@ class _TranscriptEntry:
             writer.add_document(tantivy.Document(
                 body=body_text,
                 chapter=chapter_title,
+                body_unspaced=_unspaced_runs(body_text),
+                chapter_unspaced=_unspaced_runs(chapter_title),
                 idx=i,
                 start_seconds=float(window.start),
                 end_seconds=float(window.end),
@@ -1047,7 +1066,7 @@ class _TranscriptEntry:
         body_query = None
         if query_str:
             body_query, errors = self._tantivy_index.parse_query_lenient(
-                query_str, default_field_names=["body"],
+                query_str, default_field_names=["body", "body_unspaced"],
             )
             if errors:
                 warnings.extend(str(e) for e in errors)
@@ -1055,7 +1074,7 @@ class _TranscriptEntry:
         chapter_query = None
         if chapter:
             chapter_query, errors = self._tantivy_index.parse_query_lenient(
-                chapter, default_field_names=["chapter"],
+                chapter, default_field_names=["chapter", "chapter_unspaced"],
             )
             if errors:
                 warnings.extend(f"chapter filter: {e}" for e in errors)
