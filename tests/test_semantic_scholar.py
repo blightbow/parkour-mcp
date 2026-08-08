@@ -463,6 +463,92 @@ class TestFormatPaperDetailEnriched:
         assert "Bob" in result
         assert "Carol (Stanford)" in result
 
+    def test_null_author_name_does_not_crash_concatenation(self):
+        """An explicit null name still renders, and still picks up affiliations.
+
+        `.get("name", "Unknown")` returns None for a present-but-null key, and
+        the affiliation/ORCID suffixes are built by `+=` on that value.
+        """
+        data: dict = dict(S2_PAPER_DETAIL_RESPONSE)
+        data["authors"] = [
+            {"authorId": "1", "name": None, "affiliations": ["MIT"], "externalIds": {}},
+        ]
+        result = _format_paper_detail(data)
+        assert "Unknown (MIT)" in result
+
+
+# ---------------------------------------------------------------------------
+# semantic_scholar — API field-set contract
+# ---------------------------------------------------------------------------
+
+# Naming any `X.<sub>` field on a nested S2 object replaces that object's
+# default subselection rather than adding to it, and a bare `X` in the same
+# list does not restore it. Only the identity key survives unconditionally
+# (authorId / paperId). Verified against the live API on 2026-08-08:
+#
+#   authors                      -> authorId, name
+#   authors,authors.affiliations -> authorId, affiliations      (name lost)
+#   citations                    -> paperId, title
+#   citations,citations.year     -> paperId, year               (title lost)
+#   references,references.year   -> paperId, year               (title lost)
+#
+# Subselection is not universal: `journal.name` and `tldr.text` are rejected
+# as unsupported fields, so a dotted name alone does not imply this rule.
+#
+# Values are the subfields the default selection provides beyond the identity
+# key, i.e. exactly what a nested selection silently drops.
+_S2_DEFAULT_SUBFIELDS = {
+    "authors": ("name",),
+    "citations": ("title",),
+    "references": ("title",),
+}
+
+
+class TestNestedFieldSelection:
+    """No response fixture can catch a dropped subfield: the response shape is
+    downstream of the request shape, so a hand-written fixture just asserts
+    that we asked for the right thing while asking for the wrong thing.
+    """
+
+    def test_nested_selection_rerequests_default_subfields(self):
+        from parkour_mcp import semantic_scholar as s2
+
+        field_sets = {
+            n: v for n, v in vars(s2).items()
+            if n.endswith("_FIELDS") and isinstance(v, str)
+        }
+        assert field_sets, "no *_FIELDS constants found — did they get renamed?"
+
+        for set_name, spec in field_sets.items():
+            fields = [f.strip() for f in spec.split(",")]
+            for parent, defaults in _S2_DEFAULT_SUBFIELDS.items():
+                selected = [f for f in fields if f.startswith(f"{parent}.")]
+                if not selected:
+                    continue
+                for sub in defaults:
+                    assert f"{parent}.{sub}" in fields, (
+                        f"{set_name} selects {selected} but not {parent}.{sub}; "
+                        f"a nested selection replaces the default subselection, "
+                        f"so {parent} entries come back without {sub}"
+                    )
+
+    def test_no_bare_parent_alongside_nested_selection(self):
+        """A bare parent next to a nested selection is inert, and reads as if
+        it still pulls the defaults. That misreading is what shipped."""
+        from parkour_mcp import semantic_scholar as s2
+
+        for set_name, spec in vars(s2).items():
+            if not (set_name.endswith("_FIELDS") and isinstance(spec, str)):
+                continue
+            fields = [f.strip() for f in spec.split(",")]
+            for parent in _S2_DEFAULT_SUBFIELDS:
+                if any(f.startswith(f"{parent}.") for f in fields):
+                    assert parent not in fields, (
+                        f"{set_name} lists bare `{parent}` alongside a nested "
+                        f"`{parent}.<sub>` selection; the bare name is "
+                        "overridden, not merged"
+                    )
+
 
 # ---------------------------------------------------------------------------
 # semantic_scholar — references

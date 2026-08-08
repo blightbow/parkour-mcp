@@ -2,7 +2,6 @@
 
 import asyncio
 import logging
-import re
 from pathlib import Path
 from typing import Annotated
 
@@ -58,8 +57,13 @@ _SEARCH_FIELDS = (
     "paperId,title,year,authors,citationCount,referenceCount,"
     "publicationTypes,journal,openAccessPdf,tldr"
 )
+# Naming an `authors.<sub>` field replaces the default author subselection
+# rather than adding to it, so `name` has to be requested explicitly
+# alongside the others. A bare `authors` in the same list does not restore
+# it: `authors,authors.affiliations` yields `{authorId, affiliations}` and no
+# name at all.
 _DETAIL_FIELDS = (
-    "paperId,title,year,authors,authors.externalIds,authors.affiliations,"
+    "paperId,title,year,authors.name,authors.externalIds,authors.affiliations,"
     "abstract,venue,citationCount,influentialCitationCount,referenceCount,"
     "publicationTypes,journal,externalIds,openAccessPdf,tldr,publicationDate,"
     "citationStyles"
@@ -150,7 +154,10 @@ def _format_paper_detail(data: dict) -> str:
         author_strs = []
         display_authors = authors[:10]
         for a in display_authors:
-            name = a.get("name", "Unknown")
+            # `or`, not a .get default: an author entry can carry an explicit
+            # null name, which would otherwise fall through to the string
+            # concatenations below.
+            name = a.get("name") or "Unknown"
             # Affiliations
             affs = a.get("affiliations") or []
             if affs:
@@ -242,7 +249,7 @@ def _format_paper_list(papers: list[dict], total: int | None = None, offset: int
         title = paper.get("title", "Untitled")
         year = paper.get("year") or "n.d."
         authors = paper.get("authors") or []
-        first_author = authors[0].get("name", "Unknown") if authors else "Unknown"
+        first_author = (authors[0].get("name") or "Unknown") if authors else "Unknown"
         et_al = " et al." if len(authors) > 1 else ""
         cite_count = paper.get("citationCount")
         cite_str = f" [{cite_count:,} citations]" if cite_count is not None else ""
@@ -377,15 +384,8 @@ async def _fetch_s2_paper(paper_id: str) -> str:
         fm_shelf = "not tracked — paper has no DOI in Semantic Scholar"
     else:
         authors = result.get("authors") or []
-        author_names = [a.get("name", "Unknown") for a in authors]
+        author_names = [a.get("name") or "Unknown" for a in authors]
         citation_styles = result.get("citationStyles") or {}
-        # S2 sometimes returns authors with no name populated even when
-        # the BibTeX citation has the full list.  Fall back to parsing
-        # the BibTeX author field when top-level data is all "Unknown".
-        if all(n == "Unknown" for n in author_names) and citation_styles.get("bibtex"):
-            m = re.search(r'author\s*=\s*\{(.+?)\}', citation_styles["bibtex"])
-            if m:
-                author_names = [a.strip() for a in m.group(1).split(" and ")]
         # Build alt_dois for cross-DOI dedup (arXiv ↔ journal) — supplemented
         # by version-linked DOIs from CrossRef relations.
         alt_dois: list[str] = []
@@ -406,9 +406,9 @@ async def _fetch_s2_paper(paper_id: str) -> str:
             source_tool="semantic_scholar",
             bibtex=citation_styles.get("bibtex"),
             orcids={
-                a.get("name", ""): (a.get("externalIds") or {}).get("ORCID", "")
+                a["name"]: (a.get("externalIds") or {}).get("ORCID", "")
                 for a in authors
-                if (a.get("externalIds") or {}).get("ORCID")
+                if a.get("name") and (a.get("externalIds") or {}).get("ORCID")
             },
             retraction=retraction,
         ))
