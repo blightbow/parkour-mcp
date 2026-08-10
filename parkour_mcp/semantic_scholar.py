@@ -78,6 +78,20 @@ _AUTHOR_PAPER_FIELDS = (
     "paperId,title,year,citationCount,venue"
 )
 
+# Actions whose response feeds shelf tracking, CrossRef enrichment, and
+# see_also / retraction assembly, all of which read fixed keys off the API
+# result. Honoring a caller's field list would degrade those silently, since
+# every consumer reads with .get() and a missing key is indistinguishable
+# from an absent value. The field set stays fixed and the caller is told,
+# per the soft-downgrade convention in CLAUDE.md.
+_FIXED_FIELD_ACTIONS = ("paper", "snippets")
+
+_FIELDS_IGNORED_WARNING = (
+    "fields= was ignored: the {action} action uses a fixed field set that its "
+    "shelf tracking and enrichment depend on. fields= applies to search, "
+    "references, author_search, and author."
+)
+
 
 def _get_s2_api_key() -> str:
     """Load Semantic Scholar API key from env or config file. Returns '' if missing."""
@@ -95,6 +109,39 @@ def _s2_headers() -> dict:
 
 _S2_MAX_RETRIES = 3
 _S2_RETRY_BACKOFF = 1.25  # seconds; doubles each retry
+
+# Upper bound on the API's own error prose when it is echoed into a tool
+# response. S2's messages run well under this; the cap is here so a future
+# change upstream cannot turn an error string into a wall of text.
+_S2_ERROR_DETAIL_MAX = 300
+
+
+def _s2_error_detail(response: httpx.Response) -> str | None:
+    """Pull the API's own explanation out of a non-200 body.
+
+    S2 reports the specific problem in a JSON body (`error` for 4xx,
+    `message` for rate limits): a bad field name comes back as
+    "Unrecognized or unsupported fields: [x]", which is the whole answer
+    to a typo. Returns None when the body is missing, empty, or not JSON.
+
+    Whitespace is collapsed because callers embed the result in a
+    single-line "Error: ..." string.
+    """
+    try:
+        body = response.json()
+    except ValueError:
+        return None
+    if not isinstance(body, dict):
+        return None
+    detail = body.get("error") or body.get("message")
+    if not isinstance(detail, str):
+        return None
+    detail = " ".join(detail.split())
+    if not detail:
+        return None
+    if len(detail) > _S2_ERROR_DETAIL_MAX:
+        detail = detail[:_S2_ERROR_DETAIL_MAX].rstrip() + "..."
+    return detail
 
 
 async def _s2_request(path: str, params: dict | None = None) -> dict | str:
@@ -135,6 +182,12 @@ async def _s2_request(path: str, params: dict | None = None) -> dict | str:
             if _get_s2_api_key():
                 return "Error: Rate limited (HTTP 429). Try again shortly."
             return f"Error: {_NO_KEY_MSG}"
+        detail = _s2_error_detail(response)
+        if detail:
+            return (
+                f"Error: Semantic Scholar API returned HTTP "
+                f"{response.status_code} - {detail}"
+            )
         return f"Error: Semantic Scholar API returned HTTP {response.status_code}."
 
     # Unreachable, but satisfies type checker
@@ -329,8 +382,13 @@ def _s2_see_also(
     return hints if len(hints) > 1 else hints[0]
 
 
-async def _fetch_s2_paper(paper_id: str) -> str:
-    """Fetch a single paper and return formatted markdown with frontmatter."""
+async def _fetch_s2_paper(paper_id: str, warning: str | None = None) -> str:
+    """Fetch a single paper and return formatted markdown with frontmatter.
+
+    `warning` is surfaced in the frontmatter; the dispatcher uses it to
+    report a soft-downgraded parameter. The URL fast path has no such
+    parameters and leaves it unset.
+    """
 
     result = await _s2_request(f"/paper/{paper_id}", {"fields": _DETAIL_FIELDS})
     if isinstance(result, str):
@@ -420,6 +478,7 @@ async def _fetch_s2_paper(paper_id: str) -> str:
         "source": source_url,
         "api": "Semantic Scholar",
         "alert": _build_alert_message(retraction, other_update),
+        "warning": warning,
         "note": fm_note or _build_correction_note(other_update),
         "relation": _relations_fm_entry(relations),
         "see_also": _s2_see_also(arxiv_id, doi),
@@ -508,13 +567,26 @@ async def semantic_scholar(
         description="Starting position for pagination.",
     )] = 0,
     fields: Annotated[str | None, Field(
-        description="Comma-separated S2 API field names to override defaults (advanced, rarely needed).",
+        description=(
+            "Comma-separated S2 API field names to override defaults (advanced, rarely needed). "
+            "Applies to search, references, and author_search; for author it overrides the "
+            "author record only, not the accompanying paper list. Ignored with a warning by "
+            "paper and snippets, whose fixed field sets back shelf tracking and enrichment. "
+            "Naming a nested subfield replaces that object's default subselection rather than "
+            "adding to it, so authors.affiliations alone returns authors with no name."
+        ),
     )] = None,
     paper_id: Annotated[str | None, Field(
         description="Paper ID to scope snippet search to a single paper. Accepts S2 hash, DOI:10.xxx, ARXIV:xxx, or S2 URL. Only used by snippets action.",
     )] = None,
 ) -> str:
     """Search and retrieve academic paper data from Semantic Scholar."""
+    fields_warning = (
+        _FIELDS_IGNORED_WARNING.format(action=action)
+        if fields and action in _FIXED_FIELD_ACTIONS
+        else None
+    )
+
     # Resolve S2 URLs to paper IDs for paper/references/snippets actions
     if action in ("paper", "references", "snippets"):
         detected_id = _detect_s2_url(query)
@@ -549,7 +621,7 @@ async def semantic_scholar(
         return fm + "\n\n" + _format_paper_list(papers, total=total, offset=offset)
 
     if action == "paper":
-        return await _fetch_s2_paper(query)
+        return await _fetch_s2_paper(query, warning=fields_warning)
 
     if action == "references":
         params = {
@@ -670,6 +742,7 @@ async def semantic_scholar(
             "action": "snippets",
             "query": query,
             "paper": paper_id,
+            "warning": fields_warning,
             "hint": "Use paper action for abstract, TL;DR, and citation data",
         })
         return fm + "\n\n" + _format_snippets(result, paper_id=paper_id)

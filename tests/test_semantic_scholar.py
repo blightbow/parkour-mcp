@@ -14,6 +14,7 @@ _s2_module = sys.modules["parkour_mcp.semantic_scholar"]
 from parkour_mcp._pipeline import _s2_fast_path  # noqa: E402
 from parkour_mcp.detection import _detect_s2_url  # noqa: E402
 from parkour_mcp.semantic_scholar import (  # noqa: E402
+    _DETAIL_FIELDS,
     S2_BASE_URL,
     _fetch_s2_paper,
     _format_paper_detail,
@@ -143,6 +144,42 @@ class TestS2Request:
         result = await _s2_request("/paper/search", {"query": "test"})
         assert "403" in result
         assert "rejected the configured API key" not in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_400_surfaces_api_error_detail(self):
+        """A bad field name is diagnosable only from the API's own body."""
+        respx.get(f"{S2_BASE_URL}/paper/search").mock(
+            return_value=httpx.Response(
+                400, json={"error": "Unrecognized or unsupported fields: [bogus]"}
+            )
+        )
+        result = await _s2_request("/paper/search", {"query": "test"})
+        assert "400" in result
+        assert "Unrecognized or unsupported fields: [bogus]" in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_400_without_parseable_body_stays_generic(self):
+        respx.get(f"{S2_BASE_URL}/paper/search").mock(
+            return_value=httpx.Response(400, text="<html>gateway</html>")
+        )
+        result = await _s2_request("/paper/search", {"query": "test"})
+        assert result == "Error: Semantic Scholar API returned HTTP 400."
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_error_detail_is_single_line_and_bounded(self):
+        """The detail is embedded in a one-line 'Error: ...' string."""
+        respx.get(f"{S2_BASE_URL}/paper/search").mock(
+            return_value=httpx.Response(
+                400, json={"error": "line one\nline two   " + "x" * 500}
+            )
+        )
+        result = await _s2_request("/paper/search", {"query": "test"})
+        assert "\n" not in result
+        assert "line one line two" in result
+        assert len(result) < 400
 
     @pytest.mark.asyncio
     @respx.mock
@@ -756,6 +793,113 @@ class TestS2FastPath:
         result = await _s2_fast_path(url)
         assert result is not None
         assert "Error" in result
+
+
+# ---------------------------------------------------------------------------
+# semantic_scholar: fields= override routing
+# ---------------------------------------------------------------------------
+
+class TestFieldsParamRouting:
+    """`fields=` is honored by four actions and fixed on two. The two that
+    fix it must say so: silently returning a different field set than the
+    caller asked for is the failure mode this covers.
+    """
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_search_honors_fields(self):
+        route = respx.get(f"{S2_BASE_URL}/paper/search").mock(
+            return_value=httpx.Response(200, json=S2_PAPER_SEARCH_RESPONSE)
+        )
+        result = await semantic_scholar("search", "attention", fields="paperId,title")
+        assert route.calls.last.request.url.params["fields"] == "paperId,title"
+        assert "warning:" not in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_references_honors_fields(self):
+        paper_id = "204e3073870fae3d05bcbc2f6a8e263d9b72e776"
+        route = respx.get(f"{S2_BASE_URL}/paper/{paper_id}/references").mock(
+            return_value=httpx.Response(200, json=S2_REFERENCE_RESPONSE)
+        )
+        await semantic_scholar("references", paper_id, fields="paperId,title")
+        assert route.calls.last.request.url.params["fields"] == "paperId,title"
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_paper_fixes_fields_and_warns(self):
+        paper_id = "204e3073870fae3d05bcbc2f6a8e263d9b72e776"
+        route = respx.get(f"{S2_BASE_URL}/paper/{paper_id}").mock(
+            return_value=httpx.Response(200, json=S2_PAPER_DETAIL_RESPONSE)
+        )
+        result = await semantic_scholar("paper", paper_id, fields="title")
+
+        sent = route.calls.last.request.url.params["fields"]
+        assert sent == _DETAIL_FIELDS, "caller's fields= must not reach the API"
+        assert "warning:" in result
+        assert "fields=" in result
+        # Soft downgrade, not an error: the full response still comes back.
+        assert "## Abstract" in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_paper_without_fields_emits_no_warning(self):
+        paper_id = "204e3073870fae3d05bcbc2f6a8e263d9b72e776"
+        respx.get(f"{S2_BASE_URL}/paper/{paper_id}").mock(
+            return_value=httpx.Response(200, json=S2_PAPER_DETAIL_RESPONSE)
+        )
+        result = await semantic_scholar("paper", paper_id)
+        assert "warning:" not in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_snippets_fixes_fields_and_warns(self):
+        respx.get(f"{S2_BASE_URL}/snippet/search").mock(
+            return_value=httpx.Response(200, json=S2_SNIPPET_RESPONSE)
+        )
+        result = await semantic_scholar("snippets", "attention", fields="title")
+        assert "warning:" in result
+        assert "fields=" in result
+
+    def test_description_documents_every_divergence(self):
+        """`fields=` behaves three ways across six actions, and the caller
+        picks an action before seeing a response. Substring checks on action
+        names are worthless here (`search` and `author` both occur inside
+        `author_search`), so assert on the behavioral claims instead.
+        """
+        import inspect
+
+        from parkour_mcp.semantic_scholar import (
+            _FIXED_FIELD_ACTIONS,
+            semantic_scholar,
+        )
+
+        param = inspect.signature(semantic_scholar).parameters["fields"]
+        desc = " ".join(
+            m.description for m in param.annotation.__metadata__
+            if getattr(m, "description", None)
+        )
+        assert desc, "fields= has no description"
+
+        for action in _FIXED_FIELD_ACTIONS:
+            assert action in desc, (
+                f"{action} fixes the field set but the description does not "
+                "name it, so a caller cannot predict the downgrade"
+            )
+        assert "gnored" in desc, "description does not say what happens to fields="
+        assert "paper list" in desc, "author's record/paper-list split undocumented"
+        assert "subselection" in desc, "nested-subfield replacement undocumented"
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_url_fast_path_needs_no_warning(self):
+        """_fetch_s2_paper is also the URL fast path, which has no fields=."""
+        paper_id = "204e3073870fae3d05bcbc2f6a8e263d9b72e776"
+        respx.get(f"{S2_BASE_URL}/paper/{paper_id}").mock(
+            return_value=httpx.Response(200, json=S2_PAPER_DETAIL_RESPONSE)
+        )
+        result = await _fetch_s2_paper(paper_id)
+        assert "warning:" not in result
 
 
 from pathlib import Path  # noqa: E402  # needed for test_429_without_key
