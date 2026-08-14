@@ -641,9 +641,17 @@ async def semantic_scholar(
         result = await _s2_request(f"/paper/{query}/references", params)
         if isinstance(result, str):
             return result
-        # References endpoint wraps each paper in {"citedPaper": {...}}
+        # References endpoint wraps each paper in {"citedPaper": {...}}, and
+        # `contexts` is a property of the citation edge rather than of the
+        # cited paper, so it sits beside `citedPaper` and has to be lifted in
+        # or _format_paper_list never sees it.
         raw = result.get("data") or []
-        papers = [item.get("citedPaper", item) for item in raw]
+        papers = []
+        for item in raw:
+            paper = dict(item.get("citedPaper") or item)
+            if contexts := item.get("contexts"):
+                paper["contexts"] = contexts
+            papers.append(paper)
         if not papers:
             return f"No references found for paper: {query}"
         # References endpoint uses cursor pagination (next) without a total count

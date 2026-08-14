@@ -623,29 +623,19 @@ S2_PAPER_DETAIL_RESPONSE = {
     },
 }
 
-S2_CITATION_RESPONSE = {
-    "total": 120000,
-    "offset": 0,
-    "data": [
-        {
-            "citingPaper": {
-                "paperId": "aaa111aaa111aaa111aaa111aaa111aaa111aaa1",
-                "title": "BERT: Pre-training of Deep Bidirectional Transformers",
-                "year": 2019,
-                "authors": [{"authorId": "9999", "name": "Jacob Devlin"}],
-                "citationCount": 85000,
-                "venue": "NAACL",
-                "contexts": ["Building on the Transformer architecture from [Vaswani et al., 2017]..."],
-            }
-        },
-    ],
-}
-
+# `contexts` sits on the citation edge beside `citedPaper`, not inside it.
+# Verified against the live /references endpoint on 2026-08-14: an edge item's
+# keys are exactly ['citedPaper', 'contexts']. An earlier hand-written version
+# of this fixture nested contexts inside citedPaper and left it empty, which
+# made the reference handler's context lifting untestable in two ways at once.
 S2_REFERENCE_RESPONSE = {
     "offset": 0,
     "next": 1,
     "data": [
         {
+            "contexts": [
+                "We build on the attention mechanism introduced by [Bahdanau et al., 2015].",
+            ],
             "citedPaper": {
                 "paperId": "bbb222bbb222bbb222bbb222bbb222bbb222bbb2",
                 "title": "Neural Machine Translation by Jointly Learning to Align and Translate",
@@ -653,8 +643,7 @@ S2_REFERENCE_RESPONSE = {
                 "authors": [{"authorId": "4444", "name": "Dzmitry Bahdanau"}],
                 "citationCount": 25000,
                 "venue": "ICLR",
-                "contexts": [],
-            }
+            },
         },
     ],
 }

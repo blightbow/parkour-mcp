@@ -542,9 +542,19 @@ _S2_DEFAULT_SUBFIELDS = {
 
 
 class TestNestedFieldSelection:
-    """No response fixture can catch a dropped subfield: the response shape is
-    downstream of the request shape, so a hand-written fixture just asserts
-    that we asked for the right thing while asking for the wrong thing.
+    """A pattern lint over hand-encoded API defaults, not a contract test.
+
+    It catches one specific coding mistake: selecting a nested subfield
+    without re-requesting the default the selection displaces. It cannot see
+    the neighbouring failure where the API puts a key somewhere the code does
+    not look (`contexts` on the citation edge rather than on `citedPaper`),
+    and it stays green if the API changes the defaults `_S2_DEFAULT_SUBFIELDS`
+    records, since that table is itself hand-written.
+
+    A *hand-written* response fixture cannot catch a dropped subfield, because
+    it is written beside the request rather than recorded from it. A fixture
+    re-recorded through the code's own request would catch it, by returning
+    nameless authors and failing the author assertions in TestSemanticScholarPaper.
     """
 
     def test_nested_selection_rerequests_default_subfields(self):
@@ -606,6 +616,34 @@ class TestSemanticScholarReferences:
         assert "hint:" in result  # fixture has next=1, so more pages exist
         assert "Bahdanau" in result
         assert "Neural Machine Translation" in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_citation_contexts_are_lifted_off_the_edge(self):
+        """`contexts` describes the citation, not the cited paper, so the API
+        puts it beside `citedPaper`. Unwrapping to `citedPaper` alone drops it
+        and the render branch in _format_paper_list never fires.
+        """
+        paper_id = "204e3073870fae3d05bcbc2f6a8e263d9b72e776"
+        respx.get(f"{S2_BASE_URL}/paper/{paper_id}/references").mock(
+            return_value=httpx.Response(200, json=S2_REFERENCE_RESPONSE)
+        )
+        result = await semantic_scholar("references", paper_id)
+        assert "We build on the attention mechanism" in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_missing_contexts_render_nothing(self):
+        paper_id = "204e3073870fae3d05bcbc2f6a8e263d9b72e776"
+        payload = {"offset": 0, "data": [
+            {"citedPaper": {"paperId": "x", "title": "No Contexts Here", "year": 2020}},
+        ]}
+        respx.get(f"{S2_BASE_URL}/paper/{paper_id}/references").mock(
+            return_value=httpx.Response(200, json=payload)
+        )
+        result = await semantic_scholar("references", paper_id)
+        assert "No Contexts Here" in result
+        assert ">" not in result.split("---")[-1]
 
 
 # ---------------------------------------------------------------------------

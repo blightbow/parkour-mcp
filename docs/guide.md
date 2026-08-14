@@ -556,7 +556,7 @@ shelf: not tracked — paper has no DOI in Semantic Scholar
 
 # Attention is All you Need
 
-**Authors:** Unknown, Unknown (Google), Unknown, Unknown, Unknown, ...
+**Authors:** Ashish Vaswani, Noam Shazeer (Google), Niki Parmar, Jakob Uszkoreit, Llion Jones, ...
 
 **Year:** 2017
 **Venue:** Neural Information Processing Systems
