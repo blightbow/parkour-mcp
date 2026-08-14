@@ -111,16 +111,18 @@ _S2_MAX_RETRIES = 3
 _S2_RETRY_BACKOFF = 1.25  # seconds; doubles each retry
 
 # Upper bound on the API's own error prose when it is echoed into a tool
-# response. S2's messages run well under this; the cap is here so a future
-# change upstream cannot turn an error string into a wall of text.
+# response. The longest message sampled while building this was 144 chars
+# (the unauthenticated 429 advisory); the cap exists so an unsampled or
+# future one cannot turn an error string into a wall of text.
 _S2_ERROR_DETAIL_MAX = 300
 
 
 def _s2_error_detail(response: httpx.Response) -> str | None:
     """Pull the API's own explanation out of a non-200 body.
 
-    S2 reports the specific problem in a JSON body (`error` for 4xx,
-    `message` for rate limits): a bad field name comes back as
+    Both keys are read because the API uses both: sampled 2026-08-08, 400
+    and 404 carry `error`, while 429 carries `message` alongside `code`.
+    The payoff is that an unrecognized field name arrives as
     "Unrecognized or unsupported fields: [x]", which is the whole answer
     to a typo. Returns None when the body is missing, empty, or not JSON.
 
@@ -207,9 +209,9 @@ def _format_paper_detail(data: dict) -> str:
         author_strs = []
         display_authors = authors[:10]
         for a in display_authors:
-            # `or`, not a .get default: an author entry can carry an explicit
-            # null name, which would otherwise fall through to the string
-            # concatenations below.
+            # `or`, not a .get default: .get supplies its default only for an
+            # absent key, so a null value would survive to the `+=` suffixes
+            # below and raise. This covers absent and null alike.
             name = a.get("name") or "Unknown"
             # Affiliations
             affs = a.get("affiliations") or []
@@ -384,6 +386,13 @@ def _s2_see_also(
 
 async def _fetch_s2_paper(paper_id: str, warning: str | None = None) -> str:
     """Fetch a single paper and return formatted markdown with frontmatter.
+
+    Sole owner of the paper action's side effects, not just its formatting:
+    concurrently fetches the APA citation and CrossRef metadata off the DOI,
+    tracks the paper on the research shelf, supplies alt-DOIs for
+    preprint/journal dedup, and prepends the retraction / EoC banner. All of
+    that reads fixed keys off the API result, which is why the field set is
+    not caller-overridable (see `_FIXED_FIELD_ACTIONS`).
 
     `warning` is surfaced in the frontmatter; the dispatcher uses it to
     report a soft-downgraded parameter. The URL fast path has no such
