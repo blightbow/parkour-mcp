@@ -4,6 +4,7 @@ import html as html_mod
 import logging
 import re
 import urllib.parse
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Annotated
 
@@ -521,6 +522,31 @@ def _format_inline_citations(citations: list[dict]) -> str:
     return "\n".join(lines).rstrip()
 
 
+def _pack_within_budget(
+    entries: list[dict],
+    render: Callable[[list[dict]], str],
+    budget_chars: int,
+) -> tuple[list[dict], list[dict]]:
+    """Take whole entries from *entries* until *render* would exceed the budget.
+
+    Whole entries, not a character cut: the caller named these references
+    individually, so half a citation is not a shorter answer, it is a wrong
+    one.  The first entry is always kept, so an oversized single reference
+    still comes back rather than an empty block.
+
+    Returns (kept, dropped).
+    """
+    kept: list[dict] = []
+    used = 0
+    for i, entry in enumerate(entries):
+        cost = len(render([entry])) + (1 if kept else 0)
+        if kept and used + cost > budget_chars:
+            return kept, entries[i:]
+        kept.append(entry)
+        used += cost
+    return kept, []
+
+
 def _mediawiki_html_to_markdown(html: str) -> str:
     """Convert MediaWiki HTML to clean markdown.
 
@@ -799,16 +825,50 @@ def _format_mediawiki_search(
     offset: int,
     query: str,
     host: str,
-) -> str:
+    *,
+    max_tokens: int,
+) -> tuple[str, int]:
     """Format search results as a markdown numbered list.
 
     *total* is None on wikis that report no hit count; the range is then
     shown without an "of N" the wiki never supplied.
+
+    *max_tokens* bounds the list.  A result is kept whole or not at all, so
+    a hit never appears stripped of the snippet that justifies it, and the
+    rendered range reflects what survived.  Returns (body, omitted_count).
     """
     if not results:
-        return f"No results for **{query}** on {host}."
+        return f"No results for **{query}** on {host}.", 0
 
-    shown = f"Showing {offset + 1}–{offset + len(results)}"
+    # Reserve the header before packing.  Built against the full result
+    # count, whose length is an upper bound on the header finally emitted.
+    of_clause = f" of {total:,}" if total is not None else ""
+    header_reserve = len(
+        f"# Search results for **{query}**\n"
+        f"Showing {offset + 1}–{offset + len(results)}{of_clause} on {host}.\n\n"
+    )
+    budget_chars = max(max(max_tokens, 1) * 4 - header_reserve, 0)
+
+    entries: list[str] = []
+    used = 0
+    for i, r in enumerate(results, start=offset + 1):
+        title_slug = r["title"].replace(" ", "_")
+        title_url = f"https://{host}/wiki/{urllib.parse.quote(title_slug, safe='_')}"
+        block = [
+            f"{i}. **[{r['title']}]({title_url})** · {r['wordcount']:,} words"
+        ]
+        if r.get("snippet"):
+            block.append(f"   {r['snippet']}")
+        block.append("")
+        rendered = "\n".join(block)
+        # The first result is always kept: an empty list is not a smaller
+        # answer to a search, it is a different one.
+        if entries and used + len(rendered) > budget_chars:
+            break
+        entries.append(rendered)
+        used += len(rendered)
+
+    shown = f"Showing {offset + 1}–{offset + len(entries)}"
     if total is not None:
         shown += f" of {total:,}"
 
@@ -816,17 +876,9 @@ def _format_mediawiki_search(
         f"# Search results for **{query}**",
         f"{shown} on {host}.",
         "",
+        *entries,
     ]
-    for i, r in enumerate(results, start=offset + 1):
-        title_slug = r["title"].replace(" ", "_")
-        title_url = f"https://{host}/wiki/{urllib.parse.quote(title_slug, safe='_')}"
-        lines.append(
-            f"{i}. **[{r['title']}]({title_url})** · {r['wordcount']:,} words"
-        )
-        if r.get("snippet"):
-            lines.append(f"   {r['snippet']}")
-        lines.append("")
-    return "\n".join(lines).rstrip()
+    return "\n".join(lines).rstrip(), len(results) - len(entries)
 
 
 async def _handle_page(
@@ -875,8 +927,15 @@ async def _handle_search(
     limit: int,
     offset: int,
     namespace: int,
+    *,
+    max_tokens: int,
 ) -> str:
-    """Execute native MediaWiki full-text search and format the results."""
+    """Execute native MediaWiki full-text search and format the results.
+
+    *max_tokens* is keyword-only and has no default: a default here is what
+    lets a caller quietly stop threading the budget through, which is the
+    defect this parameter was added to close.
+    """
     try:
         host, api_base = await _resolve_wiki_base(wiki)
     except ValueError as e:
@@ -890,7 +949,9 @@ async def _handle_search(
         logger.exception("MediaWiki search failed")
         return f"Error: Search request failed: {e}"
 
-    body = _format_mediawiki_search(results, total, offset, query, host)
+    body, omitted = _format_mediawiki_search(
+        results, total, offset, query, host, max_tokens=max_tokens,
+    )
     fm_entries = FMEntries({
         "api": f"MediaWiki ({host})",
         "trust": _TRUST_ADVISORY,
@@ -901,6 +962,15 @@ async def _handle_search(
     })
     if namespace != 0:
         fm_entries["namespace"] = namespace
+    if omitted:
+        # The wiki returned these and the budget, not the wiki, dropped them,
+        # so say so rather than letting the range imply the search found less.
+        fm_entries["results_omitted"] = omitted
+        _append_frontmatter_entry(
+            fm_entries, "hint",
+            f"{omitted} further result(s) fit the query but not max_tokens — "
+            f"raise max_tokens or lower limit=",
+        )
     # Keyed off the results in hand, not the hit count: a wiki that reports
     # no total still returns pages worth following up on.
     if results:
@@ -918,8 +988,6 @@ async def _handle_references(
     wiki: str,
     footnotes: list[int] | None,
     citations: list[str] | None,
-    # Unused today; kept in the signature because the caller already threads a
-    # budget through and reference resolution is the next thing to gate on it.
     max_tokens: int,
 ) -> str:
     """Resolve footnotes and/or inline citations for a MediaWiki page.
@@ -928,6 +996,12 @@ async def _handle_references(
     supplied, using the ``references_only: true`` umbrella flag in
     addition to the existing ``footnotes_only``/``citations_only``
     markers (downstream code may key off either).
+
+    *max_tokens* bounds the resolved references.  The budget is spent in
+    output order, footnotes before inline citations, and anything it does
+    not cover is named in ``footnotes_omitted`` / ``citations_omitted``
+    rather than silently dropped: the caller asked for specific references
+    by number or key, so it has to be able to tell which ones it got.
     """
     # Function-scope import to avoid _pipeline ↔ mediawiki cycle.
     # _pipeline.py imports .mediawiki at module top, so hoisting this closes
@@ -977,6 +1051,10 @@ async def _handle_references(
         "trust": _TRUST_ADVISORY,
         "warning": proxy_warning(),
     })
+    budget_chars = max(max_tokens, 1) * 4
+    omitted_note = (
+        "raise max_tokens or request fewer references per call to see the rest"
+    )
 
     if footnotes is not None:
         all_footnotes = _extract_citations(html)
@@ -986,9 +1064,19 @@ async def _handle_references(
         selected_fn = [c for c in all_footnotes if c["n"] in requested_fn]
         not_found_fn = sorted(requested_fn - {c["n"] for c in selected_fn})
         if selected_fn:
-            body_blocks.append(
-                "## Footnotes\n\n" + _format_citations(selected_fn)
+            header = "## Footnotes\n\n"
+            kept_fn, dropped_fn = _pack_within_budget(
+                selected_fn, _format_citations,
+                max(budget_chars - len(header), 0),
             )
+            rendered_fn = _format_citations(kept_fn)
+            budget_chars = max(
+                budget_chars - len(header) - len(rendered_fn), 0
+            )
+            body_blocks.append(header + rendered_fn)
+            if dropped_fn:
+                fm_entries["footnotes_omitted"] = [c["n"] for c in dropped_fn]
+                _append_frontmatter_entry(fm_entries, "hint", omitted_note)
         if not_found_fn:
             available = sorted(c["n"] for c in all_footnotes)
             fm_entries["footnotes_not_found"] = not_found_fn
@@ -1010,10 +1098,17 @@ async def _handle_references(
             else:
                 selected_ic.append(match)
         if selected_ic:
-            body_blocks.append(
-                "## Inline citations\n\n"
-                + _format_inline_citations(selected_ic)
+            header = "## Inline citations\n\n"
+            kept_ic, dropped_ic = _pack_within_budget(
+                selected_ic, _format_inline_citations,
+                max(budget_chars - len(header), 0),
             )
+            body_blocks.append(header + _format_inline_citations(kept_ic))
+            if dropped_ic:
+                fm_entries["citations_omitted"] = [
+                    c["shorthand"] for c in dropped_ic
+                ]
+                _append_frontmatter_entry(fm_entries, "hint", omitted_note)
         if not_found_ic:
             fm_entries["citations_not_found"] = not_found_ic
             fm_entries["citations_available_count"] = str(len(all_inline))
@@ -1155,7 +1250,9 @@ async def mediawiki(
                 "Error: 'search' action requires the query parameter. "
                 "Example: action='search' query='quantum entanglement'"
             )
-        return await _handle_search(query, wiki, limit, offset, namespace)
+        return await _handle_search(
+            query, wiki, limit, offset, namespace, max_tokens=max_tokens,
+        )
 
     if action == "references":
         if query is not None:

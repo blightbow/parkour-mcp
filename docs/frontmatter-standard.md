@@ -798,8 +798,13 @@ field is emitted to advertise the resolution path:
 | `api`           | `MediaWiki (<host>)` (e.g. `MediaWiki (en.wikipedia.org)`) |
 | `action`        | `search` |
 | `query`         | Search terms |
-| `total_results` | Total match count |
+| `total_results` | Total match count (conditional: omitted on wikis that report no hit count, rather than rendered as zero) |
+| `results_omitted` | Count of returned results the `max_tokens` budget displaced (conditional) |
 | `hint`          | Pagination guidance via `offset=` (when more results exist) |
+
+Results are packed whole against `max_tokens`: a hit is rendered with its
+snippet or not at all, the `Showing N–M` range describes what survived, and
+`results_omitted` distinguishes a budget shortfall from a short result set.
 
 **`references` action:**
 
@@ -812,6 +817,15 @@ field is emitted to advertise the resolution path:
 | `footnotes_not_found` | Comma-joined list of unresolvable footnote indices (conditional) |
 | `citations_not_found` | Comma-joined list of unresolvable CITEREF keys (conditional) |
 | `citations_available_count` | Total CITEREFs on the page when one or more requested keys could not be resolved (conditional) |
+| `footnotes_omitted` | Footnote indices resolved but displaced by the `max_tokens` budget (conditional) |
+| `citations_omitted` | CITEREF shorthands resolved but displaced by the `max_tokens` budget (conditional) |
+
+The `_not_found` and `_omitted` keys answer different questions and both can
+appear: `_not_found` means the page has no such reference, `_omitted` means it
+does and the budget did not reach it.  The budget is spent in output order,
+footnotes before inline citations, and it drops whole references rather than
+cutting one mid-entry, because the caller named these individually and needs
+to know which it received.
 
 When both `footnotes=` and `citations=` are supplied in the same call, the
 fenced body contains both blocks and neither `_only` flag is set.  Note

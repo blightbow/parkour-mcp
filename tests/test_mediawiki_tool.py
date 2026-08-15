@@ -437,6 +437,33 @@ class TestMediaWikiReferences:
 
     @pytest.mark.asyncio
     @respx.mock
+    async def test_footnotes_bounded_by_max_tokens(self):
+        """max_tokens was accepted here and never read, so the budget the
+        caller set did nothing.  It now drops whole footnotes and names the
+        ones it dropped: the caller asked for specific numbers, and a
+        character cut leaves it unable to tell which it actually received."""
+        respx.get("https://en.wikipedia.org/api.php").mock(
+            side_effect=[
+                httpx.Response(200, json=MEDIAWIKI_QUERY_RESPONSE),
+                httpx.Response(200, json=MEDIAWIKI_PARSE_WITH_CITATIONS),
+            ]
+        )
+        result = await mediawiki(
+            action="references",
+            title="Test Page",
+            wiki="en",
+            footnotes=[1, 2],
+            max_tokens=10,
+        )
+        fm, fence = split_output(result)
+        assert "footnotes_omitted" in fm
+        # Whole entries either way: the first survives intact, the second is
+        # absent rather than half-rendered.
+        assert "First reference source" in fence
+        assert "Second reference source" not in fence
+
+    @pytest.mark.asyncio
+    @respx.mock
     async def test_citations_only(self):
         """citations= alone returns inline CITEREF entries."""
         respx.get("https://en.wikipedia.org/api.php").mock(

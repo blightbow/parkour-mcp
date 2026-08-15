@@ -15,9 +15,11 @@ from parkour_mcp.mediawiki import (
     _fetch_mediawiki_page,
     _format_citations,
     _format_inline_citations,
+    _format_mediawiki_search,
     _handle_references,
     _handle_search,
     _mediawiki_html_to_markdown,
+    _pack_within_budget,
     _probe_api_base,
     _resolve_wiki_base,
 )
@@ -48,7 +50,7 @@ async def test_search_response_declares_trust(monkeypatch):
     monkeypatch.setattr(mediawiki_mod, "_resolve_wiki_base", _fake_base)
     monkeypatch.setattr(mediawiki_mod, "_search_mediawiki", _fake_search)
 
-    result = await _handle_search("python", "en.wikipedia.org", 5, 0, 0)
+    result = await _handle_search("python", "en.wikipedia.org", 5, 0, 0, max_tokens=5000)
     assert "trust:" in result
     assert "MediaWiki (en.wikipedia.org)" in result
 
@@ -335,7 +337,7 @@ class TestApiProbeStates:
             }
         }))
 
-        result = await _handle_search("Safreen", "wiki.example.com", 20, 0, 0)
+        result = await _handle_search("Safreen", "wiki.example.com", 20, 0, 0, max_tokens=5000)
         assert not result.startswith("Error:")
         # The snippet, not the title: "Safreen" is the query and would echo
         # in frontmatter even if the search route were never reached.
@@ -356,11 +358,113 @@ class TestApiProbeStates:
             "query": {"search": [{"title": "Safreen", "wordcount": 9}]},
         }))
 
-        result = await _handle_search("Safreen", "wiki.example.com", 20, 0, 0)
+        result = await _handle_search("Safreen", "wiki.example.com", 20, 0, 0, max_tokens=5000)
         assert "Showing 1–1 on wiki.example.com." in result
         assert "of 0" not in result
         assert "total_results:" not in result
         assert "hint:" in result
+
+
+# --- max_tokens budgets ---
+
+class TestSearchBudget:
+    """The search action never received max_tokens at all, so its output was
+    bounded only by limit=.  Results are now packed whole against the budget
+    and anything the budget displaced is counted, not quietly missing."""
+
+    def _results(self, n):
+        return [
+            {"title": f"Page {i}", "pageid": i, "size": 100,
+             "wordcount": 500, "timestamp": "", "snippet": "x" * 200}
+            for i in range(n)
+        ]
+
+    def test_budget_trims_and_counts(self):
+        body, omitted = _format_mediawiki_search(
+            self._results(20), 20, 0, "q", "wiki.example.com", max_tokens=200,
+        )
+        assert omitted > 0
+        assert len(body) <= 200 * 4
+        # The rendered range describes what survived, not what was fetched.
+        assert f"Showing 1–{20 - omitted} " in body
+
+    def test_generous_budget_keeps_everything(self):
+        body, omitted = _format_mediawiki_search(
+            self._results(20), 20, 0, "q", "wiki.example.com", max_tokens=50_000,
+        )
+        assert omitted == 0
+        assert "Showing 1–20 " in body
+
+    def test_first_result_always_survives(self):
+        """An empty list is not a smaller answer to a search, it is a
+        different one, so the first hit is kept even under an absurd cap."""
+        body, omitted = _format_mediawiki_search(
+            self._results(20), 20, 0, "q", "wiki.example.com", max_tokens=1,
+        )
+        assert omitted == 19
+        assert "Page 0" in body
+
+    def test_results_are_kept_whole(self):
+        """A hit stripped of the snippet that justifies it is worse than a
+        hit withheld, so entries are packed whole."""
+        body, _ = _format_mediawiki_search(
+            self._results(20), 20, 0, "q", "wiki.example.com", max_tokens=200,
+        )
+        # Every rendered title line is followed by its snippet line.
+        titles = body.count("**[Page ")
+        snippets = body.count("   " + "x" * 200)
+        assert titles == snippets
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_frontmatter_reports_the_shortfall(self):
+        respx.get(
+            "https://wiki.example.com/api.php", params={"meta": "siteinfo"},
+        ).mock(return_value=httpx.Response(200, json=MEDIAWIKI_SITEINFO_ONLY))
+        respx.get(
+            "https://wiki.example.com/api.php", params={"list": "search"},
+        ).mock(return_value=httpx.Response(200, json={
+            "query": {
+                "search": [
+                    {"title": f"Page {i}", "snippet": "y" * 300, "wordcount": 5}
+                    for i in range(10)
+                ],
+                "searchinfo": {"totalhits": 10},
+            }
+        }))
+
+        result = await _handle_search(
+            "q", "wiki.example.com", 10, 0, 0, max_tokens=200,
+        )
+        assert "results_omitted:" in result
+        assert "raise max_tokens or lower limit=" in result
+
+
+class TestPackWithinBudget:
+    def _entries(self, n):
+        return [{"n": i, "text": "z" * 50} for i in range(n)]
+
+    @staticmethod
+    def _render(entries):
+        return "\n".join(f"[^{e['n']}]: {e['text']}" for e in entries)
+
+    def test_packs_whole_entries(self):
+        kept, dropped = _pack_within_budget(self._entries(10), self._render, 200)
+        assert kept and dropped
+        assert len(kept) + len(dropped) == 10
+        assert kept + dropped == self._entries(10)
+
+    def test_generous_budget_drops_nothing(self):
+        kept, dropped = _pack_within_budget(self._entries(10), self._render, 10_000)
+        assert dropped == []
+        assert len(kept) == 10
+
+    def test_oversized_first_entry_still_returned(self):
+        """Better an over-budget answer than an empty one, and the caller is
+        told what it did not get either way."""
+        kept, dropped = _pack_within_budget(self._entries(3), self._render, 1)
+        assert len(kept) == 1
+        assert len(dropped) == 2
 
 
 # --- _clean_display_title ---
