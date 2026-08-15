@@ -1303,7 +1303,7 @@ async def _github_fast_path(
         })
         fm_entries.update(extra_fm)
         _append_frontmatter_entry(fm_entries, "warning", _rate_limit_warning())
-        content, trunc_hint = _apply_semantic_truncation(raw_md, 5000)
+        content, trunc_hint = _apply_semantic_truncation(raw_md, max_tokens)
         if trunc_hint:
             fm_entries["truncated"] = trunc_hint
             _append_frontmatter_entry(
@@ -1337,7 +1337,7 @@ async def _github_fast_path(
         })
         fm_entries.update(extra_fm)
         _append_frontmatter_entry(fm_entries, "warning", _rate_limit_warning())
-        content, trunc_hint = _apply_semantic_truncation(raw_md, 5000)
+        content, trunc_hint = _apply_semantic_truncation(raw_md, max_tokens)
         if trunc_hint:
             fm_entries["truncated"] = trunc_hint
             _append_frontmatter_entry(

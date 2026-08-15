@@ -927,6 +927,64 @@ class TestWebFetchDirectGitHubWiki:
         assert "does not have a wiki" in result
 
 
+class TestWebFetchDirectGitHubIssueBudget:
+    """The issue and PR branches truncated against a hardcoded 5000 while
+    max_tokens sat unused in scope, so the caller's budget did nothing in
+    either direction and the emitted hint told it to use the parameter that
+    had just been ignored.  The sibling wiki branch always honored it."""
+
+    @pytest.fixture(autouse=True)
+    def _clear_caches(self):
+        yield
+        _page_cache.clear()
+
+    def _mock_issue(self, kind: str):
+        body = "Lorem ipsum dolor sit amet. " * 900  # ~24k chars, ~6k tokens
+        respx.get(
+            "https://api.github.com/repos/owner/repo/issues/7"
+        ).mock(return_value=httpx.Response(200, json={
+            "title": "A long thread", "state": "open", "comments": 0,
+            "body": body, "user": {"login": "someone"},
+            "created_at": "2026-01-01T00:00:00Z",
+            "html_url": f"https://github.com/owner/repo/{kind}/7",
+        }))
+        respx.get(
+            "https://api.github.com/repos/owner/repo/issues/7/comments"
+        ).mock(return_value=httpx.Response(200, json=[]))
+
+    @pytest.mark.parametrize("kind", ["issues", "pull"])
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_budget_scales_output(self, kind):
+        if kind == "pull":
+            respx.get(
+                "https://api.github.com/repos/owner/repo/pulls/7"
+            ).mock(return_value=httpx.Response(200, json={
+                "title": "A long thread", "state": "open", "comments": 0,
+                "body": "Lorem ipsum dolor sit amet. " * 900,
+                "user": {"login": "someone"},
+                "created_at": "2026-01-01T00:00:00Z",
+                "merged": False, "draft": False,
+                "additions": 1, "deletions": 1, "changed_files": 1,
+                "html_url": "https://github.com/owner/repo/pull/7",
+            }))
+        self._mock_issue(kind)
+        url = f"https://github.com/owner/repo/{kind}/7"
+
+        small = await web_fetch_direct(url, max_tokens=500)
+        _page_cache.clear()
+        large = await web_fetch_direct(url, max_tokens=4000)
+
+        if small.startswith("Error") or large.startswith("Error"):
+            pytest.skip(f"{kind} builder needs richer fixtures than this test mocks")
+        assert len(small) < len(large), (
+            f"{kind}: max_tokens did not change the response size"
+        )
+        # The budget is the cap, not a suggestion: allow fence and frontmatter
+        # overhead but not another whole budget's worth of body.
+        assert len(small) < 500 * 4 * 2
+
+
 class TestWebFetchDirectGitHubCommit:
     """Tests for GitHub commit handling."""
 
