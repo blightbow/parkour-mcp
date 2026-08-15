@@ -188,6 +188,28 @@ class TestWebFetchDirectMarkdown:
 class TestWebFetchDirectErrors:
     @pytest.mark.asyncio
     @respx.mock
+    async def test_http_error_carries_the_servers_explanation(self):
+        """A bare status discarded the half of the response that says what
+        to do next.  bbs.nga.cn answers 403 with "you may need to log in",
+        which is the difference between a wall a caller can clear and one it
+        cannot."""
+        respx.get("https://forum.example.com/thread").mock(
+            return_value=httpx.Response(
+                403,
+                text="<html><body><p>Visitors cannot access this "
+                     "directly. You may need to log in.</p></body></html>",
+                headers={"content-type": "text/html; charset=utf-8"},
+            )
+        )
+
+        result = await web_fetch_direct("https://forum.example.com/thread")
+        assert result.startswith("Error: HTTP 403")
+        assert "You may need to log in" in result
+        # Fenced: an error page is still text the far end chose.
+        assert "untrusted content" in result
+
+    @pytest.mark.asyncio
+    @respx.mock
     async def test_timeout_error(self):
         respx.get("https://example.com/slow").mock(
             side_effect=httpx.ConnectTimeout("timeout")

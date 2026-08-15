@@ -87,6 +87,7 @@ from .markdown import (
     _filter_markdown_by_sections,
     _resolve_toc_slice,
     html_to_markdown,
+    http_error_with_body,
 )
 from .mediawiki import _mediawiki_html_to_markdown
 from .reddit import (
@@ -473,7 +474,10 @@ async def web_fetch_direct(
     except httpx.TimeoutException:
         return f"Error: Request timed out for {url}"
     except httpx.HTTPStatusError as e:
-        return f"Error: HTTP {e.response.status_code} for {url}"
+        return http_error_with_body(
+            url, e.response.status_code, e.response.text,
+            is_html="html" in e.response.headers.get("content-type", "").lower(),
+        )
     except httpx.RequestError as e:
         return f"Error: Failed to fetch {url} - {type(e).__name__}"
 
@@ -945,7 +949,10 @@ async def web_fetch_sections(url: str, slice: int = 0) -> str:
     except httpx.TimeoutException:
         return f"Error: Request timed out for {url}"
     except httpx.HTTPStatusError as e:
-        return f"Error: HTTP {e.response.status_code} for {url}"
+        return http_error_with_body(
+            url, e.response.status_code, e.response.text,
+            is_html="html" in e.response.headers.get("content-type", "").lower(),
+        )
     except httpx.RequestError as e:
         return f"Error: Failed to fetch {url} - {type(e).__name__}"
 

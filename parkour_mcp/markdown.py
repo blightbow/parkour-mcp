@@ -310,6 +310,12 @@ def _wrap_bare_pre_in_code(html: str) -> str:
 # realistic <head> size and still parses in microseconds on html.parser.
 _HEAD_SCAN_BYTES = 32 * 1024
 
+# Stand-in returned when a document names itself nowhere.  Named because it
+# is a sentinel other code tests against, not a title: `http_error_with_body`
+# has to tell "the page is called Untitled" from "the page has no title",
+# and a bare string comparison there would rot silently if this changed.
+_UNTITLED = "Untitled"
+
 
 def _extract_head_title(html: str) -> str:
     """Fallback title extraction for pages with no ``<h1>``.
@@ -330,7 +336,7 @@ def _extract_head_title(html: str) -> str:
         text = title_tag.get_text(strip=True)
         if text:
             return text
-    return "Untitled"
+    return _UNTITLED
 
 
 def html_to_markdown(html: str) -> tuple[str, str]:
@@ -547,6 +553,58 @@ def _fence_content(content: str, title: str | None = None) -> str:
         title: Optional page title to render as a heading inside the fence.
     """
     return fence_content(content, title=title)
+
+
+_ERROR_BODY_MAX_CHARS = 600
+
+
+def http_error_with_body(
+    url: str,
+    status: int,
+    body: str,
+    *,
+    is_html: bool = True,
+) -> str:
+    """Render an HTTP error that repeats what the server actually said.
+
+    A bare status code throws away the half of the response that tells the
+    caller what to do next: a 403 reading "you may need to log in" and one
+    reading "security verification" are the same number and different
+    problems.  The extract is fenced because an error page is still
+    attacker-influenced text, and it is capped because the diagnosis is
+    always at the top and nothing downstream should pay for a full render.
+
+    Falls back to the bare error line when the body is empty or carries no
+    text, so a HEAD response or an empty 404 does not gain a hollow fence.
+    """
+    text = ""
+    if body.strip():
+        if is_html:
+            # Unguarded, like every other call site: the converter absorbs
+            # malformed and binary input rather than raising, so a guard here
+            # would imply a hazard the success path does not treat as one.
+            title, text = html_to_markdown(body)
+            # Challenge pages carry their explanation in <title> and build
+            # the body from script, so a title-only page is not an empty
+            # one: "百度安全验证" is the difference between a bot wall and a
+            # permission problem.  `_UNTITLED` is the no-title sentinel and
+            # says nothing, so it does not count as one.
+            if not text.strip() and title.strip() and title != _UNTITLED:
+                text = title
+        else:
+            text = body
+        text = _normalize_whitespace(text).strip()
+
+    bare = f"Error: HTTP {status} for {url}"
+    if not text:
+        return bare
+
+    if len(text) > _ERROR_BODY_MAX_CHARS:
+        text = text[:_ERROR_BODY_MAX_CHARS].rstrip() + " …"
+    return (
+        f"{bare}\n\nThe server returned an error page:\n\n"
+        + _fence_content(text)
+    )
 
 
 # --- Section helpers ---
