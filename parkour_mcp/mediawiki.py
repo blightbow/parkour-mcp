@@ -732,13 +732,16 @@ async def _search_mediawiki(
     limit: int,
     offset: int,
     namespace: int = 0,
-) -> tuple[list[dict], int]:
+) -> tuple[list[dict], int | None]:
     """Call MediaWiki ``action=query&list=search`` and return results.
 
     Each result dict contains title, pageid, size, wordcount, timestamp,
     and a normalized snippet where ``<span class="searchmatch">term</span>``
     is converted to ``**term**`` (markdown bold) before other HTML tags
     are stripped.
+
+    The second element is the wiki's total hit count, or None where the wiki
+    does not report one.
     """
     await _mediawiki_limiter.wait()
     params = {
@@ -757,8 +760,13 @@ async def _search_mediawiki(
         data = resp.json()
 
     query_data = data.get("query", {})
-    searchinfo = query_data.get("searchinfo", {})
-    total = int(searchinfo.get("totalhits", 0))
+    # `searchinfo` is a CirrusSearch courtesy, not a guarantee: Fandom's
+    # backend omits the block entirely while still returning hits.  Reading
+    # the absence as 0 reported "Showing 1-6 of 0" and suppressed the
+    # follow-up hint, so an unknown total stays None and is left unsaid.
+    searchinfo = query_data.get("searchinfo") or {}
+    raw_total = searchinfo.get("totalhits")
+    total = int(raw_total) if raw_total is not None else None
     raw_results = query_data.get("search", [])
 
     results: list[dict] = []
@@ -787,18 +795,26 @@ async def _search_mediawiki(
 
 def _format_mediawiki_search(
     results: list[dict],
-    total: int,
+    total: int | None,
     offset: int,
     query: str,
     host: str,
 ) -> str:
-    """Format search results as a markdown numbered list."""
+    """Format search results as a markdown numbered list.
+
+    *total* is None on wikis that report no hit count; the range is then
+    shown without an "of N" the wiki never supplied.
+    """
     if not results:
         return f"No results for **{query}** on {host}."
 
+    shown = f"Showing {offset + 1}–{offset + len(results)}"
+    if total is not None:
+        shown += f" of {total:,}"
+
     lines: list[str] = [
         f"# Search results for **{query}**",
-        f"Showing {offset + 1}–{offset + len(results)} of {total:,} on {host}.",
+        f"{shown} on {host}.",
         "",
     ]
     for i, r in enumerate(results, start=offset + 1):
@@ -885,7 +901,9 @@ async def _handle_search(
     })
     if namespace != 0:
         fm_entries["namespace"] = namespace
-    if total > 0 and results:
+    # Keyed off the results in hand, not the hit count: a wiki that reports
+    # no total still returns pages worth following up on.
+    if results:
         _append_frontmatter_entry(
             fm_entries, "hint",
             f"Use {tool_name('mediawiki')} action='page' title='<title>' "

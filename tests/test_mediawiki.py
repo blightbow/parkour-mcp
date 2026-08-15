@@ -341,6 +341,27 @@ class TestApiProbeStates:
         # in frontmatter even if the search route were never reached.
         assert "a fairy" in result
 
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_absent_hit_count_is_not_reported_as_zero(self):
+        """Fandom returns hits with no `searchinfo` block.  Reading that as a
+        total of 0 rendered "Showing 1-1 of 0" and, because the follow-up
+        hint was keyed off the count, withheld the hint on every result."""
+        respx.get(
+            "https://wiki.example.com/api.php", params={"meta": "siteinfo"},
+        ).mock(return_value=httpx.Response(200, json=MEDIAWIKI_SITEINFO_ONLY))
+        respx.get(
+            "https://wiki.example.com/api.php", params={"list": "search"},
+        ).mock(return_value=httpx.Response(200, json={
+            "query": {"search": [{"title": "Safreen", "wordcount": 9}]},
+        }))
+
+        result = await _handle_search("Safreen", "wiki.example.com", 20, 0, 0)
+        assert "Showing 1–1 on wiki.example.com." in result
+        assert "of 0" not in result
+        assert "total_results:" not in result
+        assert "hint:" in result
+
 
 # --- _clean_display_title ---
 
