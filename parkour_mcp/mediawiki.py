@@ -4,8 +4,10 @@ import html as html_mod
 import logging
 import re
 import urllib.parse
+from dataclasses import dataclass, field
 from typing import Annotated
 
+import httpx
 from bs4 import BeautifulSoup
 from pydantic import Field
 
@@ -31,6 +33,27 @@ from .markdown import (
 logger = logging.getLogger(__name__)
 
 _MEDIAWIKI_API_PATHS = ["/api.php", "/w/api.php"]
+
+# Error codes returned when the API is reachable but anonymous read is off
+# ($wgGroupPermissions['*']['read'] = false).  The envelope is MediaWiki's
+# own, so these identify the software as positively as a siteinfo block does;
+# only the answer is withheld.  There is no code for "API disabled" because
+# there is no such state: $wgEnableAPI was removed in MediaWiki 1.32, and
+# api.php has been unconditionally present since.
+_API_AUTH_ERROR_CODES = frozenset({"readapidenied", "mustbeloggedin"})
+
+# Probe outcomes, ordered most to least informative about the host.  Every
+# known API path is tried and the better-ranked outcome is the one reported,
+# so a 403 on /api.php is not buried under a routine 404 on /w/api.php.
+_PROBE_STATES = (
+    "found",           # siteinfo named a MediaWiki generator
+    "auth_required",   # MediaWiki answered; anonymous read is denied
+    "api_error",       # MediaWiki answered with an error we cannot act on
+    "refused",         # host is up and rejecting us (403/429)
+    "unreachable",     # transport failed: DNS, connect, TLS, timeout
+    "not_mediawiki",   # 2xx body that is not a MediaWiki envelope
+    "absent",          # nothing usable served at this path
+)
 
 # Characters that end the authority component of a URL.  A `wiki` value
 # containing any of them is not a bare host, and concatenating it would move
@@ -64,12 +87,144 @@ _WIKI_LANG_CODE_RE = re.compile(r"^[a-z]{2,3}(-[a-z]+)?$")
 _URL_SCHEME_RE = re.compile(r"^https?://", re.IGNORECASE)
 
 
+@dataclass
+class _ApiProbe:
+    """Outcome of probing a host for a MediaWiki API.
+
+    *state* is one of `_PROBE_STATES`.  `siteinfo` and `pages` carry the
+    ``query.general`` and ``query.pages`` blocks and are populated only for
+    ``found``.  `detail` explains every other state in a form callers render
+    verbatim, so it names the endpoint it is talking about.
+    """
+    state: str
+    api_base: str = ""
+    siteinfo: dict = field(default_factory=dict)
+    pages: dict = field(default_factory=dict)
+    detail: str = ""
+
+
+def _better_probe(a: _ApiProbe, b: _ApiProbe) -> _ApiProbe:
+    """Pick the more informative of two probe outcomes, earlier path on ties."""
+    return b if _PROBE_STATES.index(b.state) < _PROBE_STATES.index(a.state) else a
+
+
+def _classify_api_response(api_base: str, resp: httpx.Response) -> _ApiProbe:
+    """Classify one API-path response.
+
+    The question is only ever "does a MediaWiki API answer here", which the
+    ``generator`` string settles on its own.  Whether any particular page
+    exists is a different question and must not gate this one.
+    """
+    if resp.status_code in (403, 429):
+        return _ApiProbe(
+            "refused", api_base,
+            detail=f"{api_base} refused the probe (HTTP {resp.status_code}), "
+                   f"so the host is up but rejecting automated requests",
+        )
+    if resp.status_code >= 400:
+        return _ApiProbe(
+            "absent", api_base,
+            detail=f"{api_base} returned HTTP {resp.status_code}",
+        )
+
+    try:
+        data = resp.json()
+    except ValueError:
+        ctype = resp.headers.get("content-type", "an unknown content type")
+        return _ApiProbe(
+            "not_mediawiki", api_base,
+            detail=f"{api_base} answered with {ctype} rather than JSON",
+        )
+    if not isinstance(data, dict):
+        return _ApiProbe(
+            "not_mediawiki", api_base,
+            detail=f"{api_base} answered with JSON that is not an API envelope",
+        )
+
+    error = data.get("error")
+    if isinstance(error, dict) and error.get("code"):
+        code = error["code"]
+        info = error.get("info", "no further detail")
+        state = "auth_required" if code in _API_AUTH_ERROR_CODES else "api_error"
+        return _ApiProbe(
+            state, api_base,
+            detail=f"{api_base} answered with MediaWiki error {code!r} ({info})",
+        )
+
+    query = data.get("query")
+    siteinfo = query.get("general", {}) if isinstance(query, dict) else {}
+    if not str(siteinfo.get("generator", "")).startswith("MediaWiki"):
+        return _ApiProbe(
+            "not_mediawiki", api_base,
+            detail=f"{api_base} answered but named no MediaWiki generator",
+        )
+
+    return _ApiProbe(
+        "found", api_base,
+        siteinfo=siteinfo,
+        pages=query.get("pages", {}) or {},
+    )
+
+
+async def _probe_api_base(base_url: str, page_title: str = "") -> _ApiProbe:
+    """Probe *base_url* for a MediaWiki API, trying each known API path.
+
+    Returns on the first path that identifies as MediaWiki; otherwise reports
+    the most informative failure across all of them.  Pass *page_title* to
+    fold a page lookup into the same request, which is enrichment for callers
+    that already have a page in hand and never a condition of the probe.
+    """
+    params = {"action": "query", "meta": "siteinfo", "format": "json"}
+    if page_title:
+        params |= {"titles": page_title, "prop": "info"}
+
+    best: _ApiProbe | None = None
+    # guarded_client, not a bare AsyncClient: `base_url` reaches here from the
+    # caller's `wiki` or `title`, so this probe picks its own destination.
+    async with guarded_client(timeout=10.0, follow_redirects=True) as client:
+        for api_path in _MEDIAWIKI_API_PATHS:
+            api_base = base_url + api_path
+            try:
+                resp = await client.get(
+                    api_base, params=params, headers=_API_HEADERS,
+                )
+            except BlockedAddress:
+                # Not the same fact as "this endpoint is not MediaWiki".
+                # Swallowing it would report a refused destination as an
+                # unrecognized wiki and try the next API path against a host
+                # we already declined to contact.
+                raise
+            except Exception as e:
+                logger.debug(
+                    "MediaWiki siteinfo probe failed for %s", api_base, exc_info=True
+                )
+                probe = _ApiProbe(
+                    "unreachable", api_base,
+                    detail=f"could not reach {api_base} ({type(e).__name__})",
+                )
+            else:
+                probe = _classify_api_response(api_base, resp)
+
+            if probe.state == "found":
+                return probe
+            best = probe if best is None else _better_probe(best, probe)
+
+    return best or _ApiProbe(
+        "absent", detail=f"no API path was tried on {base_url}",
+    )
+
+
 async def _detect_mediawiki(url: str) -> dict | None:
     """Detect if a URL points to a MediaWiki page and return API metadata.
 
     Gate: only probes if '/wiki/' is in the URL path.
 
     Returns {api_base, page_title, page_length, sitename, generator} or None.
+    None covers two distinct outcomes, because callers of the fast path fall
+    back to a generic HTTP fetch for both: no MediaWiki API answered, or one
+    did and reported the page missing.  Code asking the narrower question of
+    whether a *host* serves an API wants `_probe_api_base`, which keeps the
+    two apart and says which it found.
     """
     parsed = urllib.parse.urlparse(url)
 
@@ -83,63 +238,28 @@ async def _detect_mediawiki(url: str) -> dict | None:
         return None
 
     base_url = f"{parsed.scheme}://{parsed.netloc}"
+    probe = await _probe_api_base(base_url, page_title=page_title)
+    if probe.state != "found":
+        logger.debug(
+            "MediaWiki probe on %s: %s (%s)", base_url, probe.state, probe.detail
+        )
+        return None
 
-    # guarded_client, not a bare AsyncClient: `url` reaches here from the
-    # caller's `wiki` or `title`, so this probe picks its own destination.
-    async with guarded_client(timeout=10.0, follow_redirects=True) as client:
-        for api_path in _MEDIAWIKI_API_PATHS:
-            api_base = base_url + api_path
-            try:
-                resp = await client.get(
-                    api_base,
-                    params={
-                        "action": "query",
-                        "meta": "siteinfo",
-                        "titles": page_title,
-                        "prop": "info",
-                        "format": "json",
-                    },
-                    headers=_API_HEADERS,
-                )
-                resp.raise_for_status()
-                data = resp.json()
+    # A missing page is not a failed detection, but the fast path has nothing
+    # to render, so it declines and lets the generic fetch handle the URL.
+    page_data = next(
+        (p for p in probe.pages.values() if "missing" not in p), None
+    )
+    if page_data is None:
+        return None
 
-                # Validate response structure
-                query = data.get("query", {})
-                pages = query.get("pages", {})
-                siteinfo = query.get("general", {})
-
-                # Check that we got a valid page (not a missing page with id=-1)
-                page_data = None
-                for pdata in pages.values():
-                    if "missing" not in pdata:
-                        page_data = pdata
-                        break
-
-                if page_data is None:
-                    continue
-
-                return {
-                    "api_base": api_base,
-                    "page_title": page_title,
-                    "page_length": page_data.get("length", 0),
-                    "sitename": siteinfo.get("sitename", ""),
-                    "generator": siteinfo.get("generator", ""),
-                }
-
-            except BlockedAddress:
-                # Not the same fact as "this endpoint is not MediaWiki".
-                # Swallowing it would report a refused destination as an
-                # unrecognized wiki and try the next API path against a host
-                # we already declined to contact.
-                raise
-            except Exception:
-                logger.debug(
-                    "MediaWiki siteinfo probe failed for %s", api_base, exc_info=True
-                )
-                continue
-
-    return None
+    return {
+        "api_base": probe.api_base,
+        "page_title": page_title,
+        "page_length": page_data.get("length", 0),
+        "sitename": probe.siteinfo.get("sitename", ""),
+        "generator": probe.siteinfo.get("generator", ""),
+    }
 
 
 def _clean_display_title(raw: str) -> str:
@@ -560,23 +680,38 @@ async def _resolve_wiki_base(wiki: str) -> tuple[str, str]:
     ):
         return host, f"https://{host}/w/api.php"
 
-    # Probe unknown hosts via ``_detect_mediawiki`` using a synthesized
-    # URL to a well-known page.  This handles bare MediaWiki installs
-    # that put their API at ``/api.php`` rather than ``/w/api.php``.
-    probe_url = f"https://{host}/wiki/Main_Page"
+    # Probe unknown hosts for an API.  This handles bare MediaWiki installs
+    # that put theirs at ``/api.php`` rather than ``/w/api.php``; either
+    # answers ``meta=siteinfo``, and the generator string is what settles it.
+    #
+    # Resolving a host is a question about the host, so nothing here names a
+    # page.  An earlier revision probed a synthesized ``/wiki/Main_Page`` and
+    # accepted a host only if that page existed, which made resolution turn
+    # on an unrelated editorial choice: Fandom wikis title their main page
+    # after the wiki, so langrisser.fandom.com was reported as having no API
+    # by the very response that carried its ``MediaWiki 1.43.9`` generator.
     try:
-        info = await _detect_mediawiki(probe_url)
+        probe = await _probe_api_base(f"https://{host}")
     except BlockedAddress as e:
         # Callers already turn ValueError into a user-facing error string;
         # routing through it keeps the refusal reason in the message rather
         # than crashing the tool with a transport exception.
         raise ValueError(str(e)) from e
-    if info is None:
+
+    if probe.state == "found":
+        return host, probe.api_base
+
+    # Name the state that actually occurred.  "No API found" is a claim about
+    # the host that a denied read or a blocked probe does not support.
+    if probe.state in ("auth_required", "api_error"):
         raise ValueError(
-            f"Could not resolve wiki {wiki!r} — no MediaWiki API found "
-            f"on {host}"
+            f"Wiki {wiki!r} serves a MediaWiki API but it is not usable "
+            f"anonymously — {probe.detail}"
         )
-    return host, info["api_base"]
+    tried = " or ".join(f"https://{host}{p}" for p in _MEDIAWIKI_API_PATHS)
+    raise ValueError(
+        f"Could not resolve wiki {wiki!r} — {probe.detail} (tried {tried})"
+    )
 
 
 def _normalize_citeref_key(k: str) -> str:

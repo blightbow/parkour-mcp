@@ -117,15 +117,21 @@ class TestResolveWikiBase:
     @pytest.mark.asyncio
     @respx.mock
     async def test_unknown_host_probes_and_fails_gracefully(self):
-        """Unknown hosts probe /api.php and /w/api.php; both fail → raise."""
+        """Unknown hosts probe /api.php and /w/api.php; both fail → raise.
+
+        The message reports the status the host actually returned and lists
+        the paths tried, so a reader can tell a 404 apart from a refusal or a
+        denied read without re-running the probe by hand."""
         respx.get("https://example.invalid/api.php").mock(
             return_value=httpx.Response(404)
         )
         respx.get("https://example.invalid/w/api.php").mock(
             return_value=httpx.Response(404)
         )
-        with pytest.raises(ValueError, match="no MediaWiki API found"):
+        with pytest.raises(ValueError, match="HTTP 404") as exc:
             await _resolve_wiki_base("example.invalid")
+        assert "https://example.invalid/api.php" in str(exc.value)
+        assert "https://example.invalid/w/api.php" in str(exc.value)
 
 
 # --- Dispatcher parameter validation ---

@@ -359,6 +359,28 @@ Second details.
 
 # Minimal MediaWiki API response fixtures
 
+# What a host probe sees when no page was named: siteinfo and nothing else.
+# Resolving a host asks only whether an API answers, so this is the shape the
+# generator gate has to accept on its own.
+MEDIAWIKI_SITEINFO_ONLY = {
+    "query": {
+        "general": {
+            "sitename": "Test Wiki",
+            "generator": "MediaWiki 1.43.9",
+        },
+    }
+}
+
+# Anonymous read switched off ($wgGroupPermissions['*']['read'] = false).
+# A MediaWiki envelope, so it identifies the software while withholding the
+# answer — the distinction the probe exists to report.
+MEDIAWIKI_READ_DENIED = {
+    "error": {
+        "code": "readapidenied",
+        "info": "You need read permission to use this module.",
+    }
+}
+
 MEDIAWIKI_QUERY_RESPONSE = {
     "query": {
         "pages": {

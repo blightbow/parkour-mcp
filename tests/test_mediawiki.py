@@ -18,6 +18,7 @@ from parkour_mcp.mediawiki import (
     _handle_references,
     _handle_search,
     _mediawiki_html_to_markdown,
+    _probe_api_base,
     _resolve_wiki_base,
 )
 
@@ -25,6 +26,8 @@ from .conftest import (
     MEDIAWIKI_PARSE_FULL_RESPONSE,
     MEDIAWIKI_QUERY_MISSING_PAGE,
     MEDIAWIKI_QUERY_RESPONSE,
+    MEDIAWIKI_READ_DENIED,
+    MEDIAWIKI_SITEINFO_ONLY,
 )
 
 
@@ -95,6 +98,10 @@ class TestDetectMediawiki:
     @pytest.mark.asyncio
     @respx.mock
     async def test_returns_none_for_missing_page(self):
+        """A detected wiki with nothing at the requested title still declines,
+        because the fast path has no content to render and the generic fetch
+        handles the URL.  This is the fast path's contract, not a judgement
+        about the host — `_probe_api_base` reports that one found an API."""
         respx.get("https://wiki.example.com/api.php").mock(
             return_value=httpx.Response(200, json=MEDIAWIKI_QUERY_MISSING_PAGE)
         )
@@ -104,6 +111,9 @@ class TestDetectMediawiki:
 
         result = await _detect_mediawiki("https://wiki.example.com/wiki/Nonexistent_Page")
         assert result is None
+
+        probe = await _probe_api_base("https://wiki.example.com")
+        assert probe.state == "found"
 
     @pytest.mark.asyncio
     @respx.mock
@@ -150,6 +160,186 @@ class TestDetectMediawiki:
 
         result = await _detect_mediawiki("https://wiki.example.com/wiki/Test_Page")
         assert result is None
+
+
+# --- _probe_api_base / _resolve_wiki_base states ---
+
+class TestApiProbeStates:
+    """Resolving a host asks whether a MediaWiki API answers there.  Every
+    other fact — whether some page exists, whether we may read it, whether
+    the host likes us — is a separate answer and gets its own state, because
+    a caller told "no API found" cannot tell which one it hit."""
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_generator_alone_identifies_a_wiki(self):
+        """The regression: Fandom titles its main page after the wiki, so
+        `Main_Page` is missing on langrisser.fandom.com and the old gate read
+        that as "no MediaWiki API" — from the same response that carried
+        `generator: MediaWiki 1.43.9`.  Nothing about a page may gate this."""
+        respx.get("https://wiki.example.com/api.php").mock(
+            return_value=httpx.Response(200, json=MEDIAWIKI_SITEINFO_ONLY)
+        )
+
+        host, api_base = await _resolve_wiki_base("wiki.example.com")
+        assert host == "wiki.example.com"
+        assert api_base == "https://wiki.example.com/api.php"
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_host_probe_names_no_page(self):
+        """The synthesized `/wiki/Main_Page` probe is gone.  A request that
+        never asks about a page cannot be refused over one."""
+        route = respx.get("https://wiki.example.com/api.php").mock(
+            return_value=httpx.Response(200, json=MEDIAWIKI_SITEINFO_ONLY)
+        )
+
+        await _resolve_wiki_base("wiki.example.com")
+        params = route.calls.last.request.url.params
+        assert "titles" not in params
+        assert params["meta"] == "siteinfo"
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_denied_read_is_not_a_missing_api(self):
+        """A private wiki returns a MediaWiki envelope, so the software is
+        positively identified even though the answer is withheld."""
+        respx.get("https://wiki.example.com/api.php").mock(
+            return_value=httpx.Response(200, json=MEDIAWIKI_READ_DENIED)
+        )
+        respx.get("https://wiki.example.com/w/api.php").mock(
+            return_value=httpx.Response(404)
+        )
+
+        probe = await _probe_api_base("https://wiki.example.com")
+        assert probe.state == "auth_required"
+
+        with pytest.raises(ValueError, match="not usable anonymously") as exc:
+            await _resolve_wiki_base("wiki.example.com")
+        assert "readapidenied" in str(exc.value)
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_other_api_error_reported_as_such(self):
+        """Not every MediaWiki error is an auth error.  A wiki shedding load
+        under maxlag is still a wiki, and saying "no API found" would be a
+        claim about the host the response does not support."""
+        respx.get("https://wiki.example.com/api.php").mock(
+            return_value=httpx.Response(200, json={
+                "error": {"code": "maxlag", "info": "Waiting for a database"},
+            })
+        )
+        respx.get("https://wiki.example.com/w/api.php").mock(
+            return_value=httpx.Response(404)
+        )
+
+        probe = await _probe_api_base("https://wiki.example.com")
+        assert probe.state == "api_error"
+        assert "maxlag" in probe.detail
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_refusal_distinguished_from_absence(self):
+        """Fandom 403s every HTML page fetch while leaving api.php open, so a
+        403 is a live host rejecting us, not an endpoint that is not there."""
+        respx.get("https://wiki.example.com/api.php").mock(
+            return_value=httpx.Response(403, text="<html>Forbidden</html>")
+        )
+        respx.get("https://wiki.example.com/w/api.php").mock(
+            return_value=httpx.Response(404)
+        )
+
+        with pytest.raises(ValueError, match="refused the probe") as exc:
+            await _resolve_wiki_base("wiki.example.com")
+        assert "403" in str(exc.value)
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_most_informative_path_wins(self):
+        """Path order must not decide the message: a routine 404 on the path
+        we happen to try last cannot bury a 403 on the one before it."""
+        respx.get("https://wiki.example.com/api.php").mock(
+            return_value=httpx.Response(429)
+        )
+        respx.get("https://wiki.example.com/w/api.php").mock(
+            return_value=httpx.Response(404)
+        )
+
+        probe = await _probe_api_base("https://wiki.example.com")
+        assert probe.state == "refused"
+        assert probe.api_base == "https://wiki.example.com/api.php"
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_non_json_body_is_not_mediawiki(self):
+        respx.get("https://wiki.example.com/api.php").mock(
+            return_value=httpx.Response(
+                200, text="<html>hello</html>",
+                headers={"content-type": "text/html"},
+            )
+        )
+        respx.get("https://wiki.example.com/w/api.php").mock(
+            return_value=httpx.Response(404)
+        )
+
+        with pytest.raises(ValueError, match="rather than JSON") as exc:
+            await _resolve_wiki_base("wiki.example.com")
+        assert "text/html" in str(exc.value)
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_json_without_generator_is_not_mediawiki(self):
+        """Some other JSON API answering on /api.php is not a wiki.  The
+        generator gate has to reject it, or the tool would go on to issue
+        `action=parse` against a stranger."""
+        respx.get("https://wiki.example.com/api.php").mock(
+            return_value=httpx.Response(200, json={"status": "ok"})
+        )
+        respx.get("https://wiki.example.com/w/api.php").mock(
+            return_value=httpx.Response(404)
+        )
+
+        with pytest.raises(ValueError, match="named no MediaWiki generator"):
+            await _resolve_wiki_base("wiki.example.com")
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_unreachable_host_says_so(self):
+        respx.get("https://wiki.example.com/api.php").mock(
+            side_effect=httpx.ConnectError("nope")
+        )
+        respx.get("https://wiki.example.com/w/api.php").mock(
+            side_effect=httpx.ConnectError("nope")
+        )
+
+        with pytest.raises(ValueError, match="could not reach") as exc:
+            await _resolve_wiki_base("wiki.example.com")
+        assert "ConnectError" in str(exc.value)
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_search_reaches_a_wiki_with_no_main_page(self):
+        """The reported failure was `action=search`, which has no URL escape
+        hatch: it resolves through the host probe or not at all."""
+        respx.get(
+            "https://wiki.example.com/api.php", params={"meta": "siteinfo"},
+        ).mock(return_value=httpx.Response(200, json=MEDIAWIKI_SITEINFO_ONLY))
+        respx.get(
+            "https://wiki.example.com/api.php", params={"list": "search"},
+        ).mock(return_value=httpx.Response(200, json={
+            "query": {
+                "search": [
+                    {"title": "Safreen", "snippet": "a fairy", "wordcount": 9},
+                ],
+                "searchinfo": {"totalhits": 1},
+            }
+        }))
+
+        result = await _handle_search("Safreen", "wiki.example.com", 20, 0, 0)
+        assert not result.startswith("Error:")
+        # The snippet, not the title: "Safreen" is the query and would echo
+        # in frontmatter even if the search route were never reached.
+        assert "a fairy" in result
 
 
 # --- _clean_display_title ---
