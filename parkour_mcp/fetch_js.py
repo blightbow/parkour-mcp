@@ -38,6 +38,7 @@ from .markdown import (
     _build_frontmatter,
     _fence_content,
     html_to_markdown,
+    http_error_with_body,
 )
 
 # Per-operation budget for navigation, actions, and selector waits.  Not
@@ -421,9 +422,28 @@ async def _render_js(
 
             await page.route("**/*", _guard_navigation)
 
-            # Wait for load event - gives JS time to create framework elements
-            await page.goto(url, wait_until="load", timeout=timeout)
+            # `domcontentloaded`, not `load`: `load` waits for every
+            # subresource and fails hard at the full timeout if one of them
+            # never settles, which is the ordinary state of a page whose
+            # analytics or font host is unreachable from here.  The
+            # networkidle wait below is what gives JS time to build the page,
+            # and it is already capped and already extracts anyway on
+            # timeout; gating navigation on `load` applied the opposite
+            # tolerance to the same hazard.
+            response = await page.goto(
+                url, wait_until="domcontentloaded", timeout=timeout,
+            )
             _navigated = True
+
+            # A rendered error page is not the document, and fencing one as
+            # if it were is worse than failing: it reads as success. The
+            # static path already refuses these, so refuse here too, and
+            # carry the body across because that is what distinguishes a
+            # login wall from a bot challenge from a dead link.
+            if response is not None and response.status >= 400:
+                return http_error_with_body(
+                    url, response.status, await page.content(),
+                )
 
             # Check for live app frameworks that use persistent connections
             for marker in LIVE_APP_MARKERS:

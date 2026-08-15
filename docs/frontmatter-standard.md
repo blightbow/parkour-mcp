@@ -124,6 +124,34 @@ signal throughout the content.
 └─ untrusted content
 ```
 
+### Error responses carry a fence too
+
+An HTTP error names what the server said, because a status code alone does
+not tell a caller what to do next: a 403 reading "you may need to log in" and
+one reading "security verification" are the same number and different
+problems.  The extract is fenced like any other fetched text, since an error
+page is still written by the far end, and it is capped because the diagnosis
+is at the top.  A body with no readable text yields the bare error line
+rather than an empty fence.
+
+```
+Error: HTTP 403 for https://forum.example.com/thread
+
+The server returned an error page:
+
+┌─ untrusted content
+│
+│ (ERROR:15) 访客不能直接访问
+│ 你可能需要 [登录] 后访问 ...
+│
+└─ untrusted content
+```
+
+Errors have no frontmatter block, so this fence is the whole response after
+the error line.  The static and headless-render paths emit the same shape for
+the same status: a rendered error page is not the requested document, and
+returning one as fenced content would read as success.
+
 ## SSRF Protection
 
 This is a **safety default, not a security boundary.** parkour runs on

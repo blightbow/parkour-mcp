@@ -1,10 +1,15 @@
 """Tests for parkour_mcp.fetch_js — the requires_js headless-render path.
 
-Reached via web_fetch_direct(..., requires_js=True) / actions=[...]. Browser-
-path tests are excluded because they require a real Playwright browser.
+Reached via web_fetch_direct(..., requires_js=True) / actions=[...]. Most
+browser-path tests are excluded because they require a real Playwright
+browser; the navigation-contract tests below substitute a fake playwright
+whose surface stops at the first branch under test, so the status check and
+the wait strategy are covered without installing one.
 Covers: MediaWiki fast path under requires_js, search/slices, content-type
-pre-check.
+pre-check, navigation contract.
 """
+
+import importlib
 
 import httpx
 import pytest
@@ -335,3 +340,180 @@ class TestRequiresJsContentTypePrecheck:
         )
         # Should NOT have the pre-check warning — actions bypass the pre-check
         assert "JavaScript rendering was skipped" not in result
+
+
+# --- Navigation contract (fake playwright) ---
+
+class _FakeResponse:
+    def __init__(self, status):
+        self.status = status
+
+
+class _FakePage:
+    """Records how it was navigated and replays a canned response.
+
+    Only the surface `_render_js` touches before it decides, which is the
+    point: a fake that stops where the branch under test does cannot drift
+    into asserting the rest of the render.
+    """
+
+    def __init__(self, status, html):
+        self._status = status
+        self._html = html
+        self.goto_kwargs: dict = {}
+
+    async def route(self, pattern, handler):
+        pass
+
+    async def goto(self, url, **kwargs):
+        self.goto_kwargs = kwargs
+        return _FakeResponse(self._status)
+
+    async def content(self):
+        return self._html
+
+    async def query_selector(self, selector):
+        return None
+
+    async def wait_for_load_state(self, state, timeout=None):
+        pass
+
+    async def title(self):
+        return "Fake"
+
+
+class _FakeContext:
+    def __init__(self, page):
+        self._page = page
+
+    async def new_page(self):
+        return self._page
+
+
+class _FakeBrowser:
+    def __init__(self, page):
+        self._page = page
+
+    async def new_context(self, **kwargs):
+        return _FakeContext(self._page)
+
+    async def close(self):
+        pass
+
+
+class _FakeLauncher:
+    def __init__(self, page):
+        self._page = page
+
+    async def launch(self, **kwargs):
+        return _FakeBrowser(self._page)
+
+
+class _FakePlaywright:
+    def __init__(self, page):
+        self.webkit = _FakeLauncher(page)
+
+
+class _FakePlaywrightCM:
+    def __init__(self, page):
+        self._page = page
+
+    async def __aenter__(self):
+        return _FakePlaywright(self._page)
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+class TestRenderNavigationContract:
+    """The render path used to discard the navigation status entirely, so a
+    server that refused the request had its error page rendered, fenced and
+    returned as though it were the document.  Observed on bbs.nga.cn, whose
+    403 body is a login wall: the static path refused it correctly while the
+    requires_js path presented the wall as the thread."""
+
+    @pytest.fixture
+    def fake_page(self, monkeypatch):
+        def _install(status, html):
+            page = _FakePage(status, html)
+            # fetch_js is banned from module-level import (it drags in
+            # playwright), so it is absent from sys.modules until the first
+            # render.  Import it here rather than at file scope, which would
+            # trip the same ban in the linter.
+            mod = importlib.import_module("parkour_mcp.fetch_js")
+            monkeypatch.setattr(
+                mod, "async_playwright", lambda: _FakePlaywrightCM(page)
+            )
+            monkeypatch.setattr(
+                mod, "_detect_playwright_browser", lambda p: ("webkit", "WebKit")
+            )
+            return page
+        return _install
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_error_status_is_not_rendered_as_content(self, fake_page):
+        respx.head("https://walled.example.com/thread").mock(
+            return_value=httpx.Response(403)
+        )
+        fake_page(403, "<html><body><p>You may need to log in</p></body></html>")
+
+        result = await web_fetch_direct(
+            "https://walled.example.com/thread", requires_js=True
+        )
+        assert result.startswith("Error: HTTP 403")
+        # The body survives, because "403" alone does not distinguish a login
+        # wall from a bot challenge from a dead link.
+        assert "You may need to log in" in result
+        assert "untrusted content" in result
+        # And it is not dressed as a successful fetch.
+        assert "source: https://walled.example.com/thread" not in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_error_page_without_text_stays_bare(self, fake_page):
+        """A challenge page builds its body from script, so the extract can
+        be empty.  An empty fence would be noise, not provenance."""
+        respx.head("https://walled.example.com/thread").mock(
+            return_value=httpx.Response(403)
+        )
+        fake_page(403, "<html><body></body></html>")
+
+        result = await web_fetch_direct(
+            "https://walled.example.com/thread", requires_js=True
+        )
+        assert result.strip() == (
+            "Error: HTTP 403 for https://walled.example.com/thread"
+        )
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_navigation_does_not_wait_for_subresources(self, fake_page):
+        """`load` blocks on every subresource and fails hard at the full
+        timeout when one never settles, while the networkidle wait that
+        follows is capped and extracts anyway.  Same hazard, so the same
+        tolerance."""
+        respx.head("https://ok.example.com/page").mock(
+            return_value=httpx.Response(403)
+        )
+        page = fake_page(200, "<html><body><h1>Hi</h1><p>Body</p></body></html>")
+
+        await web_fetch_direct("https://ok.example.com/page", requires_js=True)
+        assert page.goto_kwargs.get("wait_until") == "domcontentloaded"
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_ok_status_passes_the_gate(self, fake_page):
+        """The gate must not swallow the ordinary case.  The fake stops
+        short of a full render, so this asserts only that navigation got
+        past the status check — anything further would be asserting the
+        fake, not the code."""
+        respx.head("https://ok.example.com/page").mock(
+            return_value=httpx.Response(403)
+        )
+        fake_page(200, "<html><body><h1>Hi</h1><p>Real content here</p></body></html>")
+
+        result = await web_fetch_direct(
+            "https://ok.example.com/page", requires_js=True
+        )
+        assert not result.startswith("Error: HTTP")
