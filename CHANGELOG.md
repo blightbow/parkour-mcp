@@ -5,6 +5,18 @@ All notable changes to parkour-mcp will be documented in this file.
 Format: https://keepachangelog.com/en/1.1.0/
 Versioning: https://semver.org/spec/v2.0.0.html
 
+## [2.2.2] 2026-08-15
+
+### Fixed
+- BM25 search over a page or video transcript written in Japanese, Chinese, Korean, Thai or a neighbouring script silently returned no matches for any query, and now matches terms as they appear in the text, down to a single character.
+- Semantic Scholar paper lookups now show real author names, affiliations, and ORCIDs instead of a row of "Unknown".
+- a fields= argument that cannot be applied is now reported in the response frontmatter instead of vanishing, and an unrecognized field name comes back with the API's own explanation rather than a bare HTTP 400.
+- reference lookups now show the sentences where a paper cites each work, which the tool has requested from the API but silently discarded until now.
+
+
+### Documentation
+- Anchor comments that asserted API behavior
+
 ## [2.2.1] 2026-08-05
 
 ### Security
