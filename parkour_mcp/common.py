@@ -27,6 +27,30 @@ _PLATFORM = platform.system()  # "Darwin", "Linux", "Windows"
 # ---------------------------------------------------------------------------
 # User-Agent strings
 # ---------------------------------------------------------------------------
+# Which of the two sets to send: be honest unless the destination is hostile
+# to legitimate agent-with-human-oversight traffic.
+#
+# `_API_HEADERS` is the default and the larger set of callers.  It identifies
+# the tool and a contact URL, which is what a well-behaved client owes an
+# origin, and it asks for the content type the caller actually wants.
+#
+# `_FETCH_HEADERS` claims to be Chrome.  Reserve it for two situations, both
+# of which are the origin's posture rather than our convenience:
+#
+# * Strict anti-bot WAFs.  Their heuristics are tuned against bulk scraping
+#   for model training, and a human-directed single-page fetch is caught as
+#   collateral.  The generic fetch path is the case: a caller named the URL
+#   and is reading the result.
+# * Origins that have withdrawn access to content they do not exclusively
+#   license, Reddit being the worked example (see the Reddit OAuth section in
+#   TECH_DEBT.md).
+#
+# Reaching for the browser identity anywhere else is a habit, not a
+# requirement, and it costs something real: it is a lie a WAF can catch us in,
+# and it sends an HTML `Accept` to endpoints serving JSON.  `discourse.py` sent
+# it for months on that basis, and every endpoint it uses answers an honest
+# client with 200.
+#
 # Browser-spoofing identity for HTML page fetches (sites expect a browser).
 # Everything that encodes the Chrome version is derived from _CHROME_MAJOR so
 # the User-Agent and the Client-Hint headers can never drift out of sync.  WAFs

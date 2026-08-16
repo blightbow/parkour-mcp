@@ -197,6 +197,42 @@ class TestDiscourseAddressGuard:
         assert "Unsupported URL scheme" in result
 
 
+class TestDiscourseIdentifiesHonestly:
+    """Discourse gets an honest User-Agent, not a browser masquerade.
+
+    The browser identity was carried here from the generic fetch path in the
+    module's first commit, with no block to justify it, and every endpoint
+    this module uses answers an identified client with 200.  Claiming to be
+    Chrome is reserved for origins hostile to agent-with-human-oversight
+    traffic; see the header-selection policy in `common.py`.  Pinned as a test
+    because the drift back is a one-word import change.
+    """
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_sends_identified_user_agent(self):
+        route = respx.get("https://forum.example.com/latest.json").mock(
+            return_value=httpx.Response(200, json={"topic_list": {"topics": []}})
+        )
+        await discourse(action="latest", query="", base_url="https://forum.example.com")
+
+        sent = route.calls[0].request.headers
+        assert "parkour-mcp" in sent["user-agent"]
+        assert "Chrome" not in sent["user-agent"]
+        assert "Mozilla" not in sent["user-agent"]
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_asks_for_json_not_html(self):
+        """The masquerade also sent an HTML Accept to a .json endpoint."""
+        route = respx.get("https://forum.example.com/latest.json").mock(
+            return_value=httpx.Response(200, json={"topic_list": {"topics": []}})
+        )
+        await discourse(action="latest", query="", base_url="https://forum.example.com")
+
+        assert route.calls[0].request.headers["accept"] == "application/json"
+
+
 class TestDetectDiscourseHeaders:
     def test_present(self):
         headers = httpx.Headers({"x-discourse-route": "topics/show"})

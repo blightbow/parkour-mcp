@@ -22,7 +22,7 @@ import httpx
 from pydantic import Field
 
 from .common import (
-    _FETCH_HEADERS,
+    _API_HEADERS,
     RateLimiter,
     check_url_scheme,
     guarded_client,
@@ -129,7 +129,7 @@ async def _discourse_get(
     # caller, so the destination needs the same address check the generic
     # fetch path applies.
     async with guarded_client(follow_redirects=True, timeout=30.0) as client:
-        resp = await client.get(url, headers=_FETCH_HEADERS, params=params)
+        resp = await client.get(url, headers=_API_HEADERS, params=params)
         resp.raise_for_status()
         return resp
 
