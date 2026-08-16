@@ -49,6 +49,7 @@ from .common import (
     FetchError,
     ResponseTooLarge,
     _resolve_and_check,
+    proxy_in_effect,
 )
 
 _logger = logging.getLogger(__name__)
@@ -107,6 +108,13 @@ class FetchResponse:
     http_version: str
     remote_addr: str | None = None
     history: tuple[str, ...] = field(default=())
+    pinned: bool = True
+    """Whether the connection was bound to an address the check validated.
+
+    False when a proxy performed the resolution instead, which makes the
+    address check advisory.  Callers surface that with `proxy_warning` rather
+    than letting the weaker guarantee pass as the strong one.
+    """
 
     @property
     def text(self) -> str:
@@ -151,6 +159,19 @@ def build_client(
     closes the DNS-rebinding race; validating a URL string and letting a lower
     layer resolve it again is the shape behind that whole bug class.
 
+    Environment proxies need no handling here.  wreq honours ``HTTP_PROXY``,
+    ``HTTPS_PROXY``, ``ALL_PROXY`` and ``NO_PROXY`` by default, so a configured
+    egress proxy is used without being reproduced.  That is a real improvement
+    over the httpx path, which computes ``allow_env_proxies = trust_env and
+    transport is None`` and therefore silently ignored every proxy variable
+    once a custom transport was installed, forcing `guarded_client` to rebuild
+    the proxy map by hand through the private ``httpx._utils`` API.
+
+    A proxy does weaken the guarantee, because the proxy performs the
+    resolution that reaches the network and no local pin can bind it.  That is
+    detected after the fact in `_verify_pin` rather than predicted here, and
+    reported as `FetchResponse.pinned`.
+
     Only these parameters are accepted, on purpose.  See the module docstring:
     a ``**kwargs`` passthrough would let a misspelled ``dns_options`` disable
     pinning silently.
@@ -181,23 +202,43 @@ def _host_port(url: str) -> tuple[str, int]:
     return host, parts.port or (443 if parts.scheme == "https" else 80)
 
 
-def _verify_pin(response: Any, validated: list[str], host: str) -> str | None:
-    """Confirm the peer address is one the check approved.
+def _verify_pin(response: Any, validated: list[str], host: str) -> tuple[str | None, bool]:
+    """Confirm the peer is an address the check approved.
 
-    wreq reports the address it actually connected to, which httpx does not
-    expose cheaply.  Asserting it converts address pinning from a property we
-    configure into one we observe.
+    Returns ``(peer, pinned)``.  wreq reports the address it actually connected
+    to, which httpx does not expose cheaply, so pinning stops being a property
+    we configure and becomes one we observe.
+
+    A peer outside the validated set means one of two things, and they are
+    distinguished by whether a proxy is configured rather than assumed:
+
+    * **Proxied.**  The peer is the proxy, and the proxy performs the
+      resolution that actually reaches the network, so no local pin can bind.
+      Report ``pinned=False`` and let the caller surface `proxy_warning`.
+    * **Unproxied.**  Nothing should be able to move the connection off a
+      pinned address, so this is a real failure and raises.
+
+    Checking the peer *before* consulting the proxy environment is deliberate.
+    `proxy_in_effect` does not evaluate ``NO_PROXY``, so branching on it first
+    would drop pinning for every host a ``NO_PROXY`` entry exempts, which are
+    exactly the hosts still reached directly and therefore still pinnable.
     """
     remote = getattr(response, "remote_addr", None)
     if remote is None:
-        return None
+        return None, False
     peer = str(remote.ip()) if callable(getattr(remote, "ip", None)) else str(remote)
-    if peer not in validated:
-        raise PinMismatch(
-            f"connected to {peer} for {host}, which is not among the "
-            f"validated addresses {validated}"
+    if peer in validated:
+        return peer, True
+    if proxy_in_effect():
+        _logger.debug(
+            "peer %s for %s is not a validated address; a proxy is configured, "
+            "so the address check is advisory", peer, host,
         )
-    return peer
+        return peer, False
+    raise PinMismatch(
+        f"connected to {peer} for {host}, which is not among the "
+        f"validated addresses {validated}"
+    )
 
 
 async def _read_capped(response: Any, max_bytes: int | None, url: str) -> bytes:
@@ -325,7 +366,7 @@ async def _follow(
         except Exception as exc:  # wreq's own error types
             raise TransportFailure(f"{type(exc).__name__} for {current}: {exc}") from exc
 
-        peer = _verify_pin(response, validated, host)
+        peer, pinned = _verify_pin(response, validated, host)
 
         location = response.headers.get("location")
         if isinstance(location, (bytes, bytearray)):
@@ -345,6 +386,7 @@ async def _follow(
             http_version=_version_string(response.version),
             remote_addr=peer,
             history=tuple(history),
+            pinned=pinned,
         )
 
     raise TransportFailure(

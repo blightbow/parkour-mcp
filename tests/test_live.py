@@ -246,3 +246,117 @@ class TestLiveAkamaiHttp2:
         assert resp.status_code == 200
         assert resp.http_version == "HTTP/2"
         assert resp.content[:5] == b"%PDF-"
+
+
+class TestLiveCloudflareChallenge:
+    """A browser-coherent fingerprint clears a strict Cloudflare zone.
+
+    The counterpart to the Akamai case above, and the reason the generic path
+    moved off httpx.  Both WAFs score the same coherence property and disagree
+    about which pairing is incoherent, so this pair has to pass together: a
+    transport that clears one by breaking the other has not fixed anything.
+    """
+
+    # Zendesk-hosted, behind a Cloudflare zone running a strict Managed
+    # Challenge.  httpx over HTTP/2 draws a 403 carrying
+    # `cf-mitigated: challenge` because the h2 fingerprint contradicts the
+    # Chrome User-Agent.
+    NZXT_ARTICLE = (
+        "https://support.nzxt.com/hc/en-us/articles/"
+        "40379376386203-H7-Flow-2024-Specs"
+    )
+
+    @pytest.mark.asyncio
+    async def test_wreq_transport_clears_managed_challenge(self):
+        from parkour_mcp._transport import guarded_fetch as wreq_fetch
+
+        resp = await wreq_fetch(self.NZXT_ARTICLE)
+        assert resp.status_code == 200
+        assert "cf-mitigated" not in resp.headers
+        assert "H7 Flow" in resp.text
+        # The pin bound and was observed, not merely configured.
+        assert resp.pinned is True
+        assert resp.remote_addr
+
+
+class TestLiveProxyDegradation:
+    """`pinned` must tell the truth when a proxy resolves on our behalf.
+
+    A proxy performs the resolution that actually reaches the network, so no
+    local pin can bind and the address check degrades to advisory.  The risk
+    this guards is a *false* claim: if the client reported the destination
+    address rather than the proxy's, the peer would be found in the validated
+    set and the response would assert a guarantee it does not have.
+    """
+
+    @staticmethod
+    async def _connect_proxy(host, port):
+        """A minimal CONNECT proxy, so the degradation path is exercised for real."""
+        import asyncio
+        import contextlib
+
+        async def pipe(reader, writer):
+            # OSError covers the reset/broken-pipe pair a tunnel sees on
+            # normal teardown; anything else should still surface.
+            with contextlib.suppress(OSError):
+                while chunk := await reader.read(65536):
+                    writer.write(chunk)
+                    await writer.drain()
+            writer.close()
+
+        async def handle(client_reader, client_writer):
+            request = await client_reader.readline()
+            if not request.upper().startswith(b"CONNECT"):
+                client_writer.close()
+                return
+            target = request.split()[1].decode()
+            up_host, _, up_port = target.partition(":")
+            while (await client_reader.readline()) not in (b"\r\n", b"", b"\n"):
+                pass
+            try:
+                up_r, up_w = await asyncio.open_connection(up_host, int(up_port or 443))
+            except OSError:
+                client_writer.close()
+                return
+            client_writer.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+            await client_writer.drain()
+            await asyncio.gather(pipe(client_reader, up_w), pipe(up_r, client_writer))
+
+        return await asyncio.start_server(handle, host, port)
+
+    @pytest.mark.asyncio
+    async def test_proxied_fetch_reports_unpinned(self, monkeypatch):
+        from parkour_mcp._transport import guarded_fetch as wreq_fetch
+
+        server = await self._connect_proxy("127.0.0.1", 8899)
+        async with server:
+            monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:8899")
+            resp = await wreq_fetch("https://example.com/")
+
+        assert resp.status_code == 200
+        assert resp.pinned is False, "claimed a pin the proxy made impossible"
+        assert resp.remote_addr is not None
+        assert resp.remote_addr.startswith("127.0.0.1")
+
+    @pytest.mark.asyncio
+    async def test_unproxied_fetch_reports_pinned(self):
+        """The control: without a proxy the same fetch is genuinely pinned."""
+        from parkour_mcp._transport import guarded_fetch as wreq_fetch
+
+        resp = await wreq_fetch("https://example.com/")
+        assert resp.pinned is True
+
+    @pytest.mark.asyncio
+    async def test_configured_proxy_is_not_bypassed(self, monkeypatch):
+        """An unreachable proxy must fail the fetch, never fall back to direct.
+
+        Where the proxy *is* the egress control, silently bypassing it removes
+        the control.  This is the trap the httpx path fell into: passing a
+        custom transport made httpx skip every proxy variable.
+        """
+        from parkour_mcp._transport import TransportFailure
+        from parkour_mcp._transport import guarded_fetch as wreq_fetch
+
+        monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:9")
+        with pytest.raises(TransportFailure):
+            await wreq_fetch("https://example.com/")
