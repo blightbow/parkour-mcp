@@ -20,6 +20,7 @@ from ._pipeline import (
     _dispatch_slicing,
     _process_markdown_sections,
 )
+from ._transport import guarded_fetch
 from .common import (
     _FETCH_HEADERS,
     BlockedAddress,
@@ -28,7 +29,6 @@ from .common import (
     _resolve_and_check,
     check_url_scheme,
     guarded_client,
-    guarded_fetch,
 )
 from .discourse import _detect_discourse_headers
 from .markdown import (

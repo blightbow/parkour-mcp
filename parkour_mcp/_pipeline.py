@@ -8,19 +8,18 @@ assembly common to web_fetch_direct's static path and its headless-browser
 import logging
 import re
 from collections import OrderedDict
+from collections.abc import Mapping
 from pathlib import Path
 from urllib.parse import urldefrag
 
-import httpx
 import tantivy
 from semantic_text_splitter import MarkdownSplitter
 
+from ._transport import FetchError, FetchTimeout, guarded_fetch
 from .arxiv import _fetch_arxiv_paper
 from .common import (
     _FETCH_HEADERS,
     _LANGUAGE_MAP,
-    ResponseTooLarge,
-    guarded_fetch,
     s2_enabled,
     tool_name,
 )
@@ -1078,7 +1077,7 @@ async def _reddit_fast_path(url: str, max_tokens: int = 5000) -> str | None:
 # ---------------------------------------------------------------------------
 
 async def _discourse_fast_path(
-    url: str, headers: httpx.Headers, max_tokens: int = 5000,
+    url: str, headers: Mapping[str, str], max_tokens: int = 5000,
 ) -> str | None:
     """Handle a Discourse topic URL detected via response headers.
 
@@ -1163,10 +1162,10 @@ async def _github_fast_path(
         # slow-drip attacks.
         try:
             resp = await guarded_fetch(raw_url, headers=headers, max_bytes=None)
-        except httpx.TimeoutException:
+        except FetchTimeout:
             return f"Error: Request timed out for {raw_url}"
-        except httpx.RequestError as e:
-            return f"Error: Request failed - {type(e).__name__}"
+        except FetchError as e:
+            return f"Error: Request failed - {e.label}"
 
         if resp.status_code == 404:
             if not token:
@@ -1447,7 +1446,7 @@ async def _github_fast_path(
 
         try:
             resp = await guarded_fetch(raw_url, headers=headers, timeout=15.0)
-        except (ResponseTooLarge, httpx.RequestError):
+        except FetchError:
             return f"Error: Failed to fetch wiki page '{page_name}'."
 
         if resp.status_code == 404:

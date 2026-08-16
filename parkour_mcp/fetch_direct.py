@@ -5,8 +5,6 @@ import re
 from pathlib import Path
 from urllib.parse import urlparse
 
-import httpx
-
 from ._pipeline import (
     _arxiv_fast_path,
     _cached_mediawiki_fetch,
@@ -26,6 +24,12 @@ from ._pipeline import (
     _s2_fast_path,
     _search_slices,
 )
+from ._transport import (
+    FetchError,
+    FetchStatusError,
+    FetchTimeout,
+    guarded_fetch,
+)
 from .common import (
     _FETCH_HEADERS,
     _MAX_RESPONSE_BYTES,
@@ -34,7 +38,6 @@ from .common import (
     _classify_content_type,
     check_url_scheme,
     check_url_ssrf,
-    guarded_fetch,
     proxy_warning,
     s2_enabled,
     tool_name,
@@ -471,15 +474,15 @@ async def web_fetch_direct(
         response.raise_for_status()
     except ResponseTooLarge as e:
         return f"Error: Response too large for {url} — {e}"
-    except httpx.TimeoutException:
+    except FetchTimeout:
         return f"Error: Request timed out for {url}"
-    except httpx.HTTPStatusError as e:
+    except FetchStatusError as e:
         return http_error_with_body(
             url, e.response.status_code, e.response.text,
             is_html="html" in e.response.headers.get("content-type", "").lower(),
         )
-    except httpx.RequestError as e:
-        return f"Error: Failed to fetch {url} - {type(e).__name__}"
+    except FetchError as e:
+        return f"Error: Failed to fetch {url} - {e.label}"
 
     # --- Discourse post-fetch detection (header-based) ---
     try:
@@ -946,15 +949,15 @@ async def web_fetch_sections(url: str, slice: int = 0) -> str:
         response.raise_for_status()
     except ResponseTooLarge as e:
         return f"Error: Response too large for {url} — {e}"
-    except httpx.TimeoutException:
+    except FetchTimeout:
         return f"Error: Request timed out for {url}"
-    except httpx.HTTPStatusError as e:
+    except FetchStatusError as e:
         return http_error_with_body(
             url, e.response.status_code, e.response.text,
             is_html="html" in e.response.headers.get("content-type", "").lower(),
         )
-    except httpx.RequestError as e:
-        return f"Error: Failed to fetch {url} - {type(e).__name__}"
+    except FetchError as e:
+        return f"Error: Failed to fetch {url} - {e.label}"
 
     # --- Discourse post-fetch detection (section tree) ---
     try:

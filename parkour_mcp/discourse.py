@@ -13,6 +13,7 @@ import contextlib
 import logging
 import re
 from collections import defaultdict
+from collections.abc import Mapping
 from datetime import datetime
 from typing import Annotated
 from urllib.parse import urlparse, urlunparse
@@ -54,7 +55,7 @@ def _get_limiter(hostname: str) -> RateLimiter:
 _DISCOURSE_ROUTE_HEADER = "x-discourse-route"
 
 
-def _detect_discourse_headers(headers: httpx.Headers) -> str | None:
+def _detect_discourse_headers(headers: Mapping[str, str]) -> str | None:
     """Check for Discourse ``x-discourse-route`` header.
 
     Returns the route value (e.g. ``topics/show``, ``list/latest``) or None.

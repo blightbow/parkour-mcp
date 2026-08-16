@@ -344,13 +344,22 @@ class TestWebFetchDirectErrors:
     @pytest.mark.asyncio
     @respx.mock
     async def test_connection_error(self):
+        """A connection failure names the failure kind, not a generic wrapper.
+
+        The expected word tracks the transport's vocabulary: the generic path
+        runs on wreq, whose ``ConnectionError`` replaces httpx's
+        ``ConnectError``.  What is being asserted is unchanged, that
+        `FetchError.label` carries the underlying cause through the
+        translation instead of flattening every network fault into
+        "TransportFailure".
+        """
         respx.get("https://example.com/down").mock(
             side_effect=httpx.ConnectError("connection refused")
         )
 
         result = await web_fetch_direct("https://example.com/down")
         assert "Error:" in result
-        assert "ConnectError" in result
+        assert "ConnectionError" in result
 
 
 class TestSchemeGate:

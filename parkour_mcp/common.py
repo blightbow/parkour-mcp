@@ -319,6 +319,16 @@ class FetchError(Exception):
     boundaries is what made the transport unswappable the first time.
     """
 
+    @property
+    def label(self) -> str:
+        """Short name for this failure, for user-facing error strings.
+
+        Subclasses that wrap a library exception override this to name the
+        underlying cause, so translating into this hierarchy does not flatten
+        every network problem into one indistinguishable word.
+        """
+        return type(self).__name__
+
 
 class BlockedAddress(FetchError, httpx.TransportError):
     """A connection target failed the address check.

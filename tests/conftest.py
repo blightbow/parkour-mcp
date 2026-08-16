@@ -905,3 +905,133 @@ def pytest_runtest_setup(item):
                     f"and its result says nothing about this repo.",
                     pytrace=False,
                 )
+
+
+# ---------------------------------------------------------------------------
+# wreq transport double
+# ---------------------------------------------------------------------------
+# The generic fetch path runs on wreq, which respx cannot see: respx hooks
+# httpx's transport, and wreq never touches it.  Rather than restate ~240
+# mocked routes in a second vocabulary, the double replaces `build_client`
+# (the single seam through which `_transport` reaches wreq) with a client that
+# issues the request through httpx.  respx therefore keeps intercepting every
+# route exactly as written, for the generic path and the httpx fast paths
+# alike, which is what lets both live in one test file.
+#
+# What this deliberately does NOT cover is wreq itself: fingerprint emulation,
+# real address pinning, and `remote_addr` verification are all absent here
+# because httpx is standing in.  `tests/test_transport.py` covers the module's
+# own guarantees against hand-built responses, and `test_live.py` covers the
+# parts that only a real connection can prove.
+
+from wreq import exceptions as wreq_exceptions  # noqa: E402
+
+import parkour_mcp._transport as _transport_mod  # noqa: E402
+
+
+class _WreqStatus:
+    def __init__(self, code: int) -> None:
+        self._code = code
+
+    def as_int(self) -> int:
+        return self._code
+
+    def is_redirection(self) -> bool:
+        return 300 <= self._code < 400
+
+
+class _WreqHeaders:
+    """wreq's HeaderMap shape: iterates (bytes, bytes), no items()."""
+
+    def __init__(self, headers) -> None:
+        self._pairs = [(k.lower().encode(), v.encode()) for k, v in headers.items()]
+
+    def __iter__(self):
+        return iter(self._pairs)
+
+    def get(self, key):
+        wanted = key.lower().encode()
+        return next((v for k, v in self._pairs if k == wanted), None)
+
+
+class _WreqVersion:
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+
+class _WreqStream:
+    def __init__(self, body: bytes) -> None:
+        self._body = body
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_):
+        return None
+
+    def __aiter__(self):
+        async def gen():
+            if self._body:
+                yield self._body
+
+        return gen()
+
+
+class _WreqShapedResponse:
+    """Presents an ``httpx.Response`` through the surface `_transport` reads."""
+
+    def __init__(self, resp: httpx.Response) -> None:
+        self.status = _WreqStatus(resp.status_code)
+        self.headers = _WreqHeaders(resp.headers)
+        # httpx exposes no peer address, so pin verification degrades to
+        # "unknown" here.  _verify_pin treats that as unpinned rather than
+        # asserting, which is the safe direction for a stand-in.
+        self.remote_addr = None
+        self.version = _WreqVersion("HTTP_11")
+        advertised = resp.headers.get("content-length")
+        self.content_length = int(advertised) if advertised and advertised.isdigit() else 0
+        self._body = resp.content
+
+    def stream(self):
+        return _WreqStream(self._body)
+
+
+class _HttpxBackedClient:
+    """Stands in for wreq's Client, issuing through httpx so respx sees it."""
+
+    async def get(self, url, headers=None):
+        # follow_redirects=False because `_transport._follow` walks the chain
+        # itself, address-checking each hop; letting httpx follow too would
+        # skip those checks and diverge from production.
+        try:
+            async with httpx.AsyncClient(follow_redirects=False) as client:
+                resp = await client.get(url, headers=headers)
+        except httpx.TimeoutException as exc:
+            # The double owes callers wreq's contract, exceptions included.
+            # Leaking httpx types here would make _transport's error mapping
+            # untestable: a timeout would fall through to the catch-all and be
+            # reported as a generic transport failure.
+            raise wreq_exceptions.TimeoutError(str(exc)) from exc
+        except httpx.HTTPError as exc:
+            raise wreq_exceptions.ConnectionError(type(exc).__name__) from exc
+        return _WreqShapedResponse(resp)
+
+
+@pytest.fixture(autouse=True)
+def _wreq_via_httpx(monkeypatch):
+    """Route the generic fetch path through httpx so respx keeps working.
+
+    Autouse so no test can reach the real network through `_transport` by
+    omission.  Tests that want to drive the transport directly re-patch these
+    same two names and win, since their own fixture resolves later.
+    """
+    monkeypatch.setattr(
+        _transport_mod, "build_client", lambda **_kwargs: _HttpxBackedClient()
+    )
+
+    async def _stub_resolve(_host, _port):
+        # A public address, so the check passes without a DNS lookup.  Tests
+        # that exercise refusal patch this themselves.
+        return ["93.184.216.34"]
+
+    monkeypatch.setattr(_transport_mod, "_resolve_and_check", _stub_resolve)

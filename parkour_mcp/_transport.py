@@ -39,13 +39,13 @@ from typing import Any
 from urllib.parse import urljoin, urlsplit
 
 from wreq import Client, DnsOptions, Emulation
+from wreq import exceptions as wreq_exceptions
 from wreq.redirect import Policy
 
 from .common import (
     _FETCH_DEADLINE_SECONDS,
     _FETCH_HEADERS,
     _MAX_RESPONSE_BYTES,
-    BlockedAddress,
     FetchError,
     ResponseTooLarge,
     _resolve_and_check,
@@ -67,7 +67,21 @@ _MAX_REDIRECTS = 10
 
 
 class TransportFailure(FetchError):
-    """Connection, DNS, or TLS failure."""
+    """Connection, DNS, or TLS failure.
+
+    Carries the wrapped exception's class name so error strings can still say
+    *which* network problem occurred.  Without it every failure reads
+    "TransportFailure", which is strictly less useful than the ``ConnectError``
+    / ``TlsError`` distinction the underlying client already made.
+    """
+
+    def __init__(self, message: str, *, cause_name: str | None = None) -> None:
+        super().__init__(message)
+        self._cause_name = cause_name
+
+    @property
+    def label(self) -> str:
+        return self._cause_name or type(self).__name__
 
 
 class FetchTimeout(FetchError):
@@ -361,10 +375,19 @@ async def _follow(
         )
         try:
             response = await client.get(current, headers=headers)
-        except (BlockedAddress, ResponseTooLarge, FetchError):
+        except FetchError:
+            # Already in our vocabulary (a guard refusal, not a network fault).
             raise
-        except Exception as exc:  # wreq's own error types
-            raise TransportFailure(f"{type(exc).__name__} for {current}: {exc}") from exc
+        except wreq_exceptions.TimeoutError as exc:
+            # Distinct from the wall-clock deadline in `guarded_fetch`: this is
+            # the per-request budget. Both surface as FetchTimeout so callers
+            # need one arm, not two.
+            raise FetchTimeout(f"Request timed out for {current}") from exc
+        except Exception as exc:  # wreq's remaining error types
+            raise TransportFailure(
+                f"{type(exc).__name__} for {current}: {exc}",
+                cause_name=type(exc).__name__,
+            ) from exc
 
         peer, pinned = _verify_pin(response, validated, host)
 
