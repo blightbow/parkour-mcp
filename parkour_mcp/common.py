@@ -310,11 +310,23 @@ def check_url_ssrf(url: str) -> str | None:
 # ---------------------------------------------------------------------------
 
 
-class BlockedAddress(httpx.TransportError):
+class FetchError(Exception):
+    """Base for every outbound-fetch failure this package raises.
+
+    Exists so callers can catch one hierarchy instead of a transport
+    library's.  The generic path runs on ``wreq`` and the fast paths still run
+    on httpx, and leaking either library's exception types across module
+    boundaries is what made the transport unswappable the first time.
+    """
+
+
+class BlockedAddress(FetchError, httpx.TransportError):
     """A connection target failed the address check.
 
-    Subclasses ``httpx.TransportError`` so every caller's existing
-    ``except httpx.RequestError`` arm already handles it.
+    Dual-based during the wreq migration: `FetchError` is what new code
+    catches, while ``httpx.TransportError`` keeps the existing
+    ``except httpx.RequestError`` arms on the httpx paths working.  The httpx
+    base comes off once `guarded_client` is ported.
     """
 
 
@@ -705,7 +717,7 @@ _MAX_SECTIONS_RESPONSE_BYTES = 50 * 1024 * 1024
 _FETCH_DEADLINE_SECONDS = 60.0
 
 
-class ResponseTooLarge(Exception):
+class ResponseTooLarge(FetchError):
     """Raised when a response exceeds the size cap."""
 
 
