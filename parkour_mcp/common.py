@@ -741,12 +741,33 @@ async def guarded_fetch(
 
     The request is issued over **HTTP/2** when the origin supports it (ALPN
     negotiation, with automatic, transparent fallback to HTTP/1.1 for
-    HTTP/1.1-only origins).  Speaking HTTP/2 is required by some WAFs (e.g.
-    Akamai Bot Manager) that treat an HTTP/1.1 request carrying a modern-Chrome
-    User-Agent as internally inconsistent and 403 it.  If an origin negotiates
-    HTTP/2 and then violates the protocol — a rare server bug, or a stale
-    pooled connection — the fetch retries once on HTTP/1.1, the more
-    battle-hardened transport, before surfacing the error.
+    HTTP/1.1-only origins).  If an origin negotiates HTTP/2 and then violates
+    the protocol (a rare server bug, or a stale pooled connection), the fetch
+    retries once on HTTP/1.1, the more battle-hardened transport, before
+    surfacing the error.
+
+    That HTTP/2 default is a tradeoff between two WAF vendors that want
+    opposite things, not a universally safer choice.  Both score the
+    *coherence* of the claimed identity against the observed transport
+    fingerprint, and they disagree about which pairing is incoherent:
+
+    * Akamai Bot Manager reads HTTP/1.1 carrying a modern-Chrome User-Agent
+      as internally inconsistent and 403s it, so it wants HTTP/2.
+    * Cloudflare zones running a strict Managed Challenge (the 403 carries
+      ``cf-mitigated: challenge``) compare our HTTP/2 SETTINGS frame and
+      header ordering against Chrome's and refuse the mismatch, so they want
+      HTTP/1.1.  This is a per-zone sensitivity setting, not a Cloudflare
+      default: ``support.nzxt.com`` and ``support.discord.com`` challenge us
+      on HTTP/2 and serve us on HTTP/1.1, while ``support.zendesk.com`` and
+      ``developers.cloudflare.com`` serve us on either.
+
+    No choice of default satisfies both, because the underlying problem is
+    that httpx emits the ``h2`` library's fingerprint while the User-Agent
+    claims Chrome.  The HTTP/1.1 retry above does not rescue the Cloudflare
+    case either: a challenge is a well-formed 403, not a
+    ``RemoteProtocolError``.  Only a genuine browser fingerprint resolves it,
+    which is what ``curl_cffi`` already supplies for ``reddit.py``.  See
+    TECH_DEBT.md for the migration assessment.
 
     Returns a fully-buffered ``httpx.Response`` (i.e. ``response.text`` works
     synchronously after this call).

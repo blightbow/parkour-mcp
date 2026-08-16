@@ -297,7 +297,152 @@ matters; nobody has.
 - **Also known, same design**: Thai, Lao, Khmer, Myanmar and Tibetan are included even though Lucene's CJK filter covers only Han, Hangul, Hiragana and Katakana and reaches for ICU's dictionary break iterator instead. An orthographic unit in those scripts is a cluster rather than a codepoint, so some tokens are bare combining marks. This is noise, not a correctness fault (matching is conjunctive, so a junk token constrains rather than loosens), and the comparison is against zero recall.
 - **How to evaluate**: revisit if `quickwit-oss/tantivy-py#25` lands — a lindera or jieba build would supply real word tokens with real positions and retire the whole approach. It has been open since 2020 and PR #200 is draft, so do not plan around it. Note that a from-source build is the only route today, which the wheel-install path this project depends on cannot take.
 
+## Generic fetch transport: httpx cannot win the WAF coherence check
+
+Decision recorded 2026-08-16: migrate the generic fetch path from httpx to
+`wreq`. Not yet implemented. The evidence is below so the decision can be
+re-litigated on facts rather than re-derived.
+
+### The defect: two WAF vendors want opposite things and httpx satisfies neither
+
+- **Location**: `common.py#guarded_fetch`, `common.py#_FETCH_HEADERS`.
+- **Issue**: modern WAFs score the *coherence* of the claimed identity (the
+  User-Agent) against the observed transport fingerprint (TLS JA3/JA4, and the
+  HTTP/2 SETTINGS frame plus header ordering). httpx emits the `h2` library's
+  fingerprint while `_FETCH_HEADERS` claims Chrome, and that mismatch is
+  detectable. The two vendors disagree about which pairing is incoherent, so no
+  choice of `http2=` default satisfies both:
+  - Akamai Bot Manager refuses HTTP/1.1 carrying a modern-Chrome User-Agent.
+    Guarded by `test_live.py::test_guarded_fetch_clears_akamai_403`.
+  - Cloudflare zones on a strict Managed Challenge (403 carrying
+    `cf-mitigated: challenge`) refuse our HTTP/2 fingerprint. Per-zone, not a
+    Cloudflare default: `support.nzxt.com` and `support.discord.com` challenge
+    us and serve us on HTTP/1.1, while `support.zendesk.com` and
+    `developers.cloudflare.com` serve us on either. `stackoverflow.com` refuses
+    both, which no transport change fixes.
+- **Why a fallback was rejected**: catching `cf-mitigated: challenge` and
+  retrying with a browser fingerprint is worse than doing nothing. Cloudflare
+  mints `__cf_bm` on the challenge response and binds it to the client
+  fingerprint, so carrying it across the pivot presents a cookie issued to
+  fingerprint A while showing fingerprint B, and dropping it still leaves a
+  same-IP, same-URL, total-TLS-identity change within seconds. Real browsers
+  never do that. The retry teaches a behavioral signature that per-request
+  coherence does not repair.
+
+### Why `wreq` over `curl_cffi`
+
+Both clear the NZXT Cloudflare challenge and the Akamai PDF in
+`test_live.py`; httpx clears only Akamai. `curl_cffi` looked like the obvious
+pick (already a dependency for `reddit.py`, already has a test double in
+`conftest.py#_FakeAsyncSession`) and was rejected on three findings:
+
+- **`lexiforest/curl_cffi#798` (open): streaming has no backpressure.** libcurl
+  reads at full line rate into an unbounded queue, so a slow consumer grows
+  memory without bound, on both `Session` and `AsyncSession`. That attacks the
+  exact guarantee this migration exists to preserve: `guarded_fetch`'s Layer 2
+  would bound what we *keep*, not what gets *buffered*. Migrating to a client
+  that weakens the size cap while fixing the WAF problem is a bad trade.
+  `#319` (async streaming failing on session reuse) was closed as stale rather
+  than fixed.
+- **Fingerprint currency is freemium.** `curl-cffi update` pulls from
+  `impersonate.pro`, the maintainer's commercial service; Chrome / Safari /
+  Firefox are the free tier. Coupling our block-resistance to a third-party
+  commercial service is a durability risk. `wreq` compiles 100+ profiles into
+  the wheel with no external dependency.
+- **Fingerprint fidelity bugs are open**, e.g. chrome impersonation sending the
+  HTTP/2 priority header on HTTP/1.1 connections, which real Chrome does not.
+
+Counterweight, recorded honestly: `curl_cffi` has roughly 116x the adoption
+(40.6M monthly PyPI downloads against `wreq`'s 350k) and 6,320 stars against
+1,425. Choosing `wreq` buys a cleaner tracker (6 open issues, all feature
+requests, zero bugs) at the cost of a much smaller community when something
+breaks. `wreq` also carries rename fragmentation: the dead `rnet` package still
+draws 136k monthly downloads, 28% of the combined total, six months after its
+final release.
+
+**`wreq` is not pre-1.0 in the way its version implies.** It is the former
+`rnet`, renamed 2026-03-26 to unify bindings under a common prefix
+(`wreq-python`, `wreq-node`, `wreq-ruby`). `v3.0.0-rc22...v0.10.0` is
+`ahead_by 23, behind_by 0`, and the v0.10.0 release notes are the accumulated
+v3 changelog. The version reset is cosmetic, not a rewrite.
+
+### Migration cost
+
+Every `guarded_fetch` guarantee ports; nothing is functionally lost. Spiked and
+verified against live endpoints:
+
+| guarantee | replacement |
+|---|---|
+| Content-Length gate | `Response.content_length` |
+| streaming size cap | `Response.stream()` async context manager |
+| wall-clock deadline | `asyncio.timeout`, unchanged |
+| SSRF address pinning | `DnsOptions.add_resolve(domain, [addrs])` |
+
+- `_PinningBackend` and `_GuardedTransport` are **deleted, not adapted**: both
+  subclass httpx/httpcore internals that libcurl and Rust have no seam for.
+  Resolve-check-pin is the documented industry pattern for defeating DNS
+  rebinding, not a workaround (Nette ships `getResolvedIPs()` specifically to
+  feed `CURLOPT_RESOLVE`), so the architecture survives and only its vehicle
+  changes.
+- The hand-rolled RFC 6555 address walk in `_PinningBackend` goes away:
+  `add_resolve` takes the whole validated address list and the library handles
+  fallback.
+- Redirects stop being free. httpx invokes the transport once per hop, which is
+  what gives `_GuardedTransport` redirect coverage with no redirect-specific
+  code. `wreq` needs `Policy.none()` plus a manual loop that re-pins per hop.
+- `BlockedAddress` subclasses `httpx.TransportError` so every existing
+  `except httpx.RequestError` arm catches it for free. That ends: 31 catch sites
+  across `parkour_mcp/` need re-homing.
+- respx cannot see a non-httpx client. Upper bound 237 mock sites across
+  `test_fetch_direct.py` (146), `test_slicing.py` (43), `test_fetch_js.py` (41),
+  `test_common.py` (7). `_FakeAsyncSession` is a starting point but is
+  JSON-shaped: `FakeResponse` carries no `.content`, no `.text`, no streaming.
+- The nine fixed-host fast-path modules stay on httpx and are untouched. To
+  avoid a permanent third stack, port `reddit.py` off `curl_cffi` in the same
+  arc; it is already `AsyncSession`-shaped.
+
+### Two `wreq` footguns the migration must neutralize
+
+- **Unknown keyword arguments are silently accepted**, on both the `Client`
+  constructor and every per-request method. Passing `dns=` instead of
+  `dns_options=` disables SSRF pinning and the request still succeeds to an
+  unvalidated address. This is a fail-open on the parameter carrying the
+  security property, and it was hit for real while spiking. Mitigation:
+  construct the client in exactly one wrapper, and pin a test asserting
+  `Response.remote_addr` matches the validated address. That assertion is a
+  guarantee httpx cannot give us today at all, so the net position improves.
+  Upstream fix assessed as tractable; see below.
+- **`content_length` returns `0`, not `None`, when the origin omits it.** A
+  naive `if cl > max_bytes` never fires, and `if not cl` conflates absent with
+  empty. Handle absence explicitly.
+
+### Upstream fix for the silent-kwarg fail-open
+
+- **Root cause**: `wreq-python/src/macros.rs#extract_option` pulls named keys
+  out of the mapping one at a time (`if let Ok(value) = ob.get_item(...)`) and
+  never checks for leftovers. Systemic rather than local: 152 call sites across
+  `src/client.rs`, `src/client/req.rs`, `src/http1.rs`, `src/http2.rs`,
+  `src/tls.rs`, `src/proxy.rs`.
+- **Shape of the fix**: add a `reject_unknown_keys(ob, &[...])` helper and an
+  `extract_options!` wrapper macro taking the field list, so the list stays
+  single-sourced and each `FromPyObject::extract` becomes one invocation. The
+  152 statements collapse into 6 lists. Guard the helper on a `PyDict`
+  downcast, since these extractors also run against pyclass instances.
+- **Effort**: low and mechanical for the code. The real cost is the build
+  environment (BoringSSL needs cmake, perl, libclang, a Rust toolchain, plus
+  maturin) and a long first compile.
+- **Acceptance odds: good.** External PRs merge regularly, including features
+  from non-owners (`@0x1997` implementing `raise_for_status`, `@Averyy` fixing
+  `KeyShare` registration). Python-level tests already exist under `tests/`
+  (`request_test.py`, `dns_test.py`, and siblings), so the PR needs no Rust
+  test harness. It is a breaking change by nature, which is cheapest to land
+  while the project sits at 0.x.
+
 ## Outbound fetch hardening — fast paths bypass `guarded_fetch`
+
+Note: the `wreq` migration above rebuilds the very caps this entry says the
+fast paths skip, so the `_api_client` factory idea below should be settled
+against `wreq` rather than httpx if the migration lands first.
 
 - **Location**: nine fixed-host modules still build and call their own client directly: `arxiv.py`, `doi.py`, `semantic_scholar.py`, `ietf.py`, `github.py`, `huggingface.py`, `reddit.py` (`curl_cffi`), `youtube.py`, and `packages.py` / `scorecard.py` (the latter two via the shared deps.dev client in `common.py#_depsdev_get`). `_pipeline.py`, `fetch_direct.py`, and `fetch_js.py` route through `common.py#guarded_fetch`; `discourse.py` and `mediawiki.py` route through `common.py#guarded_client`.
 - **Issue**: `guarded_fetch` layers three caps the remaining modules skip: the Content-Length gate, the streaming size cap, and the always-on `asyncio.timeout(60.0)` wall-clock deadline (see *Outbound request defenses* in `docs/frontmatter-standard.md`). A first-party API that hangs mid-stream or returns an unexpectedly large body is bounded only by each module's per-request `timeout=` (connect/read budget), not by a whole-request deadline or a size ceiling.
