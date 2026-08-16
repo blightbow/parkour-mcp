@@ -391,15 +391,68 @@ verified against live endpoints:
   what gives `_GuardedTransport` redirect coverage with no redirect-specific
   code. `wreq` needs `Policy.none()` plus a manual loop that re-pins per hop.
 - `BlockedAddress` subclasses `httpx.TransportError` so every existing
-  `except httpx.RequestError` arm catches it for free. That ends: 31 catch sites
-  across `parkour_mcp/` need re-homing.
+  `except httpx.RequestError` arm catches it for free. 14 catch sites on the
+  generic path were re-homed onto `FetchError`; the other 17 belong to fast-path
+  modules and stay.
 - respx cannot see a non-httpx client. Upper bound 237 mock sites across
   `test_fetch_direct.py` (146), `test_slicing.py` (43), `test_fetch_js.py` (41),
-  `test_common.py` (7). `_FakeAsyncSession` is a starting point but is
-  JSON-shaped: `FakeResponse` carries no `.content`, no `.text`, no streaming.
-- The nine fixed-host fast-path modules stay on httpx and are untouched. To
-  avoid a permanent third stack, port `reddit.py` off `curl_cffi` in the same
-  arc; it is already `AsyncSession`-shaped.
+  `test_common.py` (7).
+
+**Landed** in `2b3a892`, `dc304e6`, `953f618`, `b8ab7f7`. Two corrections to
+what this entry originally predicted, both from measurement rather than
+revision:
+
+- **Zero respx sites were rewritten.** `build_client` is the only seam through
+  which `_transport` reaches wreq, so the `conftest.py` double replaces it with
+  a client that issues through httpx, which respx already intercepts. That was
+  necessary rather than merely cheap: `test_fetch_direct.py` mocks generic hosts
+  *and* `api.github.com` in one file, so a blanket migration would have broken
+  the fast-path routes. The tradeoff is that the offline generic-path tests do
+  not exercise wreq. Accepted, because respx never exercised httpx's transport
+  either (it replaces it), so those tests were always pipeline tests wearing
+  HTTP clothing. wreq's own behaviour is covered by `tests/test_transport.py`
+  and the live classes in `test_live.py`.
+- **Wiring surfaced two real defects**, not test artifacts: wreq's
+  `TimeoutError` fell through to the catch-all instead of becoming
+  `FetchTimeout`, and every network fault flattened to "TransportFailure" in
+  user-facing strings. `FetchError.label` now carries the wrapped cause.
+
+### What stays on httpx, and why that is not a liability
+
+The remaining httpx consumers are safe indefinitely, because **the WAF
+coherence gate fires on a lie, not on being a bot.** An honest
+`parkour-mcp/… httpx/…` User-Agent makes no claim a TLS fingerprint can
+contradict, so there is nothing to catch. Measured, not assumed:
+`doi.org`, `datatracker.ietf.org`, and `www.rfc-editor.org` are all
+Cloudflare-fronted and all answer the honest UA with 200.
+
+So the endpoint is two stacks, permanently, and this supersedes the earlier
+plan to port `guarded_client`:
+
+- **`mediawiki.py` stays on httpx with its honest UA.** Porting it to wreq would
+  buy nothing, and adopting a browser identity would violate the Wikimedia
+  User-Agent policy the honest UA exists to satisfy. `guarded_client` therefore
+  stays, and `BlockedAddress`'s `httpx.TransportError` base is **permanent, not
+  transitional**.
+- **`discourse.py` was the one fast path with the generic path's exposure
+  profile** (browser identity plus caller-supplied host). Resolved in `b8ab7f7`
+  by making it honest rather than by porting it: git history showed the
+  masquerade arrived in the module's first commit with no block to justify it,
+  and all four endpoint shapes answer an identified client with 200 across four
+  independent instances. The header-selection policy now lives in `common.py`
+  above the two constants.
+- **`github.py` still sends the browser identity** to a fixed host that
+  tolerates it and where token auth carries the real access. Contained; revisit
+  only if GitHub starts challenging it.
+
+### Still worth doing
+
+- **Port `reddit.py` off `curl_cffi`.** It is already `AsyncSession`-shaped, and
+  it is the only remaining `curl_cffi` consumer, so the port drops a dependency
+  and with it the open streaming-backpressure issue (`lexiforest/curl_cffi#798`)
+  and the freemium fingerprint-refresh coupling to `impersonate.pro`. Reddit
+  keeps the browser identity: it is the worked example of an origin that has
+  withdrawn access to content it does not exclusively license.
 
 ### Two `wreq` footguns the migration must neutralize
 
