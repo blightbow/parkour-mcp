@@ -75,3 +75,11 @@ _.skip_tags  # parkour_mcp/markdown.py#_build_htmd_options
 _.image_placeholder  # parkour_mcp/markdown.py#_build_htmd_options
 _.drop_empty_alt_images  # parkour_mcp/markdown.py#_build_htmd_options
 _.drop_image_only_links  # parkour_mcp/markdown.py#_build_htmd_options
+
+# FetchResponse mirrors the httpx response surface so the transport swap was
+# invisible to callers; http_version is the one field only the tests read.
+# They are the tests that matter: the Akamai and Cloudflare live guards both
+# assert HTTP/2, which is the property the whole wreq migration turns on (two
+# WAFs satisfied over one modern transport, rather than one placated by
+# downgrading). Vulture does not scan tests, so it sees the write with no read.
+http_version  # parkour_mcp/_transport.py#FetchResponse

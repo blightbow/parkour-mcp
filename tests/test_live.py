@@ -239,10 +239,18 @@ class TestLiveAkamaiHttp2:
     )
 
     @pytest.mark.asyncio
-    async def test_guarded_fetch_clears_akamai_403(self):
-        from parkour_mcp.common import guarded_fetch
+    async def test_generic_path_clears_akamai_403(self):
+        """Asserted against `_transport`, which is what a caller actually gets.
 
-        resp = await guarded_fetch(self.AKAMAI_PDF, max_bytes=None)
+        This guard used to run against ``common.guarded_fetch``.  That was
+        correct until the generic path moved to wreq and left the httpx
+        implementation with no production callers, at which point the guard was
+        pinning a code path no user reaches: wreq could have stopped
+        negotiating HTTP/2 to Akamai and this would still have passed.
+        """
+        from parkour_mcp._transport import guarded_fetch as wreq_fetch
+
+        resp = await wreq_fetch(self.AKAMAI_PDF, max_bytes=None)
         assert resp.status_code == 200
         assert resp.http_version == "HTTP/2"
         assert resp.content[:5] == b"%PDF-"
@@ -274,6 +282,10 @@ class TestLiveCloudflareChallenge:
         assert resp.status_code == 200
         assert "cf-mitigated" not in resp.headers
         assert "H7 Flow" in resp.text
+        # Pinned alongside the Akamai case: both WAFs are satisfied over
+        # HTTP/2, which is only possible because the fingerprint is coherent
+        # rather than because one of them was placated by downgrading.
+        assert resp.http_version == "HTTP/2"
         # The pin bound and was observed, not merely configured.
         assert resp.pinned is True
         assert resp.remote_addr
