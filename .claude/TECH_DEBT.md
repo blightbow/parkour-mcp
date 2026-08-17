@@ -499,9 +499,25 @@ A future wreq release adding a new error type will fall through that tuple.
 
 ## Outbound fetch hardening — fast paths bypass `guarded_fetch`
 
-Note: the `wreq` migration above rebuilds the very caps this entry says the
-fast paths skip, so the `_api_client` factory idea below should be settled
-against `wreq` rather than httpx if the migration lands first.
+The `wreq` migration above has landed, which changes this entry in two ways
+rather than the one the earlier conditional predicted.
+
+**`common.py#guarded_fetch` now has no production callers.** `fetch_direct.py`,
+`_pipeline.py`, and `fetch_js.py` all resolve `guarded_fetch` to
+`_transport.py` now; only `test_common.py` and the Akamai case in
+`test_live.py` still reach the httpx one. It is the fully-tested httpx
+implementation of exactly the four caps this entry wants the fast paths to
+inherit, so it is a natural base for the `_api_client` factory rather than
+something to delete on sight. But it is dead production code until that
+factory exists, and vulture does not flag it because the tests keep it
+referenced. Decide deliberately: adopt it for the fast paths, or remove it and
+rebuild later.
+
+**The factory is an httpx question, not a wreq one.** The nine fixed-host
+modules stay on httpx permanently (see the header-selection reasoning above),
+so they cannot reuse `_transport`'s wreq client. `reddit.py` is the exception
+in the list below: it is on wreq now, for the browser identity rather than for
+the caps, and it bypasses them like the rest.
 
 - **Location**: nine fixed-host modules still build and call their own client directly: `arxiv.py`, `doi.py`, `semantic_scholar.py`, `ietf.py`, `github.py`, `huggingface.py`, `reddit.py` (`wreq`), `youtube.py`, and `packages.py` / `scorecard.py` (the latter two via the shared deps.dev client in `common.py#_depsdev_get`). `_pipeline.py`, `fetch_direct.py`, and `fetch_js.py` route through `common.py#guarded_fetch`; `discourse.py` and `mediawiki.py` route through `common.py#guarded_client`.
 - **Issue**: `guarded_fetch` layers three caps the remaining modules skip: the Content-Length gate, the streaming size cap, and the always-on `asyncio.timeout(60.0)` wall-clock deadline (see *Outbound request defenses* in `docs/frontmatter-standard.md`). A first-party API that hangs mid-stream or returns an unexpectedly large body is bounded only by each module's per-request `timeout=` (connect/read budget), not by a whole-request deadline or a size ceiling.
