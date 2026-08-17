@@ -99,11 +99,11 @@ def reddit_fixture(payload):
         for name in ("AsyncSession", "_oauth_token", "_oauth_token_headers",
                      "_oauth_expires_at", "_oauth_backend")
     }
-    # Substituting a double for the real session class is the whole mechanism;
-    # ty is right that _FixtureSession is not an AsyncSession, and that is the
+    # Substituting a double for the real client class is the whole mechanism;
+    # ty is right that _FixtureSession is not a wreq Client, and that is the
     # point. The tests do the same through monkeypatch.setattr, which is
     # untyped and so never reaches this check.
-    _reddit_mod.AsyncSession = lambda *_a, **_kw: _FixtureSession(payload)  # ty: ignore[invalid-assignment]
+    _reddit_mod.Client = lambda *_a, **_kw: _FixtureSession(payload)  # ty: ignore[invalid-assignment]
     _reddit_mod._oauth_token = "fixture-token"  # noqa: S105  # not a secret: fixture replay never authenticates
     _reddit_mod._oauth_token_headers = {}
     _reddit_mod._oauth_expires_at = time.monotonic() + 86400

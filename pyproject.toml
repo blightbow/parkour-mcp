@@ -23,7 +23,6 @@ dependencies = [
     "kagiapi",
     "beautifulsoup4",
     "httpx[http2]",
-    "curl-cffi>=0.15.0",
     # Generic-fetch transport.  Floor is the first release under the `wreq`
     # name (the project was `rnet` through 3.0.0-rc22; the reset to 0.10.0 is
     # a rename, not a rewrite).  0.12.1 is where `timeout=` became

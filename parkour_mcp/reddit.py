@@ -30,12 +30,13 @@ import secrets
 import string
 import time
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Optional
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
-from curl_cffi.requests import AsyncSession
-from curl_cffi.requests import exceptions as cc_exc
+from wreq import Client, Emulation
+from wreq import exceptions as wreq_exc
+from wreq.redirect import Policy
 
 from .common import RateLimiter
 from .detection import RedditPageType, _classify_reddit_url, _detect_reddit_url
@@ -44,9 +45,30 @@ logger = logging.getLogger(__name__)
 
 # Reddit began blocking httpx's TLS fingerprint in April 2026 while still
 # serving browsers: same headers via curl get 200, via httpx get 403. Safari
-# and Firefox curl_cffi profiles pass; Chrome profiles are JA3-blocked. The
-# token mint and the oauth.reddit.com calls both go through this profile.
-_IMPERSONATE_PROFILE = "safari184"
+# profiles pass; Chrome profiles are JA3-blocked. The token mint and the
+# oauth.reddit.com calls both go through this emulation.
+#
+# Reddit is one of the two places this codebase presents a browser identity
+# rather than identifying honestly (see the header-selection policy in
+# `common.py`): it withdrew access to content it does not exclusively license.
+_EMULATION = Emulation.Safari26_4
+
+# wreq's exception types are flat: every one subclasses ``Exception`` directly,
+# with no ``RequestException``-style base to catch.  They are enumerated so a
+# network failure becomes an error string instead of propagating out of the
+# tool, and so the list is a visible thing to revisit rather than a bare
+# ``except Exception``.  Collapse this if wreq ever grows a common base.
+_WREQ_FETCH_ERRORS = (
+    wreq_exc.BodyError,
+    wreq_exc.ConnectionError,
+    wreq_exc.ConnectionResetError,
+    wreq_exc.DecodingError,
+    wreq_exc.ProxyConnectionError,
+    wreq_exc.RedirectError,
+    wreq_exc.RequestError,
+    wreq_exc.StatusError,
+    wreq_exc.TlsError,
+)
 
 # ---------------------------------------------------------------------------
 # Rate limiter — 2s between API requests
@@ -131,6 +153,18 @@ def _android_device_headers() -> dict[str, str]:
     }
 
 
+def _header_str(value) -> str:
+    """Decode a wreq header value to ``str``.
+
+    wreq returns header values as ``bytes``; these are replayed into later
+    request headers, which must be text. Latin-1 is total and is the encoding
+    RFC 9110 ascribes to field values, so no real header fails to decode.
+    """
+    if isinstance(value, (bytes, bytearray)):
+        return value.decode("latin-1")
+    return "" if value is None else str(value)
+
+
 async def _mint_mobile_token() -> tuple[str, float, dict[str, str]] | None:
     """Mint a userless token via the logged-out Android-app grant.
 
@@ -146,24 +180,24 @@ async def _mint_mobile_token() -> tuple[str, float, dict[str, str]] | None:
         "Content-Type": "application/json; charset=UTF-8",
     }
     try:
-        async with AsyncSession(impersonate=_IMPERSONATE_PROFILE) as client:
+        async with Client(emulation=_EMULATION) as client:
             resp = await client.post(
                 _MOBILE_TOKEN_URL,
                 headers=req_headers,
                 json={"scopes": ["*", "email", "pii"]},
-                timeout=15,
+                timeout=timedelta(seconds=15),
             )
-            if resp.status_code != 200:
-                logger.debug("Reddit mobile token mint: HTTP %s", resp.status_code)
+            if resp.status.as_int() != 200:
+                logger.debug("Reddit mobile token mint: HTTP %s", resp.status.as_int())
                 return None
-            payload = resp.json()
+            payload = await resp.json()
             token = payload.get("access_token")
             expires_in = payload.get("expires_in")
             if not token or not expires_in:
                 return None
             replay = dict(device_headers)
             for h in ("x-reddit-loid", "x-reddit-session"):
-                val = resp.headers.get(h)
+                val = _header_str(resp.headers.get(h))
                 if val:
                     replay[h] = val
             return token, time.monotonic() + float(expires_in), replay
@@ -188,21 +222,21 @@ async def _mint_web_token() -> tuple[str, float, dict[str, str]] | None:
     }
     body = {"grant_type": _INSTALLED_CLIENT_GRANT, "device_id": device_id}
     try:
-        async with AsyncSession(impersonate=_IMPERSONATE_PROFILE) as client:
+        async with Client(emulation=_EMULATION) as client:
             resp = await client.post(
-                _WEB_TOKEN_URL, headers=req_headers, data=body, timeout=15,
+                _WEB_TOKEN_URL, headers=req_headers, data=body, timeout=timedelta(seconds=15),
             )
-            if resp.status_code != 200:
-                logger.debug("Reddit web token mint: HTTP %s", resp.status_code)
+            if resp.status.as_int() != 200:
+                logger.debug("Reddit web token mint: HTTP %s", resp.status.as_int())
                 return None
-            payload = resp.json()
+            payload = await resp.json()
             token = payload.get("access_token")
             expires_in = payload.get("expires_in")
             if not token or not expires_in:
                 return None
             replay = {"Origin": "https://www.reddit.com"}
             for h in ("x-reddit-loid", "x-reddit-session"):
-                val = resp.headers.get(h)
+                val = _header_str(resp.headers.get(h))
                 if val:
                     replay[h] = val
             return token, time.monotonic() + float(expires_in), replay
@@ -316,11 +350,11 @@ async def _resolve_redd_it(url: str) -> str | None:
     )
     try:
         await _reddit_limiter.wait()
-        async with AsyncSession(
-            impersonate=_IMPERSONATE_PROFILE,
+        async with Client(
+            emulation=_EMULATION, redirect=Policy.limited(10),
         ) as client:
             resp = await client.head(
-                url, headers=headers, timeout=10, allow_redirects=True,
+                url, headers=headers, timeout=timedelta(seconds=10),
             )
             final = str(resp.url)
             return _detect_reddit_url(final)
@@ -397,27 +431,29 @@ async def _reddit_api_get(
     }
     await _reddit_limiter.wait()
     try:
-        async with AsyncSession(
-            impersonate=_IMPERSONATE_PROFILE,
+        async with Client(
+            emulation=_EMULATION, redirect=Policy.limited(10),
         ) as client:
             resp = await client.get(
-                json_url, headers=headers, timeout=30, allow_redirects=True,
+                json_url, headers=headers, timeout=timedelta(seconds=30),
             )
-            if resp.status_code == 401 and retry_on_401:
+            status = resp.status.as_int()
+            if status == 401 and retry_on_401:
                 await _force_refresh_token()
                 if not _oauth_token:
                     return "Error: Reddit OAuth token expired and refresh failed."
                 return await _reddit_api_get(json_url, retry_on_401=False)
-            if resp.status_code == 429:
+            if status == 429:
                 return "Error: Reddit rate limit exceeded. Try again later."
-            resp.raise_for_status()
-            data = resp.json()
-    except cc_exc.Timeout:
+            # Status is read directly rather than via raise_for_status: wreq's
+            # StatusError carries no ``response``, so the code would have to be
+            # recovered from the message string to report it.
+            if status >= 400:
+                return f"Error: HTTP {status} for {json_url}"
+            data = await resp.json()
+    except wreq_exc.TimeoutError:
         return f"Error: Request timed out for {json_url}"
-    except cc_exc.HTTPError as exc:
-        status = exc.response.status_code if exc.response is not None else "unknown"
-        return f"Error: HTTP {status} for {json_url}"
-    except cc_exc.RequestException as exc:
+    except _WREQ_FETCH_ERRORS as exc:
         return f"Error: Failed to fetch {json_url} — {type(exc).__name__}"
     except ValueError:
         return f"Error: Invalid JSON response from {json_url}"

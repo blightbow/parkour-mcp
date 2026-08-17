@@ -4,7 +4,7 @@ This module is the single home for *stateless* URL detection: given a string,
 decide which API-backed source (if any) owns it and extract the identifier or
 components a handler needs.  Everything here depends only on the standard
 library (``re`` and ``urllib.parse``), so it can be imported anywhere without
-pulling a source module's heavy transport dependencies (httpx, curl_cffi,
+pulling a source module's heavy transport dependencies (httpx, wreq,
 tree-sitter, yt-dlp).  That cheapness is the point: the fast-path dispatchers
 (`fetch_direct`, `_pipeline`) import these at module top instead of lazily, and
 sibling tools (e.g. Kagi search) can steer callers toward a fast path by

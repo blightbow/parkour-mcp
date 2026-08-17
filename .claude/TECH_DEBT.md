@@ -447,12 +447,18 @@ plan to port `guarded_client`:
 
 ### Still worth doing
 
-- **Port `reddit.py` off `curl_cffi`.** It is already `AsyncSession`-shaped, and
-  it is the only remaining `curl_cffi` consumer, so the port drops a dependency
-  and with it the open streaming-backpressure issue (`lexiforest/curl_cffi#798`)
-  and the freemium fingerprint-refresh coupling to `impersonate.pro`. Reddit
-  keeps the browser identity: it is the worked example of an origin that has
-  withdrawn access to content it does not exclusively license.
+**`reddit.py` is ported and `curl-cffi` is gone from the dependency list.**
+Landed alongside this entry. The port retires the open streaming-backpressure
+issue (`lexiforest/curl_cffi#798`) and the freemium fingerprint-refresh
+coupling to `impersonate.pro`, and leaves two HTTP stacks rather than three.
+Reddit keeps the browser identity: it is the worked example of an origin that
+has withdrawn access to content it does not exclusively license.
+
+One wart the port had to work around, worth knowing before touching another
+wreq caller: **wreq's exception types are flat.** Every one subclasses
+`Exception` directly, with no `RequestException`-style base, so
+`reddit.py#_WREQ_FETCH_ERRORS` enumerates them rather than catching a base.
+A future wreq release adding a new error type will fall through that tuple.
 
 ### Two `wreq` footguns the migration must neutralize
 
@@ -497,8 +503,8 @@ Note: the `wreq` migration above rebuilds the very caps this entry says the
 fast paths skip, so the `_api_client` factory idea below should be settled
 against `wreq` rather than httpx if the migration lands first.
 
-- **Location**: nine fixed-host modules still build and call their own client directly: `arxiv.py`, `doi.py`, `semantic_scholar.py`, `ietf.py`, `github.py`, `huggingface.py`, `reddit.py` (`curl_cffi`), `youtube.py`, and `packages.py` / `scorecard.py` (the latter two via the shared deps.dev client in `common.py#_depsdev_get`). `_pipeline.py`, `fetch_direct.py`, and `fetch_js.py` route through `common.py#guarded_fetch`; `discourse.py` and `mediawiki.py` route through `common.py#guarded_client`.
+- **Location**: nine fixed-host modules still build and call their own client directly: `arxiv.py`, `doi.py`, `semantic_scholar.py`, `ietf.py`, `github.py`, `huggingface.py`, `reddit.py` (`wreq`), `youtube.py`, and `packages.py` / `scorecard.py` (the latter two via the shared deps.dev client in `common.py#_depsdev_get`). `_pipeline.py`, `fetch_direct.py`, and `fetch_js.py` route through `common.py#guarded_fetch`; `discourse.py` and `mediawiki.py` route through `common.py#guarded_client`.
 - **Issue**: `guarded_fetch` layers three caps the remaining modules skip: the Content-Length gate, the streaming size cap, and the always-on `asyncio.timeout(60.0)` wall-clock deadline (see *Outbound request defenses* in `docs/frontmatter-standard.md`). A first-party API that hangs mid-stream or returns an unexpectedly large body is bounded only by each module's per-request `timeout=` (connect/read budget), not by a whole-request deadline or a size ceiling.
 - **SSRF is genuinely out of scope for the nine that remain**, and unlike an earlier revision of this entry that claim now matches the location list: every one of them builds its URL against a hardcoded first-party host, so no caller chooses the destination. `discourse.py` and `mediawiki.py` were the counterexamples that made the old claim false, because `base_url`, `wiki`, and a URL-shaped `title` are all caller-supplied. Both now use `guarded_client`. The lesson worth keeping: this entry asserted a security property over a module list that had drifted out from under it, and nothing mechanical was checking the two against each other.
-- **Why deferred**: the fast paths target trusted, well-behaved first-party endpoints (arxiv.org, the GitHub / HuggingFace / deps.dev / Datatracker / RFC Editor APIs, oauth.reddit.com), so practical exposure is low, and several modules need bespoke clients anyway (reddit's `curl_cffi` Safari impersonation to clear the JA3 filter, the shared deps.dev client and limiter). Threading `guarded_fetch` through eleven modules with differing client construction is a non-trivial refactor for a low-probability failure mode.
+- **Why deferred**: the fast paths target trusted, well-behaved first-party endpoints (arxiv.org, the GitHub / HuggingFace / deps.dev / Datatracker / RFC Editor APIs, oauth.reddit.com), so practical exposure is low, and several modules need bespoke clients anyway (reddit's `wreq` Safari emulation to clear the JA3 filter, the shared deps.dev client and limiter). Threading `guarded_fetch` through eleven modules with differing client construction is a non-trivial refactor for a low-probability failure mode.
 - **How to evaluate**: revisit if a real hang / oversize incident surfaces from a first-party API, or when the shared HTTP-client-factory idea from the cross-cutting abstraction audit is picked up. The cheapest improvement is to give every outbound path the wall-clock deadline at minimum (it always applies in `guarded_fetch`, even when size caps are disabled); the fuller fix is a shared `_api_client` factory that wraps the caps so all paths inherit them uniformly.

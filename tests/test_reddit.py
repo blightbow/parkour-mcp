@@ -3,7 +3,7 @@
 import time
 
 import pytest
-from curl_cffi.requests import exceptions as cc_exc
+from wreq import exceptions as wreq_exc
 
 import parkour_mcp.reddit as reddit_mod
 from parkour_mcp._pipeline import _page_cache, _reddit_fast_path
@@ -698,7 +698,7 @@ class TestFetchRedditContent:
         url = "https://old.reddit.com/r/Python/"
         fake_async_session.raise_on_get(
             "https://oauth.reddit.com/r/Python/.json?raw_json=1",
-            cc_exc.Timeout("timeout"),
+            wreq_exc.TimeoutError("timeout"),
         )
 
         _, md = await _fetch_reddit_content(url)

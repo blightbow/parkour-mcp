@@ -812,7 +812,7 @@ async def guarded_fetch(
     claims Chrome.  The HTTP/1.1 retry above does not rescue the Cloudflare
     case either: a challenge is a well-formed 403, not a
     ``RemoteProtocolError``.  Only a genuine browser fingerprint resolves it,
-    which is what ``curl_cffi`` already supplies for ``reddit.py``.  See
+    which is what ``wreq`` supplies on the generic path.  See
     TECH_DEBT.md for the migration assessment.
 
     Returns a fully-buffered ``httpx.Response`` (i.e. ``response.text`` works

@@ -144,33 +144,51 @@ def _reddit_oauth_state(monkeypatch):
         monkeypatch.setattr(_reddit_mod, "_refresh_task", None)
 
 
-class FakeResponse:
-    """Stand-in for curl_cffi.requests.Response used in tests.
+class _FakeWreqStatus:
+    def __init__(self, code):
+        self._code = code
 
-    Only implements the attributes our code reads: ``status_code``,
-    ``url`` (string form, matching ``str(resp.url)`` in the real path),
-    ``headers``, ``json()``, ``raise_for_status()``.
+    def as_int(self):
+        return self._code
+
+
+class _FakeWreqHeaders:
+    """wreq returns header values as bytes; the fake does too.
+
+    Returning str here would hide a decode bug in the replay-header path,
+    which is the one place reddit.py reads a response header and feeds it
+    back into a later request.
+    """
+
+    def __init__(self, mapping):
+        self._pairs = {k.lower(): v.encode() for k, v in (mapping or {}).items()}
+
+    def get(self, key):
+        return self._pairs.get(key.lower())
+
+    def __iter__(self):
+        return iter(self._pairs.items())
+
+
+class FakeResponse:
+    """Stand-in for a ``wreq`` Response used in the Reddit tests.
+
+    Only implements what reddit.py reads: ``status.as_int()``, ``url``,
+    ``headers.get()`` returning bytes, and an awaitable ``json()``.
     """
 
     def __init__(self, status_code=200, json_data=None, headers=None, url=""):
-        self.status_code = status_code
+        self.status = _FakeWreqStatus(status_code)
         self._json = json_data
-        self.headers = headers or {}
+        self.headers = _FakeWreqHeaders(headers)
         self.url = url
 
-    def json(self):
+    async def json(self):
         return self._json
-
-    def raise_for_status(self):
-        if self.status_code >= 400:
-            from curl_cffi.requests.exceptions import HTTPError
-            err = HTTPError(f"HTTP {self.status_code}")
-            err.response = self
-            raise err
 
 
 class _FakeAsyncSession:
-    """URL-keyed mock for curl_cffi's AsyncSession — respx-like semantics.
+    """URL-keyed mock for wreq's Client — respx-like semantics.
 
     Each URL maps to a queue of responses (or exceptions).  A single
     registered response repeats for every call; multiple registrations are
@@ -233,7 +251,7 @@ class _FakeAsyncSession:
 
 @pytest.fixture
 def fake_async_session(monkeypatch):
-    """Replace curl_cffi.requests.AsyncSession in reddit.py with a URL-keyed mock.
+    """Replace the wreq Client in reddit.py with a URL-keyed mock.
 
     Usage:
         fake_async_session.mock_get(url, json_data=..., status=200)
@@ -241,7 +259,7 @@ def fake_async_session(monkeypatch):
         fake_async_session.raise_on_get(url, cc_exc.Timeout("..."))
     """
     fake = _FakeAsyncSession()
-    monkeypatch.setattr("parkour_mcp.reddit.AsyncSession", lambda *a, **kw: fake)
+    monkeypatch.setattr("parkour_mcp.reddit.Client", lambda *a, **kw: fake)
     return fake
 
 

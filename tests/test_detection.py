@@ -5,7 +5,7 @@ The detector behaviour itself is covered by the per-source suites
 import the functions from their canonical home here.  This module guards the
 one property those suites do not: that detection.py stays cheap to import, so
 the fast-path dispatchers and sibling tools can depend on it without dragging
-in a source module's transport stack (httpx, curl_cffi, tree-sitter, yt-dlp).
+in a source module's transport stack (httpx, wreq, tree-sitter, yt-dlp).
 """
 
 import ast
@@ -20,7 +20,7 @@ _DETECTION_SRC = Path(detection.__file__)
 # the module exists.
 _FORBIDDEN_ROOTS = {
     "httpx",
-    "curl_cffi",
+    "wreq",
     "tree_sitter",
     "tree_sitter_language_pack",
     "yt_dlp",
