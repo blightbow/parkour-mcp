@@ -447,8 +447,9 @@ plan to port `guarded_client`:
 
 ### Still worth doing
 
-**`reddit.py` is ported and `curl-cffi` is gone from the dependency list.**
-Landed alongside this entry. The port retires the open streaming-backpressure
+**Both follow-ups landed.** `reddit.py` is ported and `curl-cffi` is gone from
+the dependency list; the `guarded_fetch` sweep is done and recorded in the
+outbound-hardening entry below. The port retires the open streaming-backpressure
 issue (`lexiforest/curl_cffi#798`) and the freemium fingerprint-refresh
 coupling to `impersonate.pro`, and leaves two HTTP stacks rather than three.
 Reddit keeps the browser identity: it is the worked example of an origin that
@@ -497,30 +498,36 @@ A future wreq release adding a new error type will fall through that tuple.
   test harness. It is a breaking change by nature, which is cheapest to land
   while the project sits at 0.x.
 
-## Outbound fetch hardening — fast paths bypass `guarded_fetch`
+## Outbound fetch hardening: two paths still bypass the caps
 
-The `wreq` migration above has landed, which changes this entry in two ways
-rather than the one the earlier conditional predicted.
+**Mostly resolved.** Every httpx caller now routes through
+`common.py#guarded_fetch`: `arxiv.py`, `doi.py`, `ietf.py`,
+`semantic_scholar.py`, `github.py`, `huggingface.py`, `mediawiki.py`,
+`discourse.py`, the shared deps.dev helper in `common.py#_depsdev_get`, and the
+`fetch_js.py` HEAD pre-check. `guarded_fetch` grew `params=` and `method=` to
+make that possible without hand-encoding query strings at twenty-five call
+sites. Each of them now has the Content-Length gate, the streaming size cap,
+and the 60 s wall-clock deadline.
 
-**`common.py#guarded_fetch` now has no production callers.** `fetch_direct.py`,
-`_pipeline.py`, and `fetch_js.py` all resolve `guarded_fetch` to
-`_transport.py` now; only `test_common.py` and the Akamai case in
-`test_live.py` still reach the httpx one. It is the fully-tested httpx
-implementation of exactly the four caps this entry wants the fast paths to
-inherit, so it is a natural base for the `_api_client` factory rather than
-something to delete on sight. But it is dead production code until that
-factory exists, and vulture does not flag it because the tests keep it
-referenced. Decide deliberately: adopt it for the fast paths, or remove it and
-rebuild later.
+Sizes use the ceilings already established rather than opting out. API metadata
+takes the 5 MiB default; the MediaWiki page parse and the GitHub raw blob take
+the 50 MiB sections ceiling, because those two return a document rather than
+metadata and a monolithic article legitimately exceeds the smaller cap.
+Disabling the cap was the first attempt and was wrong for a reason worth
+keeping: it trades falsely refusing a large *legitimate* response for having no
+defense against a large *illegitimate* one, which is the whole point of the cap.
 
-**The factory is an httpx question, not a wreq one.** The nine fixed-host
-modules stay on httpx permanently (see the header-selection reasoning above),
-so they cannot reuse `_transport`'s wreq client. `reddit.py` is the exception
-in the list below: it is on wreq now, for the browser identity rather than for
-the caps, and it bypasses them like the rest.
+**Two paths still bypass the caps, both for structural reasons:**
 
-- **Location**: nine fixed-host modules still build and call their own client directly: `arxiv.py`, `doi.py`, `semantic_scholar.py`, `ietf.py`, `github.py`, `huggingface.py`, `reddit.py` (`wreq`), `youtube.py`, and `packages.py` / `scorecard.py` (the latter two via the shared deps.dev client in `common.py#_depsdev_get`). `_pipeline.py`, `fetch_direct.py`, and `fetch_js.py` route through `common.py#guarded_fetch`; `discourse.py` and `mediawiki.py` route through `common.py#guarded_client`.
-- **Issue**: `guarded_fetch` layers three caps the remaining modules skip: the Content-Length gate, the streaming size cap, and the always-on `asyncio.timeout(60.0)` wall-clock deadline (see *Outbound request defenses* in `docs/frontmatter-standard.md`). A first-party API that hangs mid-stream or returns an unexpectedly large body is bounded only by each module's per-request `timeout=` (connect/read budget), not by a whole-request deadline or a size ceiling.
-- **SSRF is genuinely out of scope for the nine that remain**, and unlike an earlier revision of this entry that claim now matches the location list: every one of them builds its URL against a hardcoded first-party host, so no caller chooses the destination. `discourse.py` and `mediawiki.py` were the counterexamples that made the old claim false, because `base_url`, `wiki`, and a URL-shaped `title` are all caller-supplied. Both now use `guarded_client`. The lesson worth keeping: this entry asserted a security property over a module list that had drifted out from under it, and nothing mechanical was checking the two against each other.
-- **Why deferred**: the fast paths target trusted, well-behaved first-party endpoints (arxiv.org, the GitHub / HuggingFace / deps.dev / Datatracker / RFC Editor APIs, oauth.reddit.com), so practical exposure is low, and several modules need bespoke clients anyway (reddit's `wreq` Safari emulation to clear the JA3 filter, the shared deps.dev client and limiter). Threading `guarded_fetch` through eleven modules with differing client construction is a non-trivial refactor for a low-probability failure mode.
+- **`reddit.py`** builds a `wreq` `Client` directly, because it needs the Safari
+  emulation to clear Reddit's JA3 filter. `_transport.py#guarded_fetch` has the
+  caps but hardcodes the Chrome emulation, so Reddit cannot use it as-is.
+  Closing this means letting `build_client` take an emulation, which is a small
+  change nobody has needed yet.
+- **`youtube.py`** goes through yt-dlp, which owns its own HTTP stack. Not
+  reachable from either `guarded_fetch` without reimplementing what yt-dlp does.
+
+Neither chooses its destination from caller input, so SSRF stays out of scope
+for both; the exposure is a hang or an oversized body from a first-party host.
+
 - **How to evaluate**: revisit if a real hang / oversize incident surfaces from a first-party API, or when the shared HTTP-client-factory idea from the cross-cutting abstraction audit is picked up. The cheapest improvement is to give every outbound path the wall-clock deadline at minimum (it always applies in `guarded_fetch`, even when size caps are disabled); the fuller fix is a shared `_api_client` factory that wraps the caps so all paths inherit them uniformly.
