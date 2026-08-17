@@ -5,6 +5,35 @@ All notable changes to parkour-mcp will be documented in this file.
 Format: https://keepachangelog.com/en/1.1.0/
 Versioning: https://semver.org/spec/v2.0.0.html
 
+## [2.3.0] 2026-08-17
+
+### Changed
+- Reddit fetches no longer depend on curl-cffi, removing a dependency whose async streaming had an open unbounded-memory defect and whose browser-fingerprint updates are gated behind a commercial service.
+- Every source the toolkit fetches from now shares one guarded request path: a first-party API that hangs mid-response fails at 60 seconds instead of stalling the tool call indefinitely, and an unexpectedly large reply is bounded rather than read in full.
+
+
+### Fixed
+- MediaWiki lookups now work on wikis whose main page carries a custom title, which includes most Fandom wikis, and a wiki that cannot be reached reports whether it refused the probe, denied anonymous read, or simply is not a wiki, instead of a blanket "no MediaWiki API found".
+- search results on wikis that report no hit count, which includes Fandom, no longer claim "of 0" beside a page of real results, and they carry the follow-up hint that the zero was suppressing.
+- fetching a GitHub issue or pull request through WebFetchDirect now respects max_tokens instead of always returning about 5,000 tokens, so a caller can hold a long thread inside a small budget or raise the ceiling to read more of one.
+- the MediaWiki search and references actions now respect max_tokens instead of silently discarding it, and they report which footnotes, citations, or results the budget displaced rather than returning a short answer that looks complete.
+- when a site refuses a fetch, the error now repeats what the site said about why, so a login wall, a bot challenge, and a dead link are told apart at a glance instead of all reading as a bare status code.
+- a page the server refused no longer comes back rendered and fenced as though it were the document, and rendering no longer fails outright when a single subresource never loads.
+- pages behind a strict Cloudflare zone, including Zendesk-hosted support sites, returned a 403 error instead of their content because httpx's HTTP/2 fingerprint contradicted the Chrome User-Agent it was sending; the generic fetch path now presents a coherent browser fingerprint and retrieves them, while the Akamai-fronted hosts that require HTTP/2 continue to work.
+- Discourse forum requests claimed to be Chrome and asked for HTML from endpoints that serve JSON; they now identify parkour by name and contact URL and request the format they actually want, so forum operators can see who is calling and apply their own policy.
+
+
+### Documentation
+- Correct the HTTP/2 WAF coherence rationale
+- Correct the wreq migration entry against measurement
+- Correct the outbound-hardening entry after the wreq migration
+- Record the guarded_fetch sweep in the hardening entry
+
+
+### Miscellaneous
+- Exempt live tests from the wreq transport double
+- Point the Akamai guard at the path callers actually get
+
 ## [2.2.2] 2026-08-15
 
 ### Fixed
