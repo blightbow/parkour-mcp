@@ -14,7 +14,14 @@ from urllib.parse import urlparse
 
 import httpx
 
-from .common import _API_USER_AGENT, RateLimiter, clean_env, s2_enabled, tool_name
+from .common import (
+    _API_USER_AGENT,
+    RateLimiter,
+    clean_env,
+    guarded_fetch,
+    s2_enabled,
+    tool_name,
+)
 from .markdown import (
     _TRUST_ADVISORY,
     FMEntries,
@@ -63,17 +70,17 @@ async def _detect_ra(doi: str, *, timeout: float = 5.0) -> str | None:
         return _ra_cache[prefix]
 
     try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.get(
-                f"https://doi.org/doiRA/{prefix}",
-                headers={"User-Agent": _API_USER_AGENT},
-            )
-            if resp.status_code == 200:
-                data = resp.json()
-                if isinstance(data, list) and data:
-                    ra = data[0].get("RA", "")
-                    _ra_cache[prefix] = ra
-                    return ra
+        resp = await guarded_fetch(
+            f"https://doi.org/doiRA/{prefix}",
+            headers={"User-Agent": _API_USER_AGENT},
+            timeout=timeout,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            if isinstance(data, list) and data:
+                ra = data[0].get("RA", "")
+                _ra_cache[prefix] = ra
+                return ra
     except Exception:
         logger.debug("RA detection failed for %s", prefix, exc_info=True)
     return None
@@ -95,59 +102,59 @@ async def fetch_datacite_metadata(
     """
     await _datacite_limiter.wait()
     try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.get(
-                f"https://api.datacite.org/dois/{doi}",
-                headers={"User-Agent": _API_USER_AGENT, "Accept": "application/json"},
-            )
-            if resp.status_code != 200:
-                return None
-            raw = resp.json()
-            attrs = raw.get("data", {}).get("attributes", {})
+        resp = await guarded_fetch(
+            f"https://api.datacite.org/dois/{doi}",
+            headers={"User-Agent": _API_USER_AGENT, "Accept": "application/json"},
+            timeout=timeout,
+        )
+        if resp.status_code != 200:
+            return None
+        raw = resp.json()
+        attrs = raw.get("data", {}).get("attributes", {})
 
-            # Extract ORCIDs from creators
-            orcids: dict[str, str] = {}
-            creators = attrs.get("creators") or []
-            for c in creators:
-                name = c.get("name", "")
-                for ni in c.get("nameIdentifiers") or []:
-                    if ni.get("nameIdentifierScheme") == "ORCID":
-                        orcid_url = ni.get("nameIdentifier", "")
-                        # Normalize: may be full URL or bare ID
-                        orcid_id = orcid_url.replace("https://orcid.org/", "")
-                        if orcid_id:
-                            orcids[name] = orcid_id
+        # Extract ORCIDs from creators
+        orcids: dict[str, str] = {}
+        creators = attrs.get("creators") or []
+        for c in creators:
+            name = c.get("name", "")
+            for ni in c.get("nameIdentifiers") or []:
+                if ni.get("nameIdentifierScheme") == "ORCID":
+                    orcid_url = ni.get("nameIdentifier", "")
+                    # Normalize: may be full URL or bare ID
+                    orcid_id = orcid_url.replace("https://orcid.org/", "")
+                    if orcid_id:
+                        orcids[name] = orcid_id
 
-            # SPDX license
-            rights_list = attrs.get("rightsList") or []
-            license_id = None
-            license_url = None
-            for r in rights_list:
-                if r.get("rightsIdentifierScheme") == "SPDX":
-                    license_id = r.get("rightsIdentifier")
-                    license_url = r.get("rightsUri")
-                    break
-                # Fallback: any rights entry with a URI
-                if not license_id and r.get("rightsUri"):
-                    license_id = r.get("rights")
-                    license_url = r.get("rightsUri")
+        # SPDX license
+        rights_list = attrs.get("rightsList") or []
+        license_id = None
+        license_url = None
+        for r in rights_list:
+            if r.get("rightsIdentifierScheme") == "SPDX":
+                license_id = r.get("rightsIdentifier")
+                license_url = r.get("rightsUri")
+                break
+            # Fallback: any rights entry with a URI
+            if not license_id and r.get("rightsUri"):
+                license_id = r.get("rights")
+                license_url = r.get("rightsUri")
 
-            # Related identifiers
-            related = []
-            for ri in (attrs.get("relatedIdentifiers") or [])[:10]:
-                related.append({
-                    "type": ri.get("relatedIdentifierType"),
-                    "relation": ri.get("relationType"),
-                    "id": ri.get("relatedIdentifier"),
-                })
+        # Related identifiers
+        related = []
+        for ri in (attrs.get("relatedIdentifiers") or [])[:10]:
+            related.append({
+                "type": ri.get("relatedIdentifierType"),
+                "relation": ri.get("relationType"),
+                "id": ri.get("relatedIdentifier"),
+            })
 
-            return {
-                "orcids": orcids,
-                "license_id": license_id,
-                "license_url": license_url,
-                "related": related,
-                "resource_type": attrs.get("types", {}).get("resourceTypeGeneral"),
-            }
+        return {
+            "orcids": orcids,
+            "license_id": license_id,
+            "license_url": license_url,
+            "related": related,
+            "resource_type": attrs.get("types", {}).get("resourceTypeGeneral"),
+        }
     except Exception:
         logger.debug("DataCite fetch failed for %s", doi, exc_info=True)
         return None
@@ -379,18 +386,18 @@ async def fetch_crossref_metadata(
     if contact:
         params["mailto"] = contact
     try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.get(
-                f"https://api.crossref.org/works/{doi}",
-                params=params or None,
-                headers={"User-Agent": _API_USER_AGENT, "Accept": "application/json"},
+        resp = await guarded_fetch(
+            f"https://api.crossref.org/works/{doi}",
+            params=params or None,
+            headers={"User-Agent": _API_USER_AGENT, "Accept": "application/json"},
+            timeout=timeout,
+        )
+        if resp.status_code != 200:
+            logger.debug(
+                "CrossRef REST HTTP %d for %s", resp.status_code, doi,
             )
-            if resp.status_code != 200:
-                logger.debug(
-                    "CrossRef REST HTTP %d for %s", resp.status_code, doi,
-                )
-                return None
-            raw = resp.json()
+            return None
+        raw = resp.json()
     except Exception:
         logger.debug("CrossRef REST fetch failed for %s", doi, exc_info=True)
         return None
@@ -521,30 +528,37 @@ async def _doi_content_negotiate(
     """
     await _doi_limiter.wait()
     try:
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
-            resp = await client.get(
-                f"https://doi.org/{doi}",
-                headers={"User-Agent": _API_USER_AGENT, "Accept": accept},
-            )
-            # Follow redirect manually with host validation
-            if resp.is_redirect:
-                location = resp.headers.get("location", "")
-                target_host = urlparse(location).hostname or ""
-                if target_host not in _DOI_REDIRECT_ALLOW:
-                    logger.debug(
-                        "DOI redirect to untrusted host %s for %s", target_host, doi,
-                    )
-                    return None
-                resp = await client.get(
-                    location,
-                    headers={"User-Agent": _API_USER_AGENT, "Accept": accept},
+        resp = await guarded_fetch(
+            f"https://doi.org/{doi}",
+            headers={"User-Agent": _API_USER_AGENT, "Accept": accept},
+            timeout=timeout,
+            follow_redirects=False,
+        )
+        # Follow redirect manually with host validation
+        if resp.is_redirect:
+            location = resp.headers.get("location", "")
+            target_host = urlparse(location).hostname or ""
+            if target_host not in _DOI_REDIRECT_ALLOW:
+                logger.debug(
+                    "DOI redirect to untrusted host %s for %s", target_host, doi,
                 )
-            if resp.status_code == 200:
-                return resp
-            logger.debug("DOI content negotiation HTTP %d for %s (%s)", resp.status_code, doi, accept)
-            return None
+                return None
+            # The allowlisted hop gets the same caps as the first request;
+            # follow_redirects stays off so a chained redirect comes back here
+            # for validation rather than being followed unchecked.
+            resp = await guarded_fetch(
+                location,
+                headers={"User-Agent": _API_USER_AGENT, "Accept": accept},
+                timeout=timeout,
+                follow_redirects=False,
+            )
     except Exception:
         logger.debug("DOI content negotiation failed for %s", doi, exc_info=True)
+        return None
+    else:
+        if resp.status_code == 200:
+            return resp
+        logger.debug("DOI content negotiation HTTP %d for %s (%s)", resp.status_code, doi, accept)
         return None
 
 

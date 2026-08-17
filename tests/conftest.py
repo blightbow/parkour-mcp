@@ -1017,13 +1017,24 @@ class _WreqShapedResponse:
 class _HttpxBackedClient:
     """Stands in for wreq's Client, issuing through httpx so respx sees it."""
 
+    async def request(self, method, url, headers=None):
+        # _transport dispatches through request() so it can issue HEAD; the
+        # double has to carry the same surface or every call raises
+        # AttributeError and surfaces as a transport failure.
+        # wreq's Method is a pyo3 enum with no `.name`, and str() yields
+        # "Method.GET", so the verb has to be taken off the tail.
+        return await self._issue(str(method).rsplit(".", 1)[-1], url, headers)
+
     async def get(self, url, headers=None):
+        return await self._issue("GET", url, headers)
+
+    async def _issue(self, method, url, headers=None):
         # follow_redirects=False because `_transport._follow` walks the chain
         # itself, address-checking each hop; letting httpx follow too would
         # skip those checks and diverge from production.
         try:
             async with httpx.AsyncClient(follow_redirects=False) as client:
-                resp = await client.get(url, headers=headers)
+                resp = await client.request(method, url, headers=headers)
         except httpx.TimeoutException as exc:
             # The double owes callers wreq's contract, exceptions included.
             # Leaking httpx types here would make _transport's error mapping

@@ -32,7 +32,9 @@ from .common import (
     _API_USER_AGENT,
     _FETCH_HEADERS,
     _LANGUAGE_MAP,
+    _MAX_SECTIONS_RESPONSE_BYTES,
     RateLimiter,
+    guarded_fetch,
     load_credential,
     tool_name,
 )
@@ -166,12 +168,11 @@ async def _github_request(
         await _github_limiter.wait()
 
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.request(
-                    method, url,
-                    headers=_github_headers(accept),
-                    params=params,
-                )
+            response = await guarded_fetch(
+                url, method=method,
+                headers=_github_headers(accept), params=params,
+                timeout=30.0,
+            )
         except httpx.TimeoutException:
             return "Error: GitHub API request timed out."
         except httpx.RequestError as e:
@@ -1161,8 +1162,7 @@ async def _fetch_citation_cff(
             headers["Authorization"] = f"token {token}"
 
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.get(raw_url, headers=headers)
+            resp = await guarded_fetch(raw_url, headers=headers, timeout=10.0)
             if resp.status_code != 200:
                 return None
             return yaml.safe_load(resp.text)
@@ -2113,10 +2113,12 @@ async def _action_file(
     # chance to weigh trust before using the content.
     async def _fetch_raw() -> httpx.Response | str:
         try:
-            async with httpx.AsyncClient(
-                timeout=30.0, follow_redirects=True,
-            ) as client:
-                return await client.get(raw_url, headers=headers)
+            # A raw blob is a document, not metadata: the sections ceiling
+            # applies, and max_tokens bounds what actually reaches the caller.
+            return await guarded_fetch(
+                raw_url, headers=headers, timeout=30.0,
+                max_bytes=_MAX_SECTIONS_RESPONSE_BYTES,
+            )
         except httpx.TimeoutException:
             return f"Error: Request timed out for {raw_url}"
         except httpx.RequestError as e:

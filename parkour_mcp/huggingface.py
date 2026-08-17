@@ -29,7 +29,13 @@ import httpx
 from pydantic import Field
 
 from ._pipeline import _page_cache
-from .common import _API_USER_AGENT, RateLimiter, load_credential, tool_name
+from .common import (
+    _API_USER_AGENT,
+    RateLimiter,
+    guarded_fetch,
+    load_credential,
+    tool_name,
+)
 from .detection import _detect_hf_url, is_hf_commit_sha
 from .markdown import (
     _TRUST_ADVISORY,
@@ -204,12 +210,10 @@ async def _hf_request(
         await _hf_limiter.wait()
 
         try:
-            async with httpx.AsyncClient(
-                timeout=30.0, follow_redirects=True,
-            ) as client:
-                response = await client.get(
-                    url, headers=_hf_headers(), params=params,
-                )
+            response = await guarded_fetch(
+                url, headers=_hf_headers(), params=params,
+                timeout=30.0,
+            )
         except httpx.TimeoutException:
             return "Error: HuggingFace API request timed out."
         except httpx.RequestError as e:

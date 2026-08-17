@@ -28,7 +28,6 @@ from .common import (
     _classify_content_type,
     _resolve_and_check,
     check_url_scheme,
-    guarded_client,
 )
 from .discourse import _detect_discourse_headers
 from .markdown import (
@@ -293,65 +292,71 @@ async def _render_js(
     # --- Content-type pre-check (skip browser for non-HTML) ---
     if not actions:
         try:
-            async with guarded_client(follow_redirects=True, timeout=10.0) as client:
-                head_resp = await client.head(url, headers=_FETCH_HEADERS)
-                head_resp.raise_for_status()
+            # guarded_fetch rather than a bare client, so the pre-check
+            # inherits the same address pinning and wall-clock deadline as the
+            # body fetch below.  web_fetch_direct runs check_url_ssrf before
+            # dispatching here, so url is already SSRF-validated; the sibling
+            # call below carries the same suppression for the same contract.
+            head_resp = await guarded_fetch(  # nosemgrep: ssrf-check-precedes-outbound-fetch
+                url, method="HEAD", headers=_FETCH_HEADERS, timeout=10.0,
+            )
+            head_resp.raise_for_status()
 
-                # Discourse detection — avoid launching Playwright
+            # Discourse detection — avoid launching Playwright
+            try:
+                if _detect_discourse_headers(head_resp.headers):
+                    result = await _discourse_fast_path(url, head_resp.headers, max_tokens)
+                    if result is not None:
+                        if want_slicing:
+                            return _dispatch_slicing(
+                                url, search, slices,
+                                slices_list if slices is not None else [],
+                                max_tokens=max_tokens, source_url=source_url,
+                                warning=fragment_warning,
+                                fallback=result,
+                            )
+                        return result
+            except Exception:
+                logger.debug("Discourse pre-check failed for %s; continuing", url, exc_info=True)
+
+            ct = head_resp.headers.get("content-type", "")
+            content_kind = _classify_content_type(ct)
+
+            if content_kind is not None and content_kind != "html":
+                # Route the body fetch through guarded_fetch so a raw
+                # JSON/XML payload gets the same size cap and wall-clock
+                # deadline the static web_fetch_direct path applies.
+                # web_fetch_direct runs check_url_ssrf before dispatching
+                # here, so url is already SSRF-validated.
                 try:
-                    if _detect_discourse_headers(head_resp.headers):
-                        result = await _discourse_fast_path(url, head_resp.headers, max_tokens)
-                        if result is not None:
-                            if want_slicing:
-                                return _dispatch_slicing(
-                                    url, search, slices,
-                                    slices_list if slices is not None else [],
-                                    max_tokens=max_tokens, source_url=source_url,
-                                    warning=fragment_warning,
-                                    fallback=result,
-                                )
-                            return result
-                except Exception:
-                    logger.debug("Discourse pre-check failed for %s; continuing", url, exc_info=True)
-
-                ct = head_resp.headers.get("content-type", "")
-                content_kind = _classify_content_type(ct)
-
-                if content_kind is not None and content_kind != "html":
-                    # Route the body fetch through guarded_fetch so a raw
-                    # JSON/XML payload gets the same size cap and wall-clock
-                    # deadline the static web_fetch_direct path applies.
-                    # web_fetch_direct runs check_url_ssrf before dispatching
-                    # here, so url is already SSRF-validated.
-                    try:
-                        get_resp = await guarded_fetch(  # nosemgrep: ssrf-check-precedes-outbound-fetch
-                            url, headers=_FETCH_HEADERS,
-                        )
-                    except ResponseTooLarge as e:
-                        return f"Error: Response too large for {url} — {e}"
-                    get_resp.raise_for_status()
-                    text = get_resp.text.strip()
-                    if not text:
-                        return f"Error: No content extracted from {url}"
-
-                    title = url.rsplit("/", 1)[-1] or "Untitled"
-                    skip_warning = f"Content-type is {content_kind}; JavaScript rendering was skipped"
-
-                    text, truncation_hint = _apply_hard_truncation(
-                        text, max_tokens,
-                        hint_prefix="Full content",
-                        hint_suffix="Use max_tokens to adjust.",
+                    get_resp = await guarded_fetch(  # nosemgrep: ssrf-check-precedes-outbound-fetch
+                        url, headers=_FETCH_HEADERS,
                     )
+                except ResponseTooLarge as e:
+                    return f"Error: Response too large for {url} — {e}"
+                get_resp.raise_for_status()
+                text = get_resp.text.strip()
+                if not text:
+                    return f"Error: No content extracted from {url}"
 
-                    warnings = [skip_warning, fragment_warning] if fragment_warning else skip_warning
-                    fm = _build_frontmatter({
-                        "source": source_url,
-                        "trust": _TRUST_ADVISORY,
-                        "warning": warnings,
-                        "content_type": content_kind,
-                        "truncated": truncation_hint,
-                    })
-                    return fm + "\n\n" + _fence_content(text, title=title)
+                title = url.rsplit("/", 1)[-1] or "Untitled"
+                skip_warning = f"Content-type is {content_kind}; JavaScript rendering was skipped"
+
+                text, truncation_hint = _apply_hard_truncation(
+                    text, max_tokens,
+                    hint_prefix="Full content",
+                    hint_suffix="Use max_tokens to adjust.",
+                )
+
+                warnings = [skip_warning, fragment_warning] if fragment_warning else skip_warning
+                fm = _build_frontmatter({
+                    "source": source_url,
+                    "trust": _TRUST_ADVISORY,
+                    "warning": warnings,
+                    "content_type": content_kind,
+                    "truncated": truncation_hint,
+                })
+                return fm + "\n\n" + _fence_content(text, title=title)
         except Exception:
             # HEAD failed or ambiguous — fall through to Playwright
             logger.debug("content-type pre-check failed for %s; falling through to Playwright", url, exc_info=True)

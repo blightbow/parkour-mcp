@@ -118,7 +118,10 @@ class _FakeClient:
         self._responses = list(responses)
         self.requested: list[str] = []
 
-    async def get(self, url: str, headers=None):
+    async def request(self, _method, url: str, headers=None):
+        # _transport dispatches through request() so it can issue HEAD; the
+        # fakes carry the same surface or every call raises AttributeError
+        # and arrives as a transport failure instead of the case under test.
         self.requested.append(url)
         if not self._responses:
             raise AssertionError(f"no fake response queued for {url}")
@@ -461,7 +464,7 @@ class TestGuardedFetch:
             return ["93.184.216.34"]
 
         class _Boom:
-            async def get(self, url, headers=None):
+            async def request(self, _method, url, headers=None):
                 raise RuntimeError("connection reset")
 
         monkeypatch.setattr(_transport, "_resolve_and_check", _check)
@@ -477,7 +480,7 @@ class TestGuardedFetch:
             return ["93.184.216.34"]
 
         class _TooBig:
-            async def get(self, url, headers=None):
+            async def request(self, _method, url, headers=None):
                 raise ResponseTooLarge("nope")
 
         monkeypatch.setattr(_transport, "_resolve_and_check", _check)

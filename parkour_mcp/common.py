@@ -236,8 +236,7 @@ async def _depsdev_get(path: str) -> dict | str:
     await _depsdev_limiter.wait()
     url = f"{_DEPSDEV_BASE}{path}"
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.get(url, headers=_API_HEADERS)
+        resp = await guarded_fetch(url, headers=_API_HEADERS, timeout=15.0)
     except httpx.TimeoutException:
         return "Error: deps.dev API request timed out."
     except httpx.RequestError as exc:
@@ -758,6 +757,8 @@ class ResponseTooLarge(FetchError):
 async def guarded_fetch(
     url: str,
     *,
+    method: str = "GET",
+    params: dict | None = None,
     headers: dict[str, str] | None = None,
     timeout: float = 30.0,
     max_bytes: int | None = _MAX_RESPONSE_BYTES,
@@ -824,15 +825,23 @@ async def guarded_fetch(
         httpx.HTTPStatusError: non-2xx status (caller must opt in via raise_for_status)
         httpx.RequestError: connection / DNS / TLS failure
     """
+    # Honest identification is the default.  Every caller of this function is
+    # now a fixed-host API path (the generic browser-facing path moved to
+    # `_transport.py`), and those identify rather than impersonate; see the
+    # header-selection policy above `_FETCH_HEADERS`.  A caller that genuinely
+    # needs the browser identity passes it explicitly, which makes the lie a
+    # visible decision at the call site rather than an inherited default.
     if headers is None:
-        headers = dict(_FETCH_HEADERS)
+        headers = dict(_API_HEADERS)
 
     async def _attempt(http2: bool) -> httpx.Response:
         async with guarded_client(
             follow_redirects=follow_redirects,
             timeout=timeout,
             http2=http2,
-        ) as client, client.stream("GET", url, headers=headers) as resp:
+        ) as client, client.stream(
+            method, url, headers=headers, params=params,
+        ) as resp:
             # Layer 1: Content-Length gate
             if max_bytes is not None:
                 cl = resp.headers.get("content-length")

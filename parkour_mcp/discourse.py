@@ -25,7 +25,7 @@ from .common import (
     _API_HEADERS,
     RateLimiter,
     check_url_scheme,
-    guarded_client,
+    guarded_fetch,
     proxy_warning,
     tool_name,
 )
@@ -125,13 +125,14 @@ async def _discourse_get(
 ) -> httpx.Response:
     """Rate-limited GET request to a Discourse endpoint."""
     await _get_limiter(hostname).wait()
-    # guarded_client, not a bare AsyncClient: the host here comes from the
+    # guarded_fetch, not a bare AsyncClient: the host here comes from the
     # caller, so the destination needs the same address check the generic
-    # fetch path applies.
-    async with guarded_client(follow_redirects=True, timeout=30.0) as client:
-        resp = await client.get(url, headers=_API_HEADERS, params=params)
-        resp.raise_for_status()
-        return resp
+    # fetch path applies, and the same wall-clock deadline.
+    resp = await guarded_fetch(
+        url, headers=_API_HEADERS, params=params, timeout=30.0,
+    )
+    resp.raise_for_status()
+    return resp
 
 
 async def _fetch_topic(

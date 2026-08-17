@@ -38,7 +38,7 @@ from ipaddress import ip_address
 from typing import Any
 from urllib.parse import urljoin, urlsplit
 
-from wreq import Client, DnsOptions, Emulation
+from wreq import Client, DnsOptions, Emulation, Method
 from wreq import exceptions as wreq_exceptions
 from wreq.redirect import Policy
 
@@ -208,6 +208,19 @@ def build_client(
     )
 
 
+def _wreq_method(method: str) -> Method:
+    """Map an HTTP method name to wreq's ``Method`` enum.
+
+    wreq takes the enum rather than a string, so an unsupported verb fails
+    here with the name in the message instead of as a bare TypeError from the
+    Rust boundary.
+    """
+    try:
+        return getattr(Method, method.upper())
+    except AttributeError as exc:
+        raise TransportFailure(f"Unsupported HTTP method: {method}") from exc
+
+
 def _host_port(url: str) -> tuple[str, int]:
     parts = urlsplit(url)
     host = parts.hostname
@@ -310,6 +323,7 @@ def _version_string(version: Any) -> str:
 async def guarded_fetch(
     url: str,
     *,
+    method: str = "GET",
     headers: dict[str, str] | None = None,
     timeout: float = 30.0,
     max_bytes: int | None = _MAX_RESPONSE_BYTES,
@@ -347,7 +361,12 @@ async def guarded_fetch(
     try:
         async with asyncio.timeout(deadline):
             return await _follow(
-                url, request_headers, timeout, max_bytes, follow_redirects
+                url,
+                method=method,
+                headers=request_headers,
+                timeout=timeout,
+                max_bytes=max_bytes,
+                follow_redirects=follow_redirects,
             )
     except TimeoutError as exc:
         raise FetchTimeout(
@@ -357,6 +376,8 @@ async def guarded_fetch(
 
 async def _follow(
     url: str,
+    *,
+    method: str,
     headers: dict[str, str],
     timeout: float,
     max_bytes: int | None,
@@ -374,7 +395,9 @@ async def _follow(
             pin={host: validated}, follow_redirects=False, timeout=timeout
         )
         try:
-            response = await client.get(current, headers=headers)
+            response = await client.request(
+                _wreq_method(method), current, headers=headers,
+            )
         except FetchError:
             # Already in our vocabulary (a guard refusal, not a network fault).
             raise

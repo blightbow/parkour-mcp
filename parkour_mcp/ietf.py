@@ -6,11 +6,17 @@ import re
 import xml.etree.ElementTree as ET
 from typing import Annotated
 
-import httpx
 from defusedxml.ElementTree import fromstring as _safe_fromstring
 from pydantic import Field
 
-from .common import _API_HEADERS, _API_USER_AGENT, RateLimiter, s2_enabled, tool_name
+from .common import (
+    _API_HEADERS,
+    _API_USER_AGENT,
+    RateLimiter,
+    guarded_fetch,
+    s2_enabled,
+    tool_name,
+)
 from .detection import _detect_ietf_url
 from .doi import fetch_formatted_citation
 from .markdown import (
@@ -58,12 +64,13 @@ async def _fetch_rfc_metadata(number: int) -> dict | None:
     """
     url = f"https://www.rfc-editor.org/rfc/rfc{number}.json"
     try:
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(url, headers=_API_HEADERS, timeout=15.0)
-            if resp.status_code == 404:
-                return None
-            resp.raise_for_status()
-            return resp.json()
+        resp = await guarded_fetch(
+            url, headers=_API_HEADERS, timeout=15.0,
+        )
+        if resp.status_code == 404:
+            return None
+        resp.raise_for_status()
+        return resp.json()
     except Exception:
         logger.debug("RFC Editor fetch failed for RFC %d", number, exc_info=True)
         return None
@@ -82,16 +89,15 @@ async def _fetch_datatracker_doc(name: str) -> dict | None:
     await _datatracker_limiter.wait()
     url = f"https://datatracker.ietf.org/doc/{name}/doc.json"
     try:
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(
-                url,
-                headers={"User-Agent": _API_USER_AGENT, "Accept": "application/json"},
-                timeout=15.0,
-            )
-            if resp.status_code == 404:
-                return None
-            resp.raise_for_status()
-            return resp.json()
+        resp = await guarded_fetch(
+            url,
+            headers={"User-Agent": _API_USER_AGENT, "Accept": "application/json"},
+            timeout=15.0,
+        )
+        if resp.status_code == 404:
+            return None
+        resp.raise_for_status()
+        return resp.json()
     except Exception:
         logger.debug("Datatracker fetch failed for %s", name, exc_info=True)
         return None
@@ -133,21 +139,21 @@ async def _search_rfcs(
 
     url = "https://datatracker.ietf.org/api/v1/doc/document/"
     try:
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(
-                url,
-                params=params,
-                headers={"User-Agent": _API_USER_AGENT, "Accept": "application/json"},
-                timeout=15.0,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            objects = data.get("objects") or []
-            total = data.get("meta", {}).get("total_count", 0)
-            return objects, total
+        resp = await guarded_fetch(
+            url,
+            params=params,
+            headers={"User-Agent": _API_USER_AGENT, "Accept": "application/json"},
+            timeout=15.0,
+        )
+        resp.raise_for_status()
+        data = resp.json()
     except Exception:
         logger.debug("Datatracker search failed for %r", query, exc_info=True)
         return [], 0
+    else:
+        objects = data.get("objects") or []
+        total = data.get("meta", {}).get("total_count", 0)
+        return objects, total
 
 
 # ---------------------------------------------------------------------------
@@ -178,12 +184,13 @@ async def _resolve_subseries(ref: str) -> str | None:
     )
 
     try:
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(bibxml_url, headers=_API_HEADERS, timeout=15.0)
-            if resp.status_code == 404:
-                return None
-            resp.raise_for_status()
-            xml_text = resp.text
+        resp = await guarded_fetch(
+            bibxml_url, headers=_API_HEADERS, timeout=15.0,
+        )
+        if resp.status_code == 404:
+            return None
+        resp.raise_for_status()
+        xml_text = resp.text
     except Exception:
         logger.debug("BibXML fetch failed for %s", ref, exc_info=True)
         return None

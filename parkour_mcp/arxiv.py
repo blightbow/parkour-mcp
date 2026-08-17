@@ -9,7 +9,13 @@ import httpx
 from defusedxml.ElementTree import fromstring as _safe_fromstring
 from pydantic import Field
 
-from .common import _API_USER_AGENT, RateLimiter, s2_enabled, tool_name
+from .common import (
+    _API_USER_AGENT,
+    RateLimiter,
+    guarded_fetch,
+    s2_enabled,
+    tool_name,
+)
 from .detection import _detect_arxiv_url, _strip_version
 from .doi import (
     _alt_dois_from_relations,
@@ -138,10 +144,10 @@ async def _arxiv_request(params: dict) -> list[dict] | str:
         await _arxiv_limiter.wait()
 
         try:
-            async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
-                response = await client.get(
-                    ARXIV_API_URL, headers=_ARXIV_HEADERS, params=params,
-                )
+            response = await guarded_fetch(
+                ARXIV_API_URL, headers=_ARXIV_HEADERS, params=params,
+                timeout=30.0,
+            )
         except httpx.TimeoutException:
             return "Error: arXiv API request timed out."
         except httpx.RequestError as e:
@@ -326,11 +332,13 @@ async def _check_html_available(arxiv_id: str) -> bool:
     """Check whether an arXiv HTML render exists for the given paper ID."""
     html_url = f"https://arxiv.org/html/{arxiv_id}"
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            head = await client.head(html_url)
-            return head.status_code == 200
+        head = await guarded_fetch(
+            html_url, method="HEAD", timeout=10.0,
+        )
     except httpx.RequestError:
         return False
+    else:
+        return head.status_code == 200
 
 
 async def _fetch_arxiv_paper(arxiv_id: str, *, _pdf_url: bool = False) -> str:

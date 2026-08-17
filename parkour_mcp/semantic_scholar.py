@@ -8,7 +8,13 @@ from typing import Annotated
 import httpx
 from pydantic import Field
 
-from .common import _API_HEADERS, RateLimiter, load_credential, tool_name
+from .common import (
+    _API_HEADERS,
+    RateLimiter,
+    guarded_fetch,
+    load_credential,
+    tool_name,
+)
 from .detection import _detect_s2_url
 from .doi import (
     _alt_dois_from_relations,
@@ -159,8 +165,10 @@ async def _s2_request(path: str, params: dict | None = None) -> dict | str:
         await _s2_limiter.wait()
 
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.get(url, headers=_s2_headers(), params=params)
+            response = await guarded_fetch(
+                url, headers=_s2_headers(), params=params,
+                timeout=30.0,
+            )
         except httpx.TimeoutException:
             return "Error: Semantic Scholar API request timed out."
         except httpx.RequestError as e:

@@ -14,9 +14,10 @@ from pydantic import Field
 
 from .common import (
     _API_HEADERS,
+    _MAX_SECTIONS_RESPONSE_BYTES,
     BlockedAddress,
     RateLimiter,
-    guarded_client,
+    guarded_fetch,
     proxy_warning,
     tool_name,
 )
@@ -180,35 +181,34 @@ async def _probe_api_base(base_url: str, page_title: str = "") -> _ApiProbe:
         params |= {"titles": page_title, "prop": "info"}
 
     best: _ApiProbe | None = None
-    # guarded_client, not a bare AsyncClient: `base_url` reaches here from the
+    # guarded_fetch, not a bare AsyncClient: `base_url` reaches here from the
     # caller's `wiki` or `title`, so this probe picks its own destination.
-    async with guarded_client(timeout=10.0, follow_redirects=True) as client:
-        for api_path in _MEDIAWIKI_API_PATHS:
-            api_base = base_url + api_path
-            try:
-                resp = await client.get(
-                    api_base, params=params, headers=_API_HEADERS,
-                )
-            except BlockedAddress:
-                # Not the same fact as "this endpoint is not MediaWiki".
-                # Swallowing it would report a refused destination as an
-                # unrecognized wiki and try the next API path against a host
-                # we already declined to contact.
-                raise
-            except Exception as e:
-                logger.debug(
-                    "MediaWiki siteinfo probe failed for %s", api_base, exc_info=True
-                )
-                probe = _ApiProbe(
-                    "unreachable", api_base,
-                    detail=f"could not reach {api_base} ({type(e).__name__})",
-                )
-            else:
-                probe = _classify_api_response(api_base, resp)
+    for api_path in _MEDIAWIKI_API_PATHS:
+        api_base = base_url + api_path
+        try:
+            resp = await guarded_fetch(
+                api_base, params=params, headers=_API_HEADERS, timeout=10.0,
+            )
+        except BlockedAddress:
+            # Not the same fact as "this endpoint is not MediaWiki".
+            # Swallowing it would report a refused destination as an
+            # unrecognized wiki and try the next API path against a host
+            # we already declined to contact.
+            raise
+        except Exception as e:
+            logger.debug(
+                "MediaWiki siteinfo probe failed for %s", api_base, exc_info=True
+            )
+            probe = _ApiProbe(
+                "unreachable", api_base,
+                detail=f"could not reach {api_base} ({type(e).__name__})",
+            )
+        else:
+            probe = _classify_api_response(api_base, resp)
 
-            if probe.state == "found":
-                return probe
-            best = probe if best is None else _better_probe(best, probe)
+        if probe.state == "found":
+            return probe
+        best = probe if best is None else _better_probe(best, probe)
 
     return best or _ApiProbe(
         "absent", detail=f"no API path was tried on {base_url}",
@@ -280,26 +280,31 @@ async def _fetch_mediawiki_page(
     Returns {title, html, sections_meta} or None.
     """
     await _mediawiki_limiter.wait()
-    async with guarded_client(timeout=30.0, follow_redirects=True) as client:
-        resp = await client.get(
-            api_base,
-            params={
-                "action": "parse",
-                "page": page_title,
-                "format": "json",
-                "prop": "text|displaytitle|sections",
-            },
-            headers=_API_HEADERS,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        parse = data.get("parse", {})
+    # The one MediaWiki call that returns a document rather than metadata, so
+    # it gets the sections-path ceiling instead of the 5 MiB default: a
+    # monolithic article legitimately runs to tens of megabytes, and the
+    # smaller cap would refuse exactly the pages worth slicing.
+    resp = await guarded_fetch(
+        api_base,
+        params={
+            "action": "parse",
+            "page": page_title,
+            "format": "json",
+            "prop": "text|displaytitle|sections",
+        },
+        headers=_API_HEADERS,
+        timeout=30.0,
+        max_bytes=_MAX_SECTIONS_RESPONSE_BYTES,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    parse = data.get("parse", {})
 
-        return {
-            "title": _clean_display_title(parse.get("displaytitle", page_title)),
-            "html": parse.get("text", {}).get("*", ""),
-            "sections_meta": parse.get("sections", []),
-        }
+    return {
+        "title": _clean_display_title(parse.get("displaytitle", page_title)),
+        "html": parse.get("text", {}).get("*", ""),
+        "sections_meta": parse.get("sections", []),
+    }
 
 
 def _resolve_citeref_target(soup, target_id: str) -> dict | None:
@@ -780,10 +785,11 @@ async def _search_mediawiki(
         "srprop": "snippet|size|wordcount|timestamp",
         "format": "json",
     }
-    async with guarded_client(timeout=15.0, follow_redirects=True) as client:
-        resp = await client.get(api_base, params=params, headers=_API_HEADERS)
-        resp.raise_for_status()
-        data = resp.json()
+    resp = await guarded_fetch(
+        api_base, params=params, headers=_API_HEADERS, timeout=15.0,
+    )
+    resp.raise_for_status()
+    data = resp.json()
 
     query_data = data.get("query", {})
     # `searchinfo` is a CirrusSearch courtesy, not a guarantee: Fandom's
