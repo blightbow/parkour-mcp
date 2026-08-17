@@ -1036,13 +1036,24 @@ class _HttpxBackedClient:
 
 
 @pytest.fixture(autouse=True)
-def _wreq_via_httpx(monkeypatch):
+def _wreq_via_httpx(request, monkeypatch):
     """Route the generic fetch path through httpx so respx keeps working.
 
     Autouse so no test can reach the real network through `_transport` by
     omission.  Tests that want to drive the transport directly re-patch these
     same two names and win, since their own fixture resolves later.
+
+    **Not applied to tests marked ``live``.**  Those exist to exercise the real
+    wreq stack against real origins, and standing httpx in front of it makes
+    them assert nothing about the transport they are named after: the
+    Cloudflare case passes because httpx clears that zone over HTTP/1.1, and
+    both pinning cases report ``pinned=False`` because httpx exposes no peer
+    address.  The suite is deselected by default, so this failed silently as
+    three green tests until ``just tag`` ran the live suite.
     """
+    if request.node.get_closest_marker("live"):
+        return
+
     monkeypatch.setattr(
         _transport_mod, "build_client", lambda **_kwargs: _HttpxBackedClient()
     )
