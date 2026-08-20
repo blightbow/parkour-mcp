@@ -280,6 +280,45 @@ matters; nobody has.
 - **Why deferred**: When Kagi ships `/summarize` on v1, the natural follow-up is one focused commit: rewrite `summarize()` against the v1 endpoint, decide whether v1's new billing signal warrants a similar lockout (v1 dropped `meta.api_balance` and the replacement billing flow hasn't shipped), re-register the tool in `__init__.py`, and delete the entire v0 island (kagiapi import + dep, `get_client`, balance helpers, v0 error parser) in the same pass. Removing the island now would force a stub or skip-marker on the dormant function, churn we'd undo on re-registration.
 - **How to evaluate**: Watch the Kagi API changelog and the Kagi Discord `#api` forum for `/v1/summarize` landing. On landing, do the migration above and remove this entry.
 
+## `manifest.json` — credential fields declare `sensitive: false` on purpose
+
+- **Location**: `manifest.json` `user_config` — `KAGI_API_KEY`, `GITHUB_TOKEN`,
+  `S2_API_KEY`. All three are secrets and all three declare
+  `"sensitive": false`.
+- **Issue**: `sensitive: true` is the correct declaration and buys two things
+  per the MCPB spec — the settings UI masks the input, and the value is stored
+  encrypted against an Electron `safeStorage` key held in the OS keychain
+  (visible on macOS as the `Claude Safe Storage` keychain item). But Claude
+  Desktop on Windows forwards the *stored ciphertext* into the server's
+  environment instead of decrypting it first
+  ([anthropics/claude-code#78296](https://github.com/anthropics/claude-code/issues/78296),
+  open, labeled `bug` / `platform:windows` / `area:mcp` / `area:desktop`). The
+  server receives `KAGI_API_KEY=__encrypted__:djEw…`, sends it as a bearer
+  token, and reports "Invalid API key" while the settings UI plainly shows a
+  key. Non-sensitive fields in the same `user_config` resolve correctly, which
+  is what makes flipping the flag a working route around it.
+- **Why deferred**: the flag is presently worse than useless on Windows — it
+  is the difference between a key that works and one that cannot. The cost is
+  real but bounded: the value is no longer masked in the settings UI, and it
+  is stored as plaintext rather than ciphertext. It is *not* stored more
+  loosely — `Claude Extensions Settings/` is `0700` with per-extension files
+  at `0600` either way, which is stricter than the `~/.config/parkour/`
+  fallback this project also supports. The masking loss was accepted
+  explicitly by the maintainer.
+- **How to evaluate**: watch #78296. When Claude Desktop decrypts `sensitive`
+  values before `${user_config.*}` substitution, restore `"sensitive": true`
+  on all three fields and delete this entry.
+  `tests/test_manifest.py::TestCredentialSensitivity` pins the deviation so
+  the restore is a deliberate act rather than a silent drift, and that test
+  is deleted in the same change.
+- **Upgrade caveat, unverified**: a user who set these fields while the
+  manifest declared them `sensitive: true` may still have an
+  `__encrypted__:` blob in `Claude Extensions Settings/<ext>.json`. Whether
+  Claude Desktop rewrites that value when the declaration changes is untested
+  — nobody here has a Windows box with a pre-existing install. If it does not,
+  those users keep receiving ciphertext and `common.py#clean_env` accepts it,
+  because it screens for the `${` sentinel and not this one.
+
 ## Structural tradeoffs
 
 ### `<header>` stripped from all pages — loses real h1s on spec docs
