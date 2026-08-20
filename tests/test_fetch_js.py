@@ -517,3 +517,329 @@ class TestRenderNavigationContract:
             "https://ok.example.com/page", requires_js=True
         )
         assert not result.startswith("Error: HTTP")
+
+
+class TestUnusableBrowserDiagnosis:
+    """"Not installed" and "installed at the wrong revision" need different
+    fixes and look identical through ``executable_path``, which reports a path
+    that simply is not there.  Reporting the second as the first sends the
+    reader hunting for a missing download instead of a version skew."""
+
+    class _FakeBrowserType:
+        def __init__(self, path):
+            self._path = path
+
+        @property
+        def executable_path(self):
+            if self._path is None:
+                raise RuntimeError("engine cannot be placed")
+            return self._path
+
+    def _browser_info(self, root, expected, present):
+        """Build a browser_info map over a fake Playwright registry root."""
+        for name, revisions in present.items():
+            for revision in revisions:
+                (root / f"{name}-{revision}").mkdir(parents=True, exist_ok=True)
+        return {
+            name: (
+                name.title(),
+                self._FakeBrowserType(
+                    None
+                    if revision is None
+                    else str(root / f"{name}-{revision}" / "pw_run.sh")
+                ),
+            )
+            for name, revision in expected.items()
+        }
+
+    def _describe(self, *args):
+        mod = importlib.import_module("parkour_mcp.fetch_js")
+        return mod._describe_unusable_browsers(*args)
+
+    def test_stale_revisions_are_named_not_reported_as_absent(self, tmp_path):
+        """The real failure: browsers on disk, from an older Playwright.
+
+        Both revisions here are genuine — ``webkit-2227`` ships with
+        Playwright v1.57.0 and ``chromium-1228`` with v1.61.x, against a
+        v1.62.0 package wanting 2336 and 1234.
+        """
+        info = self._browser_info(
+            tmp_path / "ms-playwright",
+            {"webkit": "2336", "chromium": "1234"},
+            {"webkit": ["2227"], "chromium": ["1228"]},
+        )
+        message = self._describe(info)
+        assert "No Playwright browser installed" not in message
+        assert "needs webkit-2336, found webkit-2227" in message
+        assert "needs chromium-1234, found chromium-1228" in message
+
+    def test_the_fix_command_names_the_stale_engines(self, tmp_path):
+        """The message has to be actionable without a second diagnosis step."""
+        info = self._browser_info(
+            tmp_path / "ms-playwright",
+            {"webkit": "2336", "chromium": "1234"},
+            {"webkit": ["2227"]},
+        )
+        assert "playwright install webkit" in self._describe(info)
+
+    def test_an_empty_registry_still_reports_absence(self, tmp_path):
+        """A fresh machine genuinely has nothing, and needs the install hint."""
+        info = self._browser_info(
+            tmp_path / "ms-playwright", {"webkit": "2336"}, {}
+        )
+        message = self._describe(info)
+        assert "No Playwright browser installed" in message
+        assert "playwright install webkit" in message
+
+    def test_a_current_engine_beside_a_stale_one_is_not_reported(self, tmp_path):
+        """Only engines whose wanted revision is absent are stale.
+
+        ``playwright install`` leaves old revisions in place, so the wanted
+        one sitting beside its predecessors is the normal post-upgrade state.
+        """
+        info = self._browser_info(
+            tmp_path / "ms-playwright",
+            {"webkit": "2336", "chromium": "1234"},
+            {"webkit": ["2227", "2336"], "chromium": ["1228"]},
+        )
+        message = self._describe(info)
+        assert "needs webkit" not in message
+        assert "needs chromium-1234, found chromium-1228" in message
+        assert "playwright install chromium" in message
+
+    def test_the_remedy_works_from_any_environment(self, tmp_path):
+        """Browsers live in a shared, version-keyed cache, not in a virtualenv.
+
+        The Claude Desktop bundle has no activated environment to run a bare
+        ``playwright install`` in, so the remedy is pinned to the version and
+        runnable from anywhere.
+        """
+        info = self._browser_info(
+            tmp_path / "ms-playwright", {"webkit": "2336"}, {"webkit": ["2227"]}
+        )
+        message = self._describe(info)
+        assert "uvx --from playwright==" in message
+        assert "playwright install webkit" in message
+
+    def test_the_auto_install_flag_is_named(self, tmp_path):
+        """A caller who would rather not run a command needs to know the gate."""
+        info = self._browser_info(tmp_path / "ms-playwright", {"webkit": "2336"}, {})
+        assert "MCP_AUTO_INSTALL_BROWSER=1" in self._describe(info)
+
+    def test_an_engine_with_no_executable_path_is_skipped(self, tmp_path):
+        """Playwright refuses a path for an engine it cannot place at all."""
+        info = self._browser_info(
+            tmp_path / "ms-playwright",
+            {"webkit": "2336", "firefox": None},
+            {"webkit": ["2227"]},
+        )
+        message = self._describe(info)
+        assert "firefox" not in message
+        assert "needs webkit-2336" in message
+
+
+class TestBrowserAutoInstall:
+    """The install gate and the driver seam behind it.
+
+    ``playwright install`` has no Python implementation — it shells to a Node
+    runtime bundled inside the wheel — so the seam is what lets a browser be
+    fetched with no ``playwright`` console script on PATH.
+    """
+
+    def _mod(self):
+        return importlib.import_module("parkour_mcp.fetch_js")
+
+    def _info(self, tmp_path, expected, present):
+        for name, revisions in present.items():
+            for revision in revisions:
+                (tmp_path / f"{name}-{revision}").mkdir(parents=True, exist_ok=True)
+
+        class _FakeBrowserType:
+            def __init__(self, path):
+                self.executable_path = path
+
+        return {
+            name: (
+                name.title(),
+                _FakeBrowserType(str(tmp_path / f"{name}-{revision}" / "pw_run.sh")),
+            )
+            for name, revision in expected.items()
+        }
+
+    def test_a_skew_installs_only_the_engines_that_are_behind(self, tmp_path):
+        info = self._info(
+            tmp_path,
+            {"webkit": "2336", "chromium": "1234", "firefox": "1538"},
+            {"webkit": ["2227"], "chromium": ["1234"]},
+        )
+        assert self._mod()._engines_to_install(info) == ["webkit"]
+
+    def test_a_bare_absence_installs_only_webkit(self, tmp_path, monkeypatch):
+        """Three downloads to satisfy one render buys nothing.
+
+        webkit matches ``_detect_playwright_browser``'s footprint preference.
+        """
+        monkeypatch.delenv("PLAYWRIGHT_BROWSER", raising=False)
+        info = self._info(tmp_path, {"webkit": "2336", "chromium": "1234"}, {})
+        assert self._mod()._engines_to_install(info) == ["webkit"]
+
+    def test_playwright_browser_pins_which_engine_is_fetched(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("PLAYWRIGHT_BROWSER", "chromium")
+        info = self._info(tmp_path, {"webkit": "2336", "chromium": "1234"}, {})
+        assert self._mod()._engines_to_install(info) == ["chromium"]
+
+    def test_an_unsubstituted_manifest_template_leaves_the_gate_shut(self, monkeypatch):
+        """manifest.json passes this as ``${user_config.MCP_AUTO_INSTALL_BROWSER}``.
+
+        If Claude Desktop ever hands the template through unsubstituted, the
+        server must read it as "off" — the gate guards a ~100 MB download, so
+        the fail-safe direction is closed.
+        """
+        from parkour_mcp.common import _parse_truthy_env
+
+        mod = self._mod()
+        monkeypatch.setenv(mod._AUTO_INSTALL_ENV, "${user_config.MCP_AUTO_INSTALL_BROWSER}")
+        assert _parse_truthy_env(mod._AUTO_INSTALL_ENV) is False
+
+    def test_the_toggle_being_off_reads_as_off(self, monkeypatch):
+        """A boolean user_config left unticked substitutes as "false"."""
+        from parkour_mcp.common import _parse_truthy_env
+
+        mod = self._mod()
+        monkeypatch.setenv(mod._AUTO_INSTALL_ENV, "false")
+        assert _parse_truthy_env(mod._AUTO_INSTALL_ENV) is False
+        monkeypatch.setenv(mod._AUTO_INSTALL_ENV, "true")
+        assert _parse_truthy_env(mod._AUTO_INSTALL_ENV) is True
+
+    @pytest.mark.asyncio
+    async def test_an_unrunnable_installer_reports_rather_than_raises(
+        self, tmp_path, monkeypatch
+    ):
+        """The render path returns strings; a missing driver must not escape."""
+        mod = self._mod()
+        monkeypatch.setattr(
+            mod, "compute_driver_executable",
+            lambda: (str(tmp_path / "absent-node"), str(tmp_path / "cli.js")),
+        )
+        failure = await mod._install_browsers(["webkit"])
+        assert failure is not None
+        assert "could not run the Playwright installer" in failure
+
+
+class TestBrowserOverride:
+    """PLAYWRIGHT_BROWSER reaches us as free text.
+
+    The MCPB user_config schema has no enum type — ``additionalProperties:
+    false`` closes it to one — so the Claude Desktop settings field cannot
+    constrain the value at the UI and every typo arrives here intact.
+    """
+
+    def _mod(self):
+        return importlib.import_module("parkour_mcp.fetch_js")
+
+    def _info(self, tmp_path, present):
+        class _FakeBrowserType:
+            def __init__(self, path):
+                self.executable_path = path
+
+        for name in present:
+            (tmp_path / f"{name}-1").mkdir(parents=True, exist_ok=True)
+        return {
+            name: (name.title(), _FakeBrowserType(str(tmp_path / f"{name}-1" / "exe")))
+            for name in ("webkit", "chromium", "firefox")
+        }
+
+    @pytest.mark.parametrize("value", ["auto", "AUTO", "  auto  ", ""])
+    def test_auto_and_unset_express_no_preference(self, value, monkeypatch):
+        """The manifest ships "auto" as the default, so it must mean unset."""
+        monkeypatch.setenv("PLAYWRIGHT_BROWSER", value)
+        assert self._mod()._browser_override() == ""
+
+    @pytest.mark.parametrize("value", ["WEBKIT", " webkit ", "WebKit"])
+    def test_case_and_padding_are_forgiven(self, value, monkeypatch):
+        """A settings field invites both."""
+        monkeypatch.setenv("PLAYWRIGHT_BROWSER", value)
+        assert self._mod()._browser_override() == "webkit"
+
+    @pytest.mark.parametrize(
+        ("name", "engine"),
+        [
+            ("chrome", "chromium"),
+            ("google-chrome", "chromium"),
+            ("msedge", "chromium"),
+            ("edge", "chromium"),
+            ("chrome-canary", "chromium"),
+            ("safari", "webkit"),
+            ("gecko", "firefox"),
+            ("moz-firefox", "firefox"),
+        ],
+    )
+    def test_a_browser_name_resolves_to_the_engine_beneath_it(
+        self, name, engine, monkeypatch
+    ):
+        """Footprint fallback answered "chrome" with webkit — the engine
+        furthest from it — and did so even with chromium installed and ready.
+
+        Playwright's own CLI documents --channel as a "Chromium distribution
+        channel" over exactly these Chrome and Edge spellings, so resolving
+        them reads its vocabulary rather than guessing.
+        """
+        monkeypatch.setenv("PLAYWRIGHT_BROWSER", name)
+        preference = self._mod()._resolve_browser_preference()
+        assert preference.engine == engine
+        assert preference.warning is None
+        # A channel is not an engine; the substitution is stated, not silent.
+        assert preference.note is not None
+        assert engine in preference.note
+
+    @pytest.mark.parametrize("typo", ["webkitt", "chormium", "netscape", "opera"])
+    def test_an_unrecognized_name_warns_and_renders_anyway(self, typo, monkeypatch):
+        """Never an error: a bad preference must not refuse a fetch that works.
+
+        "opera" is Chromium-derived but is not Playwright vocabulary, which is
+        where the alias table deliberately stops.
+        """
+        monkeypatch.setenv("PLAYWRIGHT_BROWSER", typo)
+        preference = self._mod()._resolve_browser_preference()
+        assert preference.engine == ""
+        assert preference.note is None
+        assert typo in preference.warning
+        assert "auto" in preference.warning
+
+    @pytest.mark.parametrize("name", ["webkit", "chromium", "firefox"])
+    def test_an_engine_name_is_taken_as_given(self, name, monkeypatch):
+        monkeypatch.setenv("PLAYWRIGHT_BROWSER", name)
+        assert self._mod()._resolve_browser_preference() == (name, None, None)
+
+    def test_a_requested_engine_outranks_an_unrelated_skew(self, tmp_path, monkeypatch):
+        """A machine can want chromium-1234 while holding 1228 and still be
+        answering a request for firefox; the request is what must be met."""
+        monkeypatch.setenv("PLAYWRIGHT_BROWSER", "firefox")
+        mod = self._mod()
+
+        class _FakeBrowserType:
+            def __init__(self, path):
+                self.executable_path = path
+
+        (tmp_path / "chromium-1228").mkdir(parents=True)
+        info = {
+            "chromium": ("Chromium", _FakeBrowserType(str(tmp_path / "chromium-1234" / "e"))),
+            "firefox": ("Firefox", _FakeBrowserType(str(tmp_path / "firefox-1538" / "e"))),
+        }
+        assert mod._engines_to_install(info) == ["firefox"]
+        assert "playwright install firefox" in mod._describe_unusable_browsers(info)
+
+    def test_a_missing_requested_engine_is_not_silently_substituted(self, tmp_path, monkeypatch):
+        """Returning the override unchecked skipped the "none" branch, so the
+        request bypassed the diagnosis and the auto-install gate alike and
+        surfaced as a raw BrowserType.launch traceback."""
+        monkeypatch.setenv("PLAYWRIGHT_BROWSER", "firefox")
+        mod = self._mod()
+        info = self._info(tmp_path, ["webkit"])
+
+        class _FakePlaywright:
+            webkit = info["webkit"][1]
+            chromium = info["chromium"][1]
+            firefox = info["firefox"][1]
+
+        assert mod._detect_playwright_browser(_FakePlaywright()) == ("none", "None")

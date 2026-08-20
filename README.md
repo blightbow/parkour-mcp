@@ -444,6 +444,44 @@ uv run playwright install firefox
 export PLAYWRIGHT_BROWSER=chromium
 ```
 
+`auto` (the default) means "pick by the logic above". Browser names that are
+not engines resolve to the engine beneath them and say so — `chrome`,
+`msedge`, `edge` and the Chrome/Edge channel spellings become `chromium`,
+`safari` becomes `webkit`, `gecko` becomes `firefox` — because Playwright
+documents those as Chromium distribution channels, and answering `chrome`
+with WebKit would land on the engine furthest from the request.
+
+Anything else is reported in the response frontmatter and `auto` is used,
+rather than failing the fetch. Naming an engine that is real but not
+installed is an error that says so and gives the install command, instead of
+quietly rendering in a different browser than you asked for.
+
+**Automatic install (opt-in):**
+
+Browsers are not bundled with the package, and they live in a shared,
+version-keyed cache rather than inside a virtualenv — so installing from any
+environment running the same Playwright version counts for every other one,
+including a Claude Desktop extension that has no shell to run commands in:
+
+```bash
+uvx --from playwright==<version> playwright install webkit
+```
+
+To let the server fetch a missing browser itself on the first `requires_js`
+call, set:
+
+```bash
+export MCP_AUTO_INSTALL_BROWSER=1
+```
+
+Off by default: the download is roughly 100 MB, and an ordinary tool call is
+not consent for that. When it is off, a render that needs a browser reports
+which revision is missing and prints the command that installs it.
+
+In the Claude Desktop extension the same setting appears as an
+**Auto-install browser for JS rendering** checkbox under the extension's
+settings, since a bundle install has no shell to export a variable in.
+
 ### GitHub Token (optional, for GitHub tool)
 
 The GitHub tool works without authentication but shares a global 60 req/hr rate limit. For 5,000 req/hr with your own limit, configure a personal access token:

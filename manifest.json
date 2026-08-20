@@ -4,7 +4,7 @@
   "display_name": "Parkour",
   "version": "2.3.0",
   "description": "A content exploration toolkit that helps LLMs surface high signal, unsummarized web content.",
-  "long_description": "MCP server providing a content exploration and research synthesis pipeline. Uses clean first-party APIs to surface and explore web content without summarization. Integrates Kagi, Semantic Scholar, arXiv, deps.dev, IETF, GitHub, MediaWiki, Reddit, Discourse, YouTube, and DOI resolution APIs into a unified tool suite.\n\n**Note:** WebFetchIncisive's `requires_js` mode (for JavaScript-rendered pages) needs a one-time browser install. Run `playwright install webkit` from any terminal. Everything else works without this step.",
+  "long_description": "MCP server providing a content exploration and research synthesis pipeline. Uses clean first-party APIs to surface and explore web content without summarization. Integrates Kagi, Semantic Scholar, arXiv, deps.dev, IETF, GitHub, MediaWiki, Reddit, Discourse, YouTube, and DOI resolution APIs into a unified tool suite.\n\n**Note:** WebFetchIncisive's `requires_js` mode (for JavaScript-rendered pages) needs a one-time browser download. Tick **Auto-install browser for JS rendering** below and it happens on first use; leave it off and the tool tells you which browser is missing and the exact command that installs it. Everything else works without this step.",
   "homepage": "https://github.com/blightbow/parkour-mcp",
   "icon": "parkour_mcp/assets/icon.png",
   "author": {
@@ -50,7 +50,9 @@
         "KAGI_API_KEY": "${user_config.KAGI_API_KEY}",
         "S2_API_KEY": "${user_config.S2_API_KEY}",
         "GITHUB_TOKEN": "${user_config.GITHUB_TOKEN}",
-        "MCP_CONTACT_EMAIL": "${user_config.MCP_CONTACT_EMAIL}"
+        "MCP_CONTACT_EMAIL": "${user_config.MCP_CONTACT_EMAIL}",
+        "MCP_AUTO_INSTALL_BROWSER": "${user_config.MCP_AUTO_INSTALL_BROWSER}",
+        "PLAYWRIGHT_BROWSER": "${user_config.PLAYWRIGHT_BROWSER}"
       }
     }
   },
@@ -88,6 +90,22 @@
       "description": "Optional email in API User-Agent headers. Enables CrossRef polite pool (10 req/s vs 5 req/s).",
       "sensitive": false,
       "required": false
+    },
+    "PLAYWRIGHT_BROWSER": {
+      "type": "string",
+      "title": "Browser engine for JS rendering",
+      "description": "Which browser to use for JavaScript-rendered pages: auto, webkit, chromium, or firefox. Browser names resolve to their engine, so chrome and msedge select chromium and safari selects webkit. Leave as auto to pick whichever is installed, preferring the smallest. An unrecognized value is reported and auto is used.",
+      "sensitive": false,
+      "required": false,
+      "default": "auto"
+    },
+    "MCP_AUTO_INSTALL_BROWSER": {
+      "type": "boolean",
+      "title": "Auto-install browser for JS rendering",
+      "description": "Download a missing Playwright browser (~100 MB) the first time a fetch needs JS rendering. Off by default: when off, the tool reports which browser revision is missing and the command that installs it.",
+      "sensitive": false,
+      "required": false,
+      "default": false
     }
   },
   "tools": [

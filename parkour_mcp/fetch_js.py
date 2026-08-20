@@ -7,13 +7,18 @@ resolution, the SSRF check, parameter validation, and the API-backed fast
 paths, so this module handles only what genuinely needs a browser.
 """
 
+import asyncio
 import logging
 import os
+import re
+from importlib import metadata
 from pathlib import Path
+from typing import NamedTuple
 from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
-from playwright.async_api import async_playwright
+from playwright._impl._driver import compute_driver_executable, get_driver_env
+from playwright.async_api import BrowserType, async_playwright
 
 from ._pipeline import (
     _discourse_fast_path,
@@ -26,6 +31,7 @@ from .common import (
     BlockedAddress,
     ResponseTooLarge,
     _classify_content_type,
+    _parse_truthy_env,
     _resolve_and_check,
     check_url_scheme,
 )
@@ -56,6 +62,309 @@ LIVE_APP_MARKERS = [
 ]
 
 
+# Matches the per-revision directory Playwright unpacks each engine into,
+# e.g. ``webkit-2336`` or ``chromium-1234``.  The revision is Playwright's own
+# build counter, not the browser's marketing version.
+_BROWSER_DIR_RE = re.compile(r"^(webkit|chromium|firefox)-(\d+)$")
+
+
+# The engines Playwright ships, and how each is spelled in output.  Held apart
+# from ``_browser_info`` so the names can be checked without a live Playwright
+# instance: validating PLAYWRIGHT_BROWSER is a pure string question, and
+# reaching for ``playwright.webkit`` to answer it would make every render pay
+# attribute lookups on the driver for a setting almost nobody sets.
+_ENGINE_DISPLAY = {"webkit": "WebKit", "chromium": "Chromium", "firefox": "Firefox"}
+
+
+def _browser_info(playwright) -> dict[str, tuple[str, BrowserType]]:
+    """Map engine name to ``(display name, Playwright browser type)``.
+
+    Single-sourced because the detector and the failure diagnosis must agree
+    on which engines exist; two literals would drift the moment one grows an
+    entry the other lacks.
+    """
+    return {
+        name: (display, getattr(playwright, name))
+        for name, display in _ENGINE_DISPLAY.items()
+    }
+
+
+def _browser_revision_state(browser_info) -> tuple[dict[str, str], dict[str, list[str]]]:
+    """Report the engine revisions Playwright wants against the ones on disk.
+
+    ``executable_path`` names the revision this Playwright build expects, so
+    the expectation is read from the path rather than from
+    ``driver/package/browsers.json`` — same source of truth the launcher uses,
+    and it stays correct if the driver layout moves.  The registry root is that
+    path's ``<engine>-<revision>`` ancestor's parent, which is where every
+    other installed revision sits too.
+
+    Returns ``(expected, installed)`` keyed by engine name.  An engine whose
+    ``executable_path`` raises is absent from both.
+    """
+    expected: dict[str, str] = {}
+    installed: dict[str, list[str]] = {}
+    for name, (_display, browser_type) in browser_info.items():
+        try:
+            exe = Path(browser_type.executable_path)
+        except Exception:
+            # Playwright refuses a path for an engine it cannot place at all.
+            logger.debug("no executable_path for %s", name, exc_info=True)
+            continue
+        for parent in exe.parents:
+            match = _BROWSER_DIR_RE.match(parent.name)
+            if not match or match.group(1) != name:
+                continue
+            expected[name] = match.group(2)
+            root = parent.parent
+            found = []
+            if root.is_dir():
+                found = sorted(
+                    m.group(2)
+                    for m in (_BROWSER_DIR_RE.match(d.name) for d in root.iterdir())
+                    if m and m.group(1) == name
+                )
+            installed[name] = found
+            break
+    return expected, installed
+
+
+# Accepted by PLAYWRIGHT_BROWSER, and the default the manifest ships, meaning
+# "no preference".  A sentinel is needed because the MCPB user_config schema
+# has no enum type (``additionalProperties: false`` closes it to one), so the
+# setting reaches us as free text and "unset" and "chose auto" must look alike.
+_AUTO_BROWSER = "auto"
+
+
+# Browser names that are not Playwright engines but identify one without
+# ambiguity.  Playwright's own CLI documents --channel as "Chromium
+# distribution channel, 'chrome', 'chrome-beta', 'msedge-dev', etc", so every
+# Chrome and Edge spelling resolves to chromium; webkit is the engine Safari
+# is built on, and firefox is Gecko.
+#
+# Without this a caller asking for chrome fell through to footprint
+# preference, which tries webkit first — answering a request for a
+# Chrome-family browser with the engine furthest from it, and doing so even
+# when chromium was installed and ready.  A channel is not an engine and this
+# cannot honor the branded build, only the engine beneath it, which is why the
+# resolution is stated rather than performed silently.
+#
+# The line is Playwright's vocabulary plus the three engine identities.  Other
+# Chromium-derived brands (opera, brave, vivaldi) are deliberately absent:
+# guessing at every browser on the market is a different promise from
+# resolving the names Playwright itself uses, and the warning below already
+# names the accepted set so a caller can correct it.
+_ENGINE_ALIASES = {
+    "chrome": "chromium",
+    "chrome-beta": "chromium",
+    "chrome-canary": "chromium",
+    "chrome-dev": "chromium",
+    "chrome-for-testing": "chromium",
+    "google-chrome": "chromium",
+    "edge": "chromium",
+    "microsoft-edge": "chromium",
+    "msedge": "chromium",
+    "msedge-beta": "chromium",
+    "msedge-canary": "chromium",
+    "msedge-dev": "chromium",
+    "safari": "webkit",
+    "gecko": "firefox",
+    "moz-firefox": "firefox",
+}
+
+
+class _BrowserPreference(NamedTuple):
+    """What PLAYWRIGHT_BROWSER resolved to, and what to say about it.
+
+    ``engine`` is empty when the caller expressed no usable preference, which
+    is the signal to select by footprint.  ``note`` and ``warning`` map onto
+    the frontmatter keys of the same name: explanatory versus corrective.
+    """
+
+    engine: str
+    note: str | None
+    warning: str | None
+
+
+def _resolve_browser_preference() -> _BrowserPreference:
+    """Read PLAYWRIGHT_BROWSER and say what it means.
+
+    Three outcomes, and the middle one is why this is not a set membership
+    test.  An engine name is taken as given.  A browser name that is not an
+    engine resolves through ``_ENGINE_ALIASES`` and says so.  Anything else
+    is reported and discarded — a warning rather than an error, matching how
+    this server resolves every other unusable parameter: take the strongest
+    signal that remains and say so.  Refusing a fetch that can succeed, over
+    a preference the caller can only express as free text, would be worse;
+    so would silence, which leaves a typo rendering somewhere unannounced.
+    """
+    raw = os.environ.get("PLAYWRIGHT_BROWSER", "").strip().lower()
+    if not raw or raw == _AUTO_BROWSER:
+        return _BrowserPreference("", None, None)
+    if raw in _ENGINE_DISPLAY:
+        return _BrowserPreference(raw, None, None)
+    aliased = _ENGINE_ALIASES.get(raw)
+    if aliased:
+        return _BrowserPreference(
+            aliased,
+            f"PLAYWRIGHT_BROWSER={raw!r} names a browser rather than a Playwright "
+            f"engine; using {aliased}, the engine it is built on.",
+            None,
+        )
+    return _BrowserPreference(
+        "",
+        None,
+        f"PLAYWRIGHT_BROWSER={raw!r} names no Playwright engine; expected one of "
+        f"{', '.join(sorted(_ENGINE_DISPLAY))} or {_AUTO_BROWSER!r}. "
+        "Selecting a browser by footprint instead.",
+    )
+
+
+def _browser_override() -> str:
+    """The engine PLAYWRIGHT_BROWSER selects, or empty for no preference."""
+    return _resolve_browser_preference().engine
+
+
+
+# Opt-in: fetch a missing browser on demand instead of only reporting it.
+# Off by default because the download is ~100 MB and would otherwise be
+# triggered by an ordinary tool call, which is not what a caller asking for a
+# rendered page is consenting to.  Named for the MCP_ family that already
+# carries this server's opt-in gates (MCP_ALLOW_PRIVATE_IPS), and read at call
+# time rather than import time so the setting does not need a server restart.
+_AUTO_INSTALL_ENV = "MCP_AUTO_INSTALL_BROWSER"
+
+# Generous: a cold browser download is tens of megabytes over a CDN, and the
+# alternative to waiting is the error this exists to avoid.
+_INSTALL_TIMEOUT_S = 600
+
+
+def _playwright_version() -> str:
+    try:
+        return metadata.version("playwright")
+    except metadata.PackageNotFoundError:  # pragma: no cover - playwright is required
+        return "?"
+
+
+def _engines_to_install(browser_info) -> list[str]:
+    """Pick the engines worth fetching for the current failure.
+
+    An explicit PLAYWRIGHT_BROWSER wins outright: the caller named an engine,
+    and fetching a different one leaves the request unmet however good the
+    reason.  It is checked before the skew because an unrelated engine can be
+    behind at the same time — a machine wanting chromium-1234 while holding
+    1228 would otherwise be told to install chromium in answer to a request
+    for firefox.
+
+    Failing that, a skew names the engines actually behind, and a bare absence
+    names only webkit, matching ``_detect_playwright_browser``'s footprint
+    preference.  Installing all three to satisfy a single render would be
+    three downloads for no gain.
+    """
+    override = _browser_override()
+    if override in browser_info:
+        return [override]
+    expected, installed = _browser_revision_state(browser_info)
+    stale = sorted(
+        name for name, rev in expected.items()
+        if installed.get(name) and rev not in installed[name]
+    )
+    return stale or ["webkit"]
+
+
+async def _install_browsers(engines: list[str]) -> str | None:
+    """Download *engines* through Playwright's own installer.
+
+    ``playwright install`` has no Python implementation — ``playwright
+    __main__`` shells to a Node runtime bundled inside the wheel
+    (``driver/node``, or ``node.exe`` on win32) running ``driver/package/
+    cli.js``, and that JS owns the download, extraction, and cache registry.
+    Driving the same two paths directly is what lets this run with no
+    ``playwright`` console script on PATH, which matters because the Claude
+    Desktop bundle has no activated environment to provide one.
+
+    The browsers land in Playwright's shared, version-keyed cache rather than
+    in any virtualenv, so the install counts for every environment on the
+    machine running the same Playwright version.
+
+    Returns None on success, or a message describing the failure.
+    """
+    executable, cli = compute_driver_executable()
+    try:
+        async with asyncio.timeout(_INSTALL_TIMEOUT_S):
+            process = await asyncio.create_subprocess_exec(
+                executable, cli, "install", "--no-progress", *engines,
+                env=get_driver_env(),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+            )
+            stdout, _ = await process.communicate()
+    except TimeoutError:
+        return f"download exceeded {_INSTALL_TIMEOUT_S}s"
+    except OSError as exc:
+        return f"could not run the Playwright installer: {exc}"
+    if process.returncode != 0:
+        tail = stdout.decode(errors="replace").strip().splitlines()[-1:] or ["no output"]
+        return f"installer exited {process.returncode}: {tail[0]}"
+    return None
+
+
+def _describe_unusable_browsers(browser_info) -> str:
+    """Explain why no engine could be used, distinguishing the two causes.
+
+    "Not installed" and "installed at the wrong revision" need different
+    fixes and look identical through ``executable_path``, which just reports a
+    path that is not there.  Saying "No Playwright browser installed" when
+    ``webkit-2227`` is sitting on disk sends the reader looking for a missing
+    download instead of a version skew, so the mismatch is named outright.
+
+    The skew is routine rather than exotic: ``playwright`` is a normal
+    dependency that rolls forward on a lock refresh, and its browsers do not
+    roll with it.  Measured across releases v1.50.0–v1.62.1, every minor bump
+    changed at least one engine revision and 2 of 11 patch bumps did too, so
+    no version range short of ``==`` keeps the two in step.
+    """
+    expected, installed = _browser_revision_state(browser_info)
+    stale = {
+        name: rev
+        for name, rev in expected.items()
+        if installed.get(name) and rev not in installed[name]
+    }
+    version = _playwright_version()
+    override = _browser_override()
+    if override in browser_info and override not in stale:
+        lines = [
+            f"Error: PLAYWRIGHT_BROWSER selects {override}, which is not installed."
+        ]
+    elif stale:
+        lines = [
+            f"Error: Playwright {version} needs browser revisions that are not installed.",
+            "The browsers on disk are from an older Playwright:",
+        ]
+        lines.extend(
+            f"  {name}: needs {name}-{rev}, "
+            f"found {', '.join(f'{name}-{i}' for i in installed[name])}"
+            for name, rev in sorted(stale.items())
+        )
+    else:
+        lines = ["Error: No Playwright browser installed."]
+    engines = _engines_to_install(browser_info)
+    it_them = "them" if len(engines) > 1 else "it"
+    lines.extend([
+        "",
+        (
+            "Browsers live in a shared, version-keyed cache, so installing from"
+            " any environment with a matching Playwright counts for this one:"
+        ),
+        f"  uvx --from playwright=={version} playwright install {' '.join(engines)}",
+        "",
+        f"Or set {_AUTO_INSTALL_ENV}=1 to let this tool download {it_them} on demand.",
+    ])
+    if not stale:
+        lines.append("Set PLAYWRIGHT_BROWSER to choose a specific engine.")
+    return "\n".join(lines)
+
+
 def _detect_playwright_browser(playwright) -> tuple[str, str]:
     """Detect available Playwright browser with graceful fallback.
 
@@ -73,16 +382,21 @@ def _detect_playwright_browser(playwright) -> tuple[str, str]:
     Returns:
         Tuple of (browser_type, display_name) e.g. ("webkit", "WebKit")
     """
-    browser_info = {
-        "webkit": ("WebKit", playwright.webkit),
-        "chromium": ("Chromium", playwright.chromium),
-        "firefox": ("Firefox", playwright.firefox),
-    }
+    browser_info = _browser_info(playwright)
 
-    # Check for override
-    override = os.environ.get("PLAYWRIGHT_BROWSER", "").lower()
+    # An override is honored only when the engine it names is actually there.
+    # Returning it unchecked skipped the "none" branch, so a requested-but-
+    # missing engine bypassed both the diagnosis below and the auto-install
+    # gate, and surfaced as a raw BrowserType.launch traceback carrying
+    # Playwright's own generic `playwright install` advice.  Reporting "none"
+    # instead routes it to that branch, which targets the requested engine.
+    # Substituting a different browser silently is not on the table: the
+    # caller asked for this one.
+    override = _browser_override()
     if override in browser_info:
-        return (override, browser_info[override][0])
+        if Path(browser_info[override][1].executable_path).exists():
+            return (override, browser_info[override][0])
+        return ("none", "None")
 
     # Detect installed browsers by checking executable paths
     available = []
@@ -368,13 +682,19 @@ async def _render_js(
         async with async_playwright() as p:
             # Detect available browser engine
             browser_type, browser_name = _detect_playwright_browser(p)
+            browser_preference = _resolve_browser_preference()
+            if browser_type == "none" and _parse_truthy_env(_AUTO_INSTALL_ENV):
+                engines = _engines_to_install(_browser_info(p))
+                logger.info("auto-installing Playwright %s", ", ".join(engines))
+                failure = await _install_browsers(engines)
+                if failure:
+                    return (
+                        f"Error: automatic browser install failed ({failure}).\n\n"
+                        + _describe_unusable_browsers(_browser_info(p))
+                    )
+                browser_type, browser_name = _detect_playwright_browser(p)
             if browser_type == "none":
-                return (
-                    "Error: No Playwright browser installed. Run one of:\n"
-                    "  playwright install webkit\n"
-                    "  playwright install chromium\n\n"
-                    "Or set PLAYWRIGHT_BROWSER env var to specify a browser."
-                )
+                return _describe_unusable_browsers(_browser_info(p))
 
             # Launch detected/configured browser
             browser_launcher = getattr(p, browser_type)
@@ -553,9 +873,13 @@ async def _render_js(
         title = _title
 
     # Section handling, truncation, and frontmatter via shared pipeline
+    render_warnings = [
+        w for w in (browser_preference.warning, fragment_warning) if w
+    ]
     frontmatter_entries = FMEntries({
         "source": source_url,
-        "warning": fragment_warning,
+        "warning": render_warnings or None,
+        "note": browser_preference.note,
         "browser": browser_name,
         "detected_app": detected_app or None,
         "iframe_source": iframe_source or None,
