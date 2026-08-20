@@ -14,6 +14,7 @@ from parkour_mcp.markdown import (
     _extract_sections_from_markdown,
     _fence_content,
     _filter_markdown_by_sections,
+    _flatten_heading_blocks,
     _format_retraction_banner,
     _promote_list_headings,
     _resolve_toc_slice,
@@ -405,6 +406,104 @@ class TestUnwrapHeadingAnchors:
         assert "[before](/before)" in markdown
         assert "[after](/after)" in markdown
         assert "## Card" in markdown
+
+
+class TestFlattenHeadingBlocks:
+    """A block element inside a heading ends the ``#`` line, so the title text
+    after it converts to body prose and the heading stops being addressable.
+    """
+
+    # Mintlify's docs theme, as served by code.claude.com: the permalink
+    # affordance is a <div>-wrapped anchor holding a bare U+200B and an icon,
+    # and the title follows it in a sibling <span>.
+    MINTLIFY_HEADING = (
+        '<h2 class="flex group" id="auto-memory">'
+        '<div class="absolute" tabindex="-1">'
+        '<a href="#auto-memory" aria-label="Navigate to header">'
+        '\u200b<div class="size-6"><svg viewBox="0 0 18 18"></svg></div></a>'
+        '</div><span class="cursor-pointer">Auto memory</span></h2>'
+    )
+
+    def test_mintlify_heading_survives_as_one_section(self):
+        """Without flattening the page reports zero sections, not a wrong one.
+
+        The heading line keeps only the U+200B, which
+        ``_extract_sections_from_markdown`` normalizes to nothing and then
+        discards as an empty name, so every heading on the page disappears
+        and ``section=`` can reach none of them.
+        """
+        html = f"<html><body>{self.MINTLIFY_HEADING}<p>body</p></body></html>"
+        _, markdown = html_to_markdown(html)
+        assert [s["name"] for s in _extract_sections_from_markdown(markdown)] == [
+            "Auto memory"
+        ]
+
+    def test_the_affordance_glyph_is_gone_from_the_heading_line(self):
+        """The rendered line must match the name the section is addressed by."""
+        html = f"<html><body>{self.MINTLIFY_HEADING}<p>body</p></body></html>"
+        _, markdown = html_to_markdown(html)
+        assert "## Auto memory" in markdown
+        assert "\u200b" not in markdown
+
+    def test_text_either_side_of_the_block_stays_two_words(self):
+        """Each block tag becomes a space, so the words are not fused."""
+        _, markdown = html_to_markdown("<html><body><h2>Part<br>One</h2></body></html>")
+        assert "## Part One" in markdown
+
+    def test_title_wrapped_in_the_block_is_kept_not_dropped(self):
+        """The split shape cannot tell an affordance from the title.
+
+        Dropping the block's content instead of unwrapping it would lose the
+        heading outright whenever the title is the wrapped part.
+        """
+        html = "<html><body><h2><div>Real Title</div></h2></body></html>"
+        _, markdown = html_to_markdown(html)
+        assert [s["name"] for s in _extract_sections_from_markdown(markdown)] == [
+            "Real Title"
+        ]
+
+    def test_noise_tags_inside_a_heading_are_left_for_htmd_to_drop(self):
+        """``_NOISE_TAGS`` are removed with their content by ``skip_tags``.
+
+        They never break the line, so unwrapping one would only splice site
+        chrome into the heading text.
+        """
+        html = "<html><body><h2>Real<nav>NAVJUNK</nav>Title</h2></body></html>"
+        _, markdown = html_to_markdown(html)
+        assert "NAVJUNK" not in markdown
+        assert "## RealTitle" in markdown
+
+    def test_heading_inside_an_attribute_value_is_not_a_heading(self):
+        """A ``[^>]*`` open tag ends at the ``>`` inside a quoted value.
+
+        Flattening on that reading would rewrite attribute text as if it were
+        heading content.  Same hazard ``_ANCHOR_OPEN`` guards against.
+        """
+        html = (
+            '<html><body><h2 title="a > b"><div>x</div>Title</h2></body></html>'
+        )
+        _, markdown = html_to_markdown(html)
+        assert "## x Title" in markdown
+
+    def test_inline_children_are_left_alone(self):
+        """Inline markup already converts on the heading's own line."""
+        html = "<html><body><h2>Plain <strong>Bold</strong></h2></body></html>"
+        assert _flatten_heading_blocks(html) is html
+
+    def test_heading_without_nested_markup_is_returned_unchanged(self):
+        """The bail-out must be identity, not a rebuilt string."""
+        html = "<html><body><h1>Docs</h1><p>No nesting here.</p></body></html>"
+        assert _flatten_heading_blocks(html) is html
+
+    def test_body_blocks_outside_headings_are_untouched(self):
+        """Only heading interiors are rewritten; the page body keeps its shape."""
+        html = (
+            "<html><body><h2><div>x</div>Title</h2>"
+            "<div><p>para one</p><ul><li>item</li></ul></div></body></html>"
+        )
+        _, markdown = html_to_markdown(html)
+        assert "para one" in markdown
+        assert "*   item" in markdown
 
 
 class TestPromoteListHeadings:

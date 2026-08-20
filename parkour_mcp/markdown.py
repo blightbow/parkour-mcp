@@ -169,7 +169,20 @@ _FIRST_H1_RE = re.compile(r"^# (.+)$", re.MULTILINE)
 
 
 def _strip_heading_line(match: "re.Match[str]") -> str:
-    return f"{match.group(1)} {_strip_heading_markdown(match.group(2))}"
+    """Rewrite one heading line as its level marker plus plain text.
+
+    ``_normalize_whitespace`` runs here as well as in
+    ``_extract_sections_from_markdown`` so the two agree on the text.
+    Extraction has always normalized before deriving a section name, and
+    without the same pass at conversion time the cached markdown keeps a
+    glyph that the name the section is addressed by does not have: Mintlify
+    renders its permalink affordance as a bare U+200B, so the heading line
+    reads ``## \u200b Auto memory`` against a section named ``Auto memory``.
+    Normalizing after ``_strip_heading_markdown`` rather than before it lets
+    the markdown patterns match on the ASCII syntax they were written for.
+    """
+    text = _normalize_whitespace(_strip_heading_markdown(match.group(2))).strip()
+    return f"{match.group(1)} {text}"
 
 
 # Matches a list item whose content begins with an ATX heading, capturing the
@@ -357,6 +370,94 @@ def _unwrap_heading_anchors(html: str) -> str:
     return _ANCHOR_WRAPPED_HEADING_RE.sub(r"\1", html)
 
 
+# Tags that htmd renders as their own block when they appear *inside* a
+# heading, ending the ``#`` line early.  Measured against the converter rather
+# than taken from the HTML spec's block-level list, because the two disagree in
+# both directions: ``<table>``, ``<hgroup>`` and ``<canvas>`` are block-level
+# but convert inline here, while ``<br>`` and ``<summary>`` are not and do
+# break.
+#
+# The tags htmd already drops with their content — ``_NOISE_TAGS`` plus
+# ``<template>`` — are deliberately absent.  They do not break the line (htmd
+# removes them before it lays out the heading), and unwrapping one would splice
+# site chrome into the heading text, which is the opposite of the repair.
+_HEADING_BLOCK_TAGS = (
+    "address", "article", "blockquote", "br", "center", "dd", "details", "dir",
+    "div", "dl", "dt", "fieldset", "figcaption", "figure", "form", "hr",
+    "iframe", "legend", "li", "main", "menu", "ol", "p", "pre", "section",
+    "summary", "ul",
+)
+
+# Headings cannot nest — a parser closes the open one — so the tempered body
+# scan stops at whichever ``</hN>`` or ``<hN>`` comes first and each heading's
+# interior is scanned at most once.  The open tag alternates over quoted
+# attribute values for the same reason ``_ANCHOR_OPEN`` does: an attribute
+# value may legally contain ``>``, and a ``[^>]*`` open tag would end inside
+# one and treat the remainder of the value as heading content.
+_HEADING_OPEN = r"""<h[1-6]\b(?:[^>"']|"[^"]*"|'[^']*')*>"""
+_HEADING_BODY = r"""(?:(?!</h[1-6][\s>])(?!<h[1-6][\s>]).)"""
+_HEADING_INTERIOR_RE = re.compile(
+    rf"({_HEADING_OPEN})({_HEADING_BODY}*?)(</h[1-6]\s*>)",
+    re.DOTALL | re.IGNORECASE,
+)
+_HEADING_BLOCK_TAG_RE = re.compile(
+    rf"""</?(?:{"|".join(_HEADING_BLOCK_TAGS)})\b(?:[^>"']|"[^"]*"|'[^']*')*>""",
+    re.IGNORECASE,
+)
+
+
+def _flatten_heading_blocks(html: str) -> str:
+    """Drop block-level tags nested inside a heading, keeping their text.
+
+    A block child ends the heading's line, so everything after it converts to
+    body prose and stops being addressable.  Mintlify's docs theme is the
+    motivating shape: it puts the permalink affordance in a ``<div>`` before
+    the title text, so
+    ``<h2 id="auto-memory"><div><a href="#auto-memory">\u200b<div>svg</div></a>
+    </div><span>Auto memory</span></h2>`` converts to ``## \u200b`` followed by
+    a paragraph reading ``Auto memory``.  Every heading on the page degrades
+    the same way, and since ``_extract_sections_from_markdown`` normalizes the
+    lone zero-width space to nothing and discards the empty name, the page
+    reports none of its 30 headings — ``section=`` cannot reach any of them and
+    slices carry no ancestry.
+
+    Each block tag becomes a single space rather than being deleted, so text
+    on either side of it stays two words: ``<h2>Part<br>One</h2>`` is
+    ``Part One``, not ``PartOne``.  Inline children are left alone; they
+    already convert on the heading's own line, and ``_strip_heading_line``
+    flattens the markup they produce.
+
+    Content is preserved rather than dropped because the split shape gives no
+    way to tell an affordance from the title: Mintlify's chrome sits in the
+    first block and the title outside it, but a heading whose title is itself
+    wrapped in a ``<div>`` is just as common.  A stray glyph in a section name
+    is recoverable — ``_normalize_whitespace`` clears the zero-width case
+    outright — while a dropped title is not.
+    """
+    if "<h" not in html:
+        return html
+    # Rebuilt only around the headings that actually carry a block child, so a
+    # page without the defect gets the original string back rather than a copy.
+    # ``re.sub`` cannot do that here: it rebuilds whenever the interior pattern
+    # matches, and it matches every heading on the page.  Both perf-tier specs
+    # have thousands of headings and none needing repair.
+    parts: list[str] = []
+    end = 0
+    for match in _HEADING_INTERIOR_RE.finditer(html):
+        interior = match.group(2)
+        if not _HEADING_BLOCK_TAG_RE.search(interior):
+            continue
+        parts.append(html[end : match.start()])
+        parts.append(match.group(1))
+        parts.append(_HEADING_BLOCK_TAG_RE.sub(" ", interior))
+        parts.append(match.group(3))
+        end = match.end()
+    if not parts:
+        return html
+    parts.append(html[end:])
+    return "".join(parts)
+
+
 # Byte budget for the head-only BS4 fallback parse. 32 KB is well above any
 # realistic <head> size and still parses in microseconds on html.parser.
 _HEAD_SCAN_BYTES = 32 * 1024
@@ -409,7 +510,8 @@ def html_to_markdown(html: str) -> tuple[str, str]:
     ``"Untitled"``.
     """
     markdown = htmd.convert_html(  # ty: ignore[unresolved-attribute]
-        _unwrap_heading_anchors(_wrap_bare_pre_in_code(html)), _HTMD_OPTIONS
+        _flatten_heading_blocks(_unwrap_heading_anchors(_wrap_bare_pre_in_code(html))),
+        _HTMD_OPTIONS,
     )
     markdown = re.sub(r"\n{3,}", "\n\n", markdown).strip()
     # Lift accordion headings out of their list items before anything reads
