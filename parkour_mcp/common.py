@@ -120,6 +120,73 @@ def _parse_truthy_env(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in ("1", "true", "yes")
 
 
+# Any group or other permission bit on a file holding an API key.
+_PERMISSIVE_CREDENTIAL_BITS = 0o077
+
+# Owner read/write, nothing else.
+_CREDENTIAL_MODE = 0o600
+
+# Act once per path.  These files are read on every credentialed call; after a
+# successful repair the mode check would not fire again anyway, but a repair
+# that *fails* would otherwise log on every request.
+_permission_handled: set[Path] = set()
+
+
+def _harden_credential_file(path: Path) -> None:
+    """Tighten a credential file readable beyond its owner, and say so.
+
+    parkour reads these files and never creates them, so their mode is
+    whatever created them left behind — and ``echo key > file`` under a default
+    umask leaves an API key at 0644, readable by every local account. That is
+    what this project's own setup instructions produced for anyone who
+    followed them literally.
+
+    The mode is repaired rather than merely reported. This is parkour's own
+    config namespace, 0600 is not a matter of taste for a file holding a
+    secret, and a log line the operator may never read leaves the key exposed
+    in the meantime. The repair is narrow on purpose: it only ever removes
+    group and other bits from a file parkour was already about to read, and it
+    never creates, moves, or writes one.
+
+    Logged at WARNING even on success, because the chmod closes the window
+    rather than undoing it — anything that could read the file already could,
+    so on a shared machine the key should be treated as disclosed and rotated.
+
+    A chmod that fails (read-only mount, not the owner, an ACL that overrides
+    the mode) is reported with the command to run by hand, and the credential
+    is still returned: refusing it would break a working setup over a
+    condition the caller may not be able to change.
+
+    POSIX only. On Windows the mode bits Python reports do not describe the
+    NTFS ACL that governs access, so the same test there would fire on every
+    file regardless of who can actually read it.
+    """
+    if os.name != "posix" or path in _permission_handled:
+        return
+    try:
+        mode = path.stat().st_mode
+    except OSError:  # pragma: no cover - raced with a delete
+        return
+    if not mode & _PERMISSIVE_CREDENTIAL_BITS:
+        return
+    _permission_handled.add(path)
+    try:
+        path.chmod(_CREDENTIAL_MODE)
+    except OSError as exc:
+        _logger.warning(
+            "credential file %s is mode %o — readable by other local accounts "
+            "— and could not be tightened (%s). Fix it with: chmod 600 %s",
+            path, mode & 0o777, exc, path,
+        )
+        return
+    _logger.warning(
+        "credential file %s was mode %o — readable by other local accounts. "
+        "Tightened to 600. Anything that could read it already could, so "
+        "rotate the credential if this machine has other users.",
+        path, mode & 0o777,
+    )
+
+
 def load_credential(env_var: str, config_path: Path) -> str:
     """Load a credential from an env var, falling back to a config file.
 
@@ -135,6 +202,7 @@ def load_credential(env_var: str, config_path: Path) -> str:
     if key := clean_env(env_var):
         return key
     if config_path.exists():
+        _harden_credential_file(config_path)
         return config_path.read_text().strip()
     return ""
 

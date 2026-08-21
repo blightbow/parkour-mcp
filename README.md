@@ -387,8 +387,8 @@ Set your Kagi API key via environment variable or config file:
 export KAGI_API_KEY="your-api-key"
 
 # Option 2: Config file
-mkdir -p ~/.config/parkour
-echo "your-api-key" > ~/.config/parkour/kagi_api_key
+mkdir -p ~/.config/parkour && chmod 700 ~/.config/parkour
+(umask 077; echo "your-api-key" > ~/.config/parkour/kagi_api_key)
 ```
 
 Get your API key at https://kagi.com/settings?p=api
@@ -402,7 +402,7 @@ The SemanticScholar tool is disabled by default. Use of the Semantic Scholar API
 export S2_ACCEPT_TOS=1
 
 # Option 2: Config file (presence is sufficient)
-mkdir -p ~/.config/parkour
+mkdir -p ~/.config/parkour && chmod 700 ~/.config/parkour
 touch ~/.config/parkour/s2_accept_tos
 ```
 
@@ -413,7 +413,7 @@ Optionally, configure an API key for your own rate limit (free, but the tool wor
 export S2_API_KEY="your-api-key"
 
 # Or config file
-echo "your-api-key" > ~/.config/parkour/s2_api_key
+(umask 077; echo "your-api-key" > ~/.config/parkour/s2_api_key)
 ```
 
 Get your free API key at https://www.semanticscholar.org/product/api#api-key-form
@@ -491,8 +491,8 @@ The GitHub tool works without authentication but shares a global 60 req/hr rate 
 export GITHUB_TOKEN="ghp_your-token-here"
 
 # Option 2: Config file
-mkdir -p ~/.config/parkour
-echo "ghp_your-token-here" > ~/.config/parkour/github_token
+mkdir -p ~/.config/parkour && chmod 700 ~/.config/parkour
+(umask 077; echo "ghp_your-token-here" > ~/.config/parkour/github_token)
 ```
 
 No special scopes are needed for public repos. For private repos, create a [fine-grained PAT](https://github.com/settings/tokens?type=beta) with `Contents: read` permission on the target repos.

@@ -20,8 +20,15 @@ from parkour_mcp.github import (
 
 pytestmark = pytest.mark.live
 
+# String condition on purpose.  pytest evaluates a callable condition at
+# import time, so the previous boolean form read ~/.config/parkour/github_token
+# during *collection* — on every run, including the default one where this
+# whole module is deselected — and cached the result process-wide, which also
+# defeated any fixture that tried to isolate the credential path afterwards.
+# A string is evaluated by the skipping plugin at runtest setup instead, which
+# never happens when the live suite is deselected.
 skip_no_token = pytest.mark.skipif(
-    not _get_github_token(),
+    "not _get_github_token()",
     reason="GITHUB_TOKEN not set",
 )
 

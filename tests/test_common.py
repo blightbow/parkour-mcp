@@ -1,7 +1,10 @@
 """Tests for parkour_mcp.common module."""
 
 import asyncio
+import logging
+import os
 import socket
+import stat
 from unittest.mock import AsyncMock, patch
 
 import httpcore
@@ -79,6 +82,123 @@ class TestLoadCredential:
         cfg = tmp_path / "key"
         cfg.write_text("from-file")
         assert load_credential("PARKOUR_TEST_KEY", cfg) == "from-file"
+
+
+class TestCredentialFilePermissions:
+    """parkour reads these files and never creates them, so their mode is
+    whatever created them left behind — and ``echo key > file`` under a default
+    umask leaves an API key readable by every local account. That is what this
+    project's own setup instructions produced for anyone who followed them
+    literally, so the mode is repaired rather than merely reported.
+    """
+
+    @staticmethod
+    def _cred(tmp_path, mode, name="key"):
+        path = tmp_path / name
+        path.write_text("s3cret")
+        os.chmod(path, mode)
+        return path
+
+    @staticmethod
+    def _mode(path):
+        return stat.S_IMODE(path.stat().st_mode)
+
+    @pytest.fixture(autouse=True)
+    def _reset_ledger(self, monkeypatch):
+        from parkour_mcp import common
+
+        common._permission_handled.clear()
+        monkeypatch.delenv("PARKOUR_TEST_KEY", raising=False)
+        yield
+        common._permission_handled.clear()
+
+    @pytest.mark.skipif(os.name != "posix", reason="POSIX mode bits")
+    @pytest.mark.parametrize("mode", [0o644, 0o640, 0o604, 0o666, 0o660])
+    def test_a_readable_credential_is_tightened_on_disk(self, mode, tmp_path, caplog):
+        path = self._cred(tmp_path, mode)
+        with caplog.at_level(logging.WARNING, logger="parkour_mcp.common"):
+            assert load_credential("PARKOUR_TEST_KEY", path) == "s3cret"
+        assert self._mode(path) == 0o600
+        assert "Tightened to 600" in caplog.text
+
+    @pytest.mark.skipif(os.name != "posix", reason="POSIX mode bits")
+    def test_the_warning_survives_the_repair(self, tmp_path, caplog):
+        """The chmod closes the window rather than undoing it: whatever could
+        read the key already could, so the operator still needs to know."""
+        path = self._cred(tmp_path, 0o644)
+        with caplog.at_level(logging.WARNING, logger="parkour_mcp.common"):
+            load_credential("PARKOUR_TEST_KEY", path)
+        assert "rotate the credential" in caplog.text
+
+    @pytest.mark.skipif(os.name != "posix", reason="POSIX mode bits")
+    @pytest.mark.parametrize("mode", [0o600, 0o400])
+    def test_an_owner_only_credential_is_left_alone(self, mode, tmp_path, caplog):
+        path = self._cred(tmp_path, mode)
+        with caplog.at_level(logging.WARNING, logger="parkour_mcp.common"):
+            assert load_credential("PARKOUR_TEST_KEY", path) == "s3cret"
+        assert self._mode(path) == mode
+        assert caplog.text == ""
+
+    @pytest.mark.skipif(os.name != "posix", reason="POSIX mode bits")
+    def test_an_unrepairable_file_still_yields_its_credential(self, tmp_path, caplog, monkeypatch):
+        """Read-only mount, not the owner, an overriding ACL.
+
+        Refusing the key would break a working setup over a condition the
+        caller may not be able to change.
+        """
+        from parkour_mcp import common
+
+        path = self._cred(tmp_path, 0o644)
+        monkeypatch.setattr(
+            common.Path, "chmod",
+            lambda *a, **k: (_ for _ in ()).throw(PermissionError("read-only")),
+        )
+        with caplog.at_level(logging.WARNING, logger="parkour_mcp.common"):
+            assert load_credential("PARKOUR_TEST_KEY", path) == "s3cret"
+        assert "could not be tightened" in caplog.text
+        assert "chmod 600" in caplog.text
+
+    @pytest.mark.skipif(os.name != "posix", reason="POSIX mode bits")
+    def test_an_unrepairable_file_is_not_re_reported_every_call(self, tmp_path, caplog, monkeypatch):
+        """Credential files are read on every authenticated call."""
+        from parkour_mcp import common
+
+        path = self._cred(tmp_path, 0o644)
+        monkeypatch.setattr(
+            common.Path, "chmod",
+            lambda *a, **k: (_ for _ in ()).throw(PermissionError("read-only")),
+        )
+        with caplog.at_level(logging.WARNING, logger="parkour_mcp.common"):
+            for _ in range(3):
+                load_credential("PARKOUR_TEST_KEY", path)
+        assert caplog.text.count("could not be tightened") == 1
+
+    @pytest.mark.skipif(os.name != "posix", reason="POSIX mode bits")
+    def test_an_empty_credential_file_is_still_tightened(self, tmp_path):
+        """It reads as absent today and may hold a key tomorrow; leaving it
+        loose means the secret lands world-readable when it arrives."""
+        path = tmp_path / "empty"
+        path.write_text("")
+        os.chmod(path, 0o644)
+        assert load_credential("PARKOUR_TEST_KEY", path) == ""
+        assert self._mode(path) == 0o600
+
+    def test_windows_mode_bits_are_not_consulted(self, tmp_path, caplog, monkeypatch):
+        """Python's reported mode does not describe the NTFS ACL, so the same
+        test on Windows would fire on every file regardless of who can read it.
+        """
+        from parkour_mcp import common
+
+        path = tmp_path / "key"
+        path.write_text("s3cret")
+        if os.name == "posix":
+            os.chmod(path, 0o644)
+        monkeypatch.setattr(common.os, "name", "nt")
+        with caplog.at_level(logging.WARNING, logger="parkour_mcp.common"):
+            assert load_credential("PARKOUR_TEST_KEY", path) == "s3cret"
+        assert caplog.text == ""
+        if os.name == "posix":
+            assert self._mode(path) == 0o644, "must not touch the file either"
 
 
 class TestIsPrivateIp:

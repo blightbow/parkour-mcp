@@ -49,6 +49,9 @@ _packages_mod = sys.modules["parkour_mcp.packages"]
 import parkour_mcp.common  # noqa: E402
 
 _common_mod = sys.modules["parkour_mcp.common"]
+import parkour_mcp.kagi  # noqa: E402
+
+_kagi_mod = sys.modules["parkour_mcp.kagi"]
 
 import parkour_mcp.discourse  # noqa: E402
 
@@ -283,6 +286,37 @@ def _stub_scorecard_for_github(monkeypatch):
 
     monkeypatch.setattr(_github_mod, "_fetch_scorecard_overall", _no_score)
     _scorecard_mod._reset_cache()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_credential_files(request, monkeypatch):
+    """Point every filesystem credential fallback at a path that cannot exist.
+
+    Same reasoning as ``_hf_state`` below, which has isolated HF_CONFIG_PATH
+    since it was written: a developer with a real key on disk otherwise
+    exercises a different auth path than CI, and a mocked 401 assertion passes
+    or fails depending on whose laptop runs it.
+
+    It also stops the suite writing to a developer's real configuration.
+    ``load_credential`` chmods a group- or world-readable credential file to
+    0600 as it reads it, so without this the mere act of running the tests
+    re-permissions files under ``~/.config/parkour/`` that no test declared
+    any interest in.
+    """
+    if request.node.get_closest_marker("live"):
+        # The live suite authenticates for real, and its own docstrings offer
+        # the config file as an alternative to the env var.
+        return
+    monkeypatch.setattr(_github_mod, "_github_token_cache", None)
+    for module, attribute in (
+        (_kagi_mod, "CONFIG_PATH"),
+        (_github_mod, "GITHUB_CONFIG_PATH"),
+        (_s2_mod, "S2_CONFIG_PATH"),
+        (_common_mod, "_S2_TOS_CONFIG_PATH"),
+    ):
+        monkeypatch.setattr(
+            module, attribute, pathlib.Path("/nonexistent/parkour-test-credential"),
+        )
 
 
 @pytest.fixture(autouse=True)
