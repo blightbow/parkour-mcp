@@ -5,6 +5,25 @@ All notable changes to parkour-mcp will be documented in this file.
 Format: https://keepachangelog.com/en/1.1.0/
 Versioning: https://semver.org/spec/v2.0.0.html
 
+## [2.4.0] 2026-08-21
+
+### Added
+- two settings now control JavaScript rendering — PLAYWRIGHT_BROWSER picks the engine (webkit, chromium, firefox, or auto) and MCP_AUTO_INSTALL_BROWSER=1 has the server download a missing browser on demand — and both are exposed in the Claude Desktop extension's settings; with auto-install off, a render that cannot find a browser now names the revision it needed against the one it found plus a version-pinned install command that works from any environment, and a browser named but not installed says so instead of failing deep inside Playwright.
+
+
+### Fixed
+- a page that wraps a heading in a link — site mastheads and card links both do — no longer loses that heading to broken markdown, so the page title, section names, and slice ancestry read as plain text instead of orphaned link syntax, and headings that stopped parsing entirely are addressable by section= again.
+- pages that wrap heading chrome or heading text in a block element — Mintlify-themed docs sites, which includes Claude Code's own — no longer lose every heading on the page, so URL fragments resolve, section= and auto_expand reach the right content, and search results carry real ancestry instead of none.
+
+
+### Security
+- an API key stored in ~/.config/parkour is no longer left readable by every account on the machine — a file with looser permissions is tightened to owner-only as it is read, reported once so the key can be rotated if the machine has other users, and the setup instructions now create it that way to begin with.
+- an API key entered in the Claude Desktop extension's settings now reaches the server on Windows, where it previously arrived as encrypted ciphertext and every Kagi, GitHub, and Semantic Scholar call reported an invalid key while the settings UI showed the key present; the trade is that the field is no longer masked as you type it.
+
+
+### Documentation
+- Name both heading-repair passes in the markdown.py bullet
+
 ## [2.3.0] 2026-08-17
 
 ### Changed
