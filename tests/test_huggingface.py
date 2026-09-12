@@ -15,6 +15,7 @@ import respx
 
 from parkour_mcp._pipeline import _page_cache
 from parkour_mcp.detection import _detect_hf_url, is_hf_commit_sha
+from parkour_mcp.fetch_direct import web_fetch_direct
 from parkour_mcp.huggingface import (
     _apply_config_frontmatter,
     _cache_file_body,
@@ -1340,6 +1341,38 @@ class TestPageCachePopulation:
         assert len(entry.markdown) > len(out)
         assert "Section 11" in entry.markdown
         assert "Section 11" not in out
+
+    @respx.mock
+    async def test_slices_follow_up_is_served_from_cache(self):
+        """A ``slices=`` follow-up must reuse the entry the first fetch stored.
+
+        ``fetch_direct.py#web_fetch_direct`` serves ``search=`` / ``slices=``
+        from ``_page_cache`` only when the entry's ``renderer`` is one it
+        recognises as reusable.  An HF entry that fails that gate falls
+        through to ``_hf_fast_path``, which has no cache check of its own, so
+        the Hub is asked again and the entry is replaced rather than reused.
+        The rendered slices are identical either way, which is why the
+        request count is the assertion rather than the output.
+        """
+        long_card = "# Title\n\n" + "\n\n".join(
+            f"## Section {i}\n\n" + ("body text " * 200) for i in range(12)
+        )
+        api = respx.get("https://huggingface.co/api/models/org/model").mock(
+            return_value=httpx.Response(200, json=_payload()),
+        )
+        card = respx.get(
+            "https://huggingface.co/org/model/raw/main/README.md",
+        ).mock(return_value=httpx.Response(200, text=long_card))
+
+        url = "https://huggingface.co/org/model"
+        await web_fetch_direct(url)
+        assert api.call_count == 1
+        assert card.call_count == 1
+
+        result = await web_fetch_direct(url, slices=[0])
+        assert api.call_count == 1
+        assert card.call_count == 1
+        assert "--- slice 0" in result
 
     @respx.mock
     async def test_file_body_is_cached_and_sliceable(self):

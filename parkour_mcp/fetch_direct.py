@@ -216,14 +216,15 @@ async def web_fetch_direct(
     # A static fetch must not reuse a "js" entry (browser-rendered, may carry
     # JS-built content a static caller didn't ask for) and a requires_js fetch
     # must not reuse a "direct" entry (static HTML, may be sparse for a JS
-    # page).  "wiki"/"github" are API-sourced and identical either way.
+    # page).  "wiki"/"github"/"huggingface" are API-sourced and identical
+    # either way.
     js_mode = requires_js or bool(actions)
     if want_slicing:
         fm_base = FMEntries({"source": source_url, "warning": fragment_warning})
         cached = _page_cache.get(url)
         eligible = (
-            ("js", "wiki", "github") if js_mode
-            else ("direct", "wiki", "reddit", "discourse", "github")
+            ("js", "wiki", "github", "huggingface") if js_mode
+            else ("direct", "wiki", "reddit", "discourse", "github", "huggingface")
         )
         if cached and cached.renderer in eligible:
             fm_base["title"] = cached.title or "Untitled"
