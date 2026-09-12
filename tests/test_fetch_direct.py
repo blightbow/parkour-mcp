@@ -1,12 +1,19 @@
 """Tests for parkour_mcp.fetch_direct module."""
 
+import re
+from pathlib import Path
+
 import httpx
 import pytest
 import respx
 
+import parkour_mcp
 from parkour_mcp import markdown
 from parkour_mcp._pipeline import _page_cache, _wiki_cache
 from parkour_mcp.fetch_direct import (
+    _RENDERERS_JS_ONLY,
+    _RENDERERS_MODE_AGNOSTIC,
+    _RENDERERS_STATIC_ONLY,
     web_fetch_direct,
     web_fetch_sections,
 )
@@ -1620,3 +1627,69 @@ class TestWebFetchDirectJsDetection:
         # The URL is recorded so a follow-up requires_js retry is not flagged
         # premature (the agent would be acting on the hint, not reaching blind).
         assert "https://spa.example.com/" in fetch_direct._JS_SHELL_SEEN
+
+
+# --- Cache-entry reuse policy ---
+
+_RENDERER_LITERAL_RE = re.compile(r'\brenderer="([a-z_]+)"')
+_REGISTERED_RENDERERS = (
+    _RENDERERS_STATIC_ONLY | _RENDERERS_JS_ONLY | _RENDERERS_MODE_AGNOSTIC
+)
+
+
+def _stored_renderer_literals() -> dict[str, list[str]]:
+    """Every ``renderer="..."`` literal under ``parkour_mcp/``, keyed by value.
+
+    The value maps to the source files that store it, so an assertion
+    failure names where the unregistered renderer came from.
+    """
+    pkg = Path(parkour_mcp.__file__).parent
+    found: dict[str, list[str]] = {}
+    for py in sorted(pkg.rglob("*.py")):
+        for m in _RENDERER_LITERAL_RE.finditer(py.read_text()):
+            found.setdefault(m.group(1), []).append(py.name)
+    return found
+
+
+class TestRendererReusePolicy:
+    """The ``_RENDERERS_*`` sets and the stored renderers must agree.
+
+    ``web_fetch_direct`` serves a ``search=`` / ``slices=`` follow-up from
+    ``_page_cache`` only when the entry's renderer is eligible for the
+    current fetch mode.  A renderer that is stored but never eligible fails
+    open: each follow-up misses the gate, re-enters its fast path, and
+    re-fetches upstream while producing output identical to a cache hit.
+    No behavioural test can see that, so the invariant is checked against
+    the source.
+    """
+
+    def test_scan_finds_the_known_renderers(self):
+        # Guards the guard: an empty scan would make the other assertions
+        # pass vacuously.
+        stored = _stored_renderer_literals()
+        assert {"direct", "js"} <= stored.keys()
+
+    def test_every_stored_renderer_is_registered(self):
+        stored = _stored_renderer_literals()
+        unregistered = {
+            r: files for r, files in stored.items() if r not in _REGISTERED_RENDERERS
+        }
+        assert not unregistered, (
+            "renderer values stored but never cache-eligible: "
+            + ", ".join(
+                f"{r} (in {', '.join(files)})"
+                for r, files in sorted(unregistered.items())
+            )
+        )
+
+    def test_every_registered_renderer_is_stored(self):
+        stored = _stored_renderer_literals()
+        unused = _REGISTERED_RENDERERS - stored.keys()
+        assert not unused, f"registered renderers nothing stores: {sorted(unused)}"
+
+    def test_reuse_sets_are_disjoint(self):
+        # Static-only, JS-only, and mode-agnostic are mutually exclusive by
+        # meaning; a renderer in two of them contradicts itself.
+        assert not (_RENDERERS_STATIC_ONLY & _RENDERERS_JS_ONLY)
+        assert not (_RENDERERS_STATIC_ONLY & _RENDERERS_MODE_AGNOSTIC)
+        assert not (_RENDERERS_JS_ONLY & _RENDERERS_MODE_AGNOSTIC)

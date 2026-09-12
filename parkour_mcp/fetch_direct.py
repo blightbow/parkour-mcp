@@ -113,6 +113,20 @@ _LINE_ANCHOR_RE = re.compile(r"^L(\d+)(?:-L(\d+))?$")
 # Process-lifetime, like the tip ledger; tests reset it per-test.
 _JS_SHELL_SEEN: set[str] = set()
 
+# Cache-entry reuse policy for search=/slices= follow-ups.  A cached page may
+# serve a follow-up only when the renderer that produced it fits the current
+# fetch mode: a "js" entry is browser-rendered and may carry content a static
+# caller never asked for, a "direct" entry is static HTML and may be sparse
+# for a JS-heavy page, so neither serves the other mode.  Mode-agnostic
+# renderers are API-sourced and return the same content either way, so they
+# serve both.  Every ``renderer=`` value stored anywhere in the package must
+# appear in exactly one of these sets; ``test_fetch_direct.py`` enforces
+# that, because a renderer missing here fails silently (each follow-up
+# re-enters its fast path and re-fetches, with output identical to a hit).
+_RENDERERS_STATIC_ONLY: frozenset[str] = frozenset({"direct", "reddit", "discourse"})
+_RENDERERS_JS_ONLY: frozenset[str] = frozenset({"js"})
+_RENDERERS_MODE_AGNOSTIC: frozenset[str] = frozenset({"wiki", "github", "huggingface"})
+
 
 async def web_fetch_direct(
     url: str,
@@ -213,18 +227,14 @@ async def web_fetch_direct(
         return "Error: 'search'/'slices' and 'section' are mutually exclusive."
 
     # --- Search/slices cache-first path ---
-    # A static fetch must not reuse a "js" entry (browser-rendered, may carry
-    # JS-built content a static caller didn't ask for) and a requires_js fetch
-    # must not reuse a "direct" entry (static HTML, may be sparse for a JS
-    # page).  "wiki"/"github"/"huggingface" are API-sourced and identical
-    # either way.
+    # Reuse policy is declared with the _RENDERERS_* sets above.
     js_mode = requires_js or bool(actions)
     if want_slicing:
         fm_base = FMEntries({"source": source_url, "warning": fragment_warning})
         cached = _page_cache.get(url)
         eligible = (
-            ("js", "wiki", "github", "huggingface") if js_mode
-            else ("direct", "wiki", "reddit", "discourse", "github", "huggingface")
+            _RENDERERS_JS_ONLY | _RENDERERS_MODE_AGNOSTIC if js_mode
+            else _RENDERERS_STATIC_ONLY | _RENDERERS_MODE_AGNOSTIC
         )
         if cached and cached.renderer in eligible:
             fm_base["title"] = cached.title or "Untitled"
