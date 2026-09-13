@@ -109,7 +109,12 @@ commit (cacheable forever — see §10).
 - **`file`**: fetch a repo file with **content-type-aware** handling (§6).
 - **`tree`**: directory listing with per-file size + LFS sha.
 - **`search`**: `GET /api/models?search=&author=&filter=&sort=` — surface candidate repos.
-- **`org`**: list an org/user's models.
+  The tool's `library=` maps to `filter=`, a tag match, which is what the website's
+  `?library=mlx` facet does (oMLX's downloader sends the same `filter="mlx"` for its
+  "MLX only" toggle). Probed 2026-09-13: the API accepts `library=` as a query parameter and
+  **ignores it** (returns transformers and gguf repos unfiltered), so `filter=` is the only
+  spelling that filters; repeated or comma-joined values are ANDed; case is insensitive.
+- **`org`**: list an org/user's models. Takes the same `sort=` and `library=` as `search`.
 
 URL auto-detection in `query` (as `github()` does for issue/PR): a pasted `huggingface.co/…`
 URL routes to the right kind without the caller picking an action.

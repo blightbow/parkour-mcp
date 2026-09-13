@@ -2316,13 +2316,23 @@ async def _action_search(
     limit: int = 10,
     author: str | None = None,
     sort: str = "downloads",
+    library: str | None = None,
 ) -> str:
-    """Search Hub models by free text, optionally scoped to an author."""
+    """Search Hub models by free text, optionally scoped to an author.
+
+    ``library`` is sent as the API's ``filter=`` parameter, which matches a
+    repo's tags.  A library name (``mlx``, ``gguf``, ``transformers``) is a
+    tag, so this reproduces the website's Libraries facet; comma-joined
+    values are ANDed by the Hub.  The API also accepts a ``library=`` query
+    parameter and silently ignores it, so ``filter=`` is the only spelling
+    that filters.
+    """
     if sort not in _SORT_FIELDS:
         return (
             f"Error: Unknown sort '{sort}'. "
             f"Valid values: {', '.join(_SORT_FIELDS)}"
         )
+    library = (library or "").strip() or None
     params: dict[str, Any] = {
         "limit": max(1, min(limit, 100)),
         "sort": sort,
@@ -2334,6 +2344,8 @@ async def _action_search(
         params["search"] = query.strip()
     if author:
         params["author"] = author
+    if library:
+        params["filter"] = library
 
     payload = await _hf_request("/models", params=params)
     if isinstance(payload, str):
@@ -2344,17 +2356,22 @@ async def _action_search(
     label = f"search '{query}'" if query.strip() else "models"
     if author:
         label += f" by {author}"
+    if library:
+        label += f" tagged {library}"
     fm = _fm_base(f"{_HF_SITE_BASE}/models")
     fm["query"] = query.strip() or None
     fm["author"] = author
+    fm["library"] = library
     fm["sort"] = sort
     fm["results"] = len(payload)
     if not payload:
-        fm.append(
-            "hint",
+        hint = (
             "no matches — Hub search is substring-based over repo ids, so a "
-            "shorter fragment of the family name usually finds more",
+            "shorter fragment of the family name usually finds more"
         )
+        if library:
+            hint += f"; dropping library={library} widens to every runtime"
+        fm.append("hint", hint)
 
     rows = []
     for item in payload:
@@ -2385,7 +2402,12 @@ async def _action_search(
     )
 
 
-async def _action_org(query: str, limit: int = 20) -> str:
+async def _action_org(
+    query: str,
+    limit: int = 20,
+    sort: str = "downloads",
+    library: str | None = None,
+) -> str:
     """List an org or user's models."""
     match = _detect_hf_url(query)
     author = match.org if match else query.strip().strip("/")
@@ -2394,7 +2416,9 @@ async def _action_org(query: str, limit: int = 20) -> str:
             f"Error: Could not parse '{query}' as an org or user. "
             f"Expected a bare name or a huggingface.co/<org> URL."
         )
-    return await _action_search("", limit=limit, author=author)
+    return await _action_search(
+        "", limit=limit, author=author, sort=sort, library=library,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -2459,7 +2483,7 @@ async def huggingface(
             "model: model metadata, quantization analysis, and model card. "
             "file: read a repo file (weight files are described, never downloaded). "
             "tree: list repo files with sizes and LFS checksums. "
-            "search: find models by name, optionally scoped to an author. "
+            "search: find models by name, optionally scoped to an author or library. "
             "org: list an organization's or user's models."
         ),
     )],
@@ -2485,6 +2509,15 @@ async def huggingface(
     sort: Annotated[str, Field(
         description="Sort field for search/org: downloads, likes, lastModified, or trendingScore.",
     )] = "downloads",
+    library: Annotated[str | None, Field(
+        description=(
+            "Restrict search/org to repos tagged for a library: mlx, gguf, "
+            "transformers, safetensors, diffusers (the Hub website's "
+            "Libraries facet). Matches the tag, so a repo shipping weights "
+            "for several runtimes can list another primary library. "
+            "Comma-joined tags must all match."
+        ),
+    )] = None,
     quant_audit: Annotated[bool, Field(
         description=(
             "On the model action, spend one extra request to read the base "
@@ -2521,5 +2554,7 @@ async def huggingface(
     if action == "tree":
         return await _action_tree(query, ref=ref)
     if action == "search":
-        return await _action_search(query, limit=limit, author=author, sort=sort)
-    return await _action_org(query, limit=limit)
+        return await _action_search(
+            query, limit=limit, author=author, sort=sort, library=library,
+        )
+    return await _action_org(query, limit=limit, sort=sort, library=library)

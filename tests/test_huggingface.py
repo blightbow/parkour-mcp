@@ -1717,6 +1717,83 @@ def test_presplit_failure_skips_cache():
     assert _page_cache.get(url) is None
 
 
+_SEARCH_HIT = {
+    "id": "mlx-community/Qwen3-8B-4bit",
+    "downloads": 1200,
+    "likes": 7,
+    "library_name": "mlx",
+    "gated": False,
+    "tags": ["mlx", "safetensors"],
+}
+
+
+@pytest.mark.asyncio
+class TestSearchAction:
+    """``library=`` is the Hub's ``filter=`` tag match.
+
+    The API also accepts ``library=`` as a query parameter and silently
+    ignores it (probed 2026-09-13: ``?library=mlx`` returned transformers
+    and gguf repos), so the parameter name the tool exposes must never be
+    the one it sends.
+    """
+
+    @respx.mock
+    async def test_library_is_sent_as_filter(self):
+        route = respx.get("https://huggingface.co/api/models").mock(
+            return_value=httpx.Response(200, json=[_SEARCH_HIT]),
+        )
+        out = await huggingface("search", "qwen3", library="mlx")
+        sent = route.calls.last.request.url.params
+        assert sent["filter"] == "mlx"
+        assert "library" not in sent
+        assert sent["search"] == "qwen3"
+        assert "library: mlx" in out.split("┌─ untrusted")[0]
+        assert "tagged mlx" in out
+        assert "mlx-community/Qwen3-8B-4bit" in out
+
+    @respx.mock
+    async def test_no_library_sends_no_filter(self):
+        route = respx.get("https://huggingface.co/api/models").mock(
+            return_value=httpx.Response(200, json=[_SEARCH_HIT]),
+        )
+        out = await huggingface("search", "qwen3")
+        assert "filter" not in route.calls.last.request.url.params
+        assert "tagged" not in out
+
+    @respx.mock
+    async def test_blank_library_is_unset(self):
+        route = respx.get("https://huggingface.co/api/models").mock(
+            return_value=httpx.Response(200, json=[_SEARCH_HIT]),
+        )
+        await huggingface("search", "qwen3", library="  ")
+        assert "filter" not in route.calls.last.request.url.params
+
+    @respx.mock
+    async def test_org_threads_sort_and_library(self):
+        route = respx.get("https://huggingface.co/api/models").mock(
+            return_value=httpx.Response(200, json=[_SEARCH_HIT]),
+        )
+        await huggingface(
+            "org", "mlx-community", sort="likes", library="gguf",
+        )
+        sent = route.calls.last.request.url.params
+        assert sent["author"] == "mlx-community"
+        assert sent["sort"] == "likes"
+        assert sent["filter"] == "gguf"
+        assert "search" not in sent
+
+    @respx.mock
+    async def test_empty_result_hint_names_the_filter(self):
+        """Zero hits under a filter has two causes; the hint must name both."""
+        respx.get("https://huggingface.co/api/models").mock(
+            return_value=httpx.Response(200, json=[]),
+        )
+        out = await huggingface("search", "qwen3", library="mlx")
+        head = out.split("┌─ untrusted")[0]
+        assert "shorter fragment" in head
+        assert "library=mlx" in head
+
+
 @pytest.mark.asyncio
 class TestToolDispatch:
     async def test_unknown_action_rejected(self):

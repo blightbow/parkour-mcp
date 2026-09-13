@@ -398,6 +398,7 @@ Query formats vary by action:
 - tree: "org/name" or "org/name/subdirectory"
 - search: free text (Hub search is substring-based over repo ids); pair with author= to scope
 - org: an organization or user name (e.g. "mlx-community")
+- search/org take library= to keep only repos tagged for one runtime (e.g. "mlx", "gguf")
 
 Weight files are never downloaded. Asking for a .safetensors or .gguf file
 returns its size, LFS checksum, and the byte-range recipe for reading the
