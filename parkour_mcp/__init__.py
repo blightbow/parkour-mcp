@@ -10,6 +10,7 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 from mcp.types import Annotations, Icon, ToolAnnotations
 
+from ._cli import add_call_parser, run_call
 from .arxiv import arxiv
 from .common import TOOL_NAMES, init_tool_names, s2_enabled
 from .discourse import discourse
@@ -711,8 +712,7 @@ def _resolve_catalog(s2_on: bool) -> list[tuple[str, Callable[..., Any]]]:
     return catalog
 
 
-def main():
-    """Run the MCP server."""
+def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Parkour MCP Server")
     parser.add_argument(
         "--profile",
@@ -720,12 +720,26 @@ def main():
         default="desktop",
         help="Target client profile (default: desktop)",
     )
-    args = parser.parse_args()
+    # No subcommand runs the server, which keeps the invocation the
+    # manifest and client configs already use (`-m parkour_mcp --profile X`).
+    subparsers = parser.add_subparsers(dest="command")
+    add_call_parser(subparsers)
+    return parser
+
+
+def main():
+    """Run the MCP server, or one subcommand."""
+    args = _build_parser().parse_args()
+    s2_on = s2_enabled()
+
+    if args.command == "call":
+        raise SystemExit(run_call(
+            args, catalog=_resolve_catalog(s2_on), profile=args.profile,
+        ))
 
     init_tool_names(args.profile)
 
     # Conditionally enrich descriptions when S2 is opted in
-    s2_on = s2_enabled()
     if s2_on:
         _apply_s2_enrichment()
 

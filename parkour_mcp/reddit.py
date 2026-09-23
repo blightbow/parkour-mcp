@@ -74,7 +74,12 @@ _WREQ_FETCH_ERRORS = (
 # Rate limiter — 2s between API requests
 # ---------------------------------------------------------------------------
 
-_reddit_limiter = RateLimiter(2.0)
+_reddit_limiter = RateLimiter(
+    2.0,
+    name="Reddit",
+    policy="2 s between requests on a userless OAuth token, well under "
+           "Reddit's ceiling of roughly 100 requests per minute",
+)
 
 # ---------------------------------------------------------------------------
 # OAuth — userless "installed_client" access tokens

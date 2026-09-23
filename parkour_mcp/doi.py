@@ -38,7 +38,11 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # doi.org: CrossRef polite pool 10 req/s with mailto, 5 req/s without.
 # DataCite via doi.org: 1,000/5min (~3.3/s). Conservative default: 5/sec.
-_doi_limiter = RateLimiter(0.2)
+_doi_limiter = RateLimiter(
+    0.2,
+    name="doi.org",
+    policy="5 requests per second, the CrossRef allowance without a mailto",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -89,7 +93,11 @@ async def _detect_ra(doi: str, *, timeout: float = 5.0) -> str | None:
 # ---------------------------------------------------------------------------
 # DataCite REST API
 # ---------------------------------------------------------------------------
-_datacite_limiter = RateLimiter(0.1)  # 10 req/s
+_datacite_limiter = RateLimiter(
+    0.1,
+    name="DataCite REST",
+    policy="10 requests per second, under DataCite's 1,000 per 5 minutes",
+)
 
 
 async def fetch_datacite_metadata(
@@ -164,7 +172,13 @@ async def fetch_datacite_metadata(
 # CrossRef REST API (retraction + adjacent enrichment)
 # ---------------------------------------------------------------------------
 # CrossRef polite pool: 10 req/s with mailto, 5 req/s without.
-_crossref_limiter = RateLimiter(0.2)
+_crossref_limiter = RateLimiter(
+    0.2,
+    name="CrossRef REST",
+    policy="5 requests per second without a mailto, 10 in the polite pool "
+           "with one",
+    url="https://www.crossref.org/documentation/retrieve-metadata/rest-api/tips-for-using-the-crossref-rest-api/",
+)
 
 # DOI format guard: "10." followed by registrant + "/" + suffix.  Applied
 # to any DOI-ish value pulled from CrossRef before it lands in frontmatter

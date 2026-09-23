@@ -60,7 +60,12 @@ _HF_SITE_BASE = "https://huggingface.co"
 # 1 req/s politeness floor.  The Hub's own ceiling is far higher (500 per
 # 300 s fixed window, read from the response headers below); this limiter
 # exists so a burst of fast-path calls does not spike a shared bucket.
-_hf_limiter = RateLimiter(1.0)
+_hf_limiter = RateLimiter(
+    1.0,
+    name="HuggingFace Hub",
+    policy="1 s politeness floor; the Hub's own ceiling arrives in its "
+           "ratelimit response header (RFC 9651 structured field)",
+)
 
 _MAX_RETRIES = 3
 _RETRY_BACKOFF = 1.0

@@ -498,3 +498,44 @@ class TestExceptionHierarchy:
     def test_everything_is_a_fetch_error(self, exc):
         """One `except FetchError` arm has to be enough for callers."""
         assert issubclass(exc, FetchError)
+
+
+# ---------------------------------------------------------------------------
+# Wire trace on the generic path
+# ---------------------------------------------------------------------------
+
+
+class TestTrace:
+    @pytest.mark.asyncio
+    async def test_records_every_hop_with_the_fingerprint_named(self, fake_transport):
+        from parkour_mcp import _trace
+
+        fake_transport([
+            _FakeResponse(status=302, headers={"location": "/final", "server": "nginx"}),
+            _FakeResponse(status=200, headers={"content-type": "text/html"},
+                          chunks=[b"<p>hi</p>"], version="HTTP_11"),
+        ])
+        with _trace.collect() as seen:
+            await guarded_fetch("https://example.com/start", headers={"User-Agent": "ua"})
+        assert [e.status for e in seen] == [302, 200]
+        first, final = seen
+        assert first.transport == final.transport == "wreq"
+        assert first.emulation == final.emulation == "Chrome149"
+        assert first.url == "https://example.com/start"
+        assert first.response_headers["location"] == "/final"
+        assert first.body_bytes is None
+        assert final.url == "https://example.com/final"
+        assert final.http_version == "HTTP/1.1"
+        assert final.body_bytes == len(b"<p>hi</p>")
+        assert final.remote_addr == "93.184.216.34"
+        assert final.request_headers == {"user-agent": "ua"}
+
+    @pytest.mark.asyncio
+    async def test_dry_run_stops_before_the_first_hop(self, fake_transport):
+        from parkour_mcp import _trace
+
+        state = fake_transport([_FakeResponse()])
+        with _trace.collect() as seen, _trace.dry_run(), pytest.raises(_trace.DryRunStop):
+            await guarded_fetch("https://example.com/")
+        assert state["client"].requested == []
+        assert len(seen) == 1 and seen[0].dry_run

@@ -34,7 +34,12 @@ logger = logging.getLogger(__name__)
 # Uses a lock so concurrent MCP calls (parallel tool use) are serialized
 # and the second caller sleeps only for the remaining window.
 # ---------------------------------------------------------------------------
-_s2_limiter = RateLimiter(1.0)
+_s2_limiter = RateLimiter(
+    1.0,
+    name="Semantic Scholar",
+    policy="1 request per second is the unauthenticated allowance; an API "
+           "key raises it",
+)
 
 S2_BASE_URL = "https://api.semanticscholar.org/graph/v1"
 S2_CONFIG_PATH = Path.home() / ".config" / "parkour" / "s2_api_key"

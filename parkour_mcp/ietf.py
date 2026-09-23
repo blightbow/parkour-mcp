@@ -50,7 +50,11 @@ _SUBSERIES_ID_RE = re.compile(
 # Rate limiter — 1s between Datatracker API requests (undocumented limit).
 # No limiter for RFC Editor CDN (static files, Cloudflare-cached).
 # ---------------------------------------------------------------------------
-_datatracker_limiter = RateLimiter(1.0)
+_datatracker_limiter = RateLimiter(
+    1.0,
+    name="IETF Datatracker",
+    policy="1 s politeness floor; the Datatracker publishes no limit",
+)
 
 
 # ---------------------------------------------------------------------------

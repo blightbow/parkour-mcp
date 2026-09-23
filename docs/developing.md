@@ -75,6 +75,50 @@ gracefully if optional credentials (`GITHUB_TOKEN`, etc.) aren't available.
 with `open` so Claude Desktop picks it up for local install. Useful for
 manual UAT against a candidate build before tagging.
 
+## Debugging live behavior
+
+`parkour-mcp call` invokes one registered tool from the shell through the
+production path: profile naming, the rate limiter, the transport with its
+identity policy, the caches, and the frontmatter. Nothing is reimplemented,
+so what you observe is what the MCP server would have done. Prefer it to an
+ad-hoc `httpx` or `curl` reproduction, which differs from production in the
+HTTP version, header set, and TLS fingerprint, and which bypasses the
+limiter the code enforces.
+
+```bash
+# Run a tool; its output goes to stdout
+uv run parkour-mcp --profile code call ArXiv '{"action": "search", "query": "ti:attention"}'
+
+# Record every outbound exchange as JSON lines (- for stderr)
+uv run parkour-mcp call ArXiv '{"action": "paper", "query": "2505.10465"}' --trace -
+
+# Build the first request and stop before sending it (zero network cost)
+uv run parkour-mcp call ArXiv '{"action": "search", "query": "abs:\"vision tokens\""}' --dry-run --as-curl
+
+# Render each exchange as a curl command behind its rate-limit contract
+uv run parkour-mcp call WebFetchIncisive '{"url": "https://example.com"}' --as-curl
+```
+
+Tool names accept the internal key (`arxiv`), the Claude Code name
+(`ArXiv`), or the Desktop name (`arxiv`), case-insensitively. Arguments
+are one JSON object, or `-` to read it from stdin.
+
+`PARKOUR_TRACE=<path>` (or `-`) turns the same wire trace on inside the
+MCP server, so an incident in Claude Desktop or Claude Code yields the
+request as sent, the status, the locating response headers (`server`,
+`via`, `x-cache`, `age`, `retry-after`, and the rate-limit family), the
+elapsed time, and the limiter that governed the call. That record is what
+`--as-curl` and `--dry-run` read; see `parkour_mcp/_trace.py`.
+
+Two rules the harness enforces rather than documents. It never bypasses a
+rate limiter: every `RateLimiter` carries its contract (`name`, `policy`,
+`url`), and `--as-curl` prints that contract with the `sleep` a loop must
+add back, or says plainly that no in-process limiter governed the request.
+And it never invents an equivalent client: the curl command is rendered
+from the record of what the tool sent. On the generic path the tool sends
+wreq's Chrome fingerprint, which curl cannot reproduce, and the rendering
+says so, because a refusal seen by curl is not evidence about the tool.
+
 ## Tool icons
 
 Tool and server icons are generated from Noto fonts (SIL OFL 1.1) by

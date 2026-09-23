@@ -36,7 +36,13 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Rate limiter — 3 seconds between requests per arXiv API terms of use.
 # ---------------------------------------------------------------------------
-_arxiv_limiter = RateLimiter(3.0)
+_arxiv_limiter = RateLimiter(
+    3.0,
+    name="arXiv API",
+    policy="arXiv asks for one request every three seconds on a single "
+           "connection, counted across every machine you control",
+    url="https://info.arxiv.org/help/api/tou.html",
+)
 
 
 # ---------------------------------------------------------------------------

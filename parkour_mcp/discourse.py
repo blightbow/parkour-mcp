@@ -44,7 +44,12 @@ _DEFAULT_DISCOURSE_INTERVAL = 1.0
 def _get_limiter(hostname: str) -> RateLimiter:
     """Get or create a rate limiter for a Discourse host."""
     if hostname not in _discourse_limiters:
-        _discourse_limiters[hostname] = RateLimiter(_DEFAULT_DISCOURSE_INTERVAL)
+        _discourse_limiters[hostname] = RateLimiter(
+            _DEFAULT_DISCOURSE_INTERVAL,
+            name=f"Discourse ({hostname})",
+            policy="1 s politeness floor per forum host; Discourse instances "
+                   "publish no common limit",
+        )
     return _discourse_limiters[hostname]
 
 

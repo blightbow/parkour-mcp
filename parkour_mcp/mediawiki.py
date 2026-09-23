@@ -67,7 +67,13 @@ _HOST_FORBIDDEN_CHARS = frozenset("#?/@\\ \t\r\n")
 # Back-fills a pre-existing gap: mediawiki.py had no client-side limiter
 # before this commit.  1.0s matches the discipline used by the IETF
 # Datatracker integration.
-_mediawiki_limiter = RateLimiter(1.0)
+_mediawiki_limiter = RateLimiter(
+    1.0,
+    name="MediaWiki",
+    policy="1 s politeness floor shared across every wiki; Wikimedia asks "
+           "for serial requests and an identifying User-Agent",
+    url="https://www.mediawiki.org/wiki/API:Etiquette",
+)
 
 # Sister Wikimedia projects that take language-prefix-free base hosts.
 # Agents can pass `wiki="commons"` and get commons.wikimedia.org; for

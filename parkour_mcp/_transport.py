@@ -42,6 +42,7 @@ from wreq import Client, DnsOptions, Emulation, Method
 from wreq import exceptions as wreq_exceptions
 from wreq.redirect import Policy
 
+from . import _trace
 from .common import (
     _FETCH_DEADLINE_SECONDS,
     _FETCH_HEADERS,
@@ -59,6 +60,8 @@ _logger = logging.getLogger(__name__)
 # disagreed with the headers would reintroduce the very incoherence this module
 # exists to remove.
 _EMULATION = Emulation.Chrome149
+# The trace records the fingerprint by name; `Emulation` has no stable str form.
+_EMULATION_NAME = "Chrome149"
 
 # Redirect hops we will follow.  httpx's default is 20; the lower ceiling here
 # is affordable because every hop costs a fresh DNS resolution and address
@@ -394,39 +397,62 @@ async def _follow(
         client = build_client(
             pin={host: validated}, follow_redirects=False, timeout=timeout
         )
+        exchange = _trace.begin(
+            "wreq", method, current, headers, emulation=_EMULATION_NAME,
+        )
         try:
             response = await client.request(
                 _wreq_method(method), current, headers=headers,
             )
-        except FetchError:
+        except FetchError as exc:
             # Already in our vocabulary (a guard refusal, not a network fault).
+            _trace.fail(exchange, exc)
             raise
         except wreq_exceptions.TimeoutError as exc:
             # Distinct from the wall-clock deadline in `guarded_fetch`: this is
             # the per-request budget. Both surface as FetchTimeout so callers
             # need one arm, not two.
+            _trace.fail(exchange, exc)
             raise FetchTimeout(f"Request timed out for {current}") from exc
         except Exception as exc:  # wreq's remaining error types
+            _trace.fail(exchange, exc)
             raise TransportFailure(
                 f"{type(exc).__name__} for {current}: {exc}",
                 cause_name=type(exc).__name__,
             ) from exc
 
         peer, pinned = _verify_pin(response, validated, host)
+        response_headers = {k.lower(): v for k, v in _iter_headers(response.headers)}
 
         location = response.headers.get("location")
         if isinstance(location, (bytes, bytearray)):
             location = location.decode("latin-1")
 
         if response.status.is_redirection() and location and follow_redirects:
+            _trace.finish(
+                exchange, status=response.status.as_int(),
+                http_version=_version_string(response.version),
+                response_headers=response_headers, body_bytes=None,
+                remote_addr=peer,
+            )
             history.append(current)
             current = urljoin(current, location)
             continue
 
-        body = await _read_capped(response, max_bytes, current)
+        try:
+            body = await _read_capped(response, max_bytes, current)
+        except Exception as exc:
+            _trace.fail(exchange, exc)
+            raise
+        _trace.finish(
+            exchange, status=response.status.as_int(),
+            http_version=_version_string(response.version),
+            response_headers=response_headers, body_bytes=len(body),
+            remote_addr=peer,
+        )
         return FetchResponse(
             status_code=response.status.as_int(),
-            headers={k.lower(): v for k, v in _iter_headers(response.headers)},
+            headers=response_headers,
             content=body,
             url=current,
             http_version=_version_string(response.version),

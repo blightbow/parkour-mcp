@@ -77,7 +77,13 @@ _NO_TOKEN_MSG = (
 # Rate limiter — 1 request per second baseline politeness
 # ---------------------------------------------------------------------------
 
-_github_limiter = RateLimiter(1.0)
+_github_limiter = RateLimiter(
+    1.0,
+    name="GitHub REST",
+    policy="1 s politeness floor; GitHub's quota is hourly (60 unauthenticated, "
+           "5000 with a token) and reported in X-RateLimit headers",
+    url="https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api",
+)
 
 # ---------------------------------------------------------------------------
 # Authentication

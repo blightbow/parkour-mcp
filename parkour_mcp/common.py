@@ -15,6 +15,8 @@ import httpcore
 import httpx
 from httpx._utils import get_environment_proxies
 
+from . import _trace
+
 # ---------------------------------------------------------------------------
 # Package / runtime versions (used in User-Agent strings)
 # ---------------------------------------------------------------------------
@@ -267,19 +269,43 @@ def _classify_content_type(content_type: str) -> str | None:
 # ---------------------------------------------------------------------------
 
 class RateLimiter:
-    """Async rate limiter with minimum interval between calls."""
+    """Async rate limiter with minimum interval between calls.
 
-    def __init__(self, min_interval: float):
+    *name*, *policy*, and *url* describe the contract for a reader: the
+    upstream this limiter protects, its rule in one sentence, and where the
+    rule is published.  ``wait`` notes the limiter with the wire trace so the
+    exchange that follows records which contract governed it, and
+    ``parkour-mcp call --as-curl`` prints that contract as the warning ahead
+    of the command.  A caller composing a loop then has the number and its
+    source from the code rather than from research.
+    """
+
+    def __init__(
+        self,
+        min_interval: float,
+        *,
+        name: str | None = None,
+        policy: str | None = None,
+        url: str | None = None,
+    ):
         self._lock = asyncio.Lock()
         self._last: float = 0.0
         self.min_interval = min_interval
+        self.name = name
+        self.policy = policy
+        self.url = url
 
-    async def wait(self) -> None:
+    async def wait(self) -> float:
+        """Hold until the interval has passed.  Returns the seconds waited."""
+        waited = 0.0
         async with self._lock:
             elapsed = time.monotonic() - self._last
             if elapsed < self.min_interval:
-                await asyncio.sleep(self.min_interval - elapsed)
+                waited = self.min_interval - elapsed
+                await asyncio.sleep(waited)
             self._last = time.monotonic()
+        _trace.note_limiter(self, waited)
+        return waited
 
 
 # ---------------------------------------------------------------------------
@@ -292,7 +318,12 @@ class RateLimiter:
 
 _DEPSDEV_BASE = "https://api.deps.dev/v3"
 _DEPSDEV_NOT_FOUND = "Error: Not found on deps.dev."
-_depsdev_limiter = RateLimiter(1.0)
+_depsdev_limiter = RateLimiter(
+    1.0,
+    name="deps.dev",
+    policy="1 s politeness floor; deps.dev publishes no formal limit and its "
+           "terms defer to reasonable use",
+)
 
 
 async def _depsdev_get(path: str) -> dict | str:
@@ -822,6 +853,46 @@ class ResponseTooLarge(FetchError):
     """Raised when a response exceeds the size cap."""
 
 
+async def _read_guarded(
+    client: httpx.AsyncClient, request: httpx.Request, max_bytes: int | None,
+) -> httpx.Response:
+    """Send *request* and buffer its body under the two size layers."""
+    async with client.stream(
+        request.method, request.url, headers=request.headers,
+    ) as resp:
+        # Layer 1: Content-Length gate
+        if max_bytes is not None:
+            cl = resp.headers.get("content-length")
+            if cl is not None:
+                try:
+                    if int(cl) > max_bytes:
+                        raise ResponseTooLarge(
+                            f"Content-Length {cl} exceeds "
+                            f"{max_bytes:,} byte limit"
+                        )
+                except ValueError:
+                    pass  # malformed header — fall through to streaming
+
+        # Layer 2: streaming size cap
+        chunks: list[bytes] = []
+        total = 0
+        async for chunk in resp.aiter_bytes(chunk_size=65_536):
+            total += len(chunk)
+            if max_bytes is not None and total > max_bytes:
+                raise ResponseTooLarge(
+                    f"Response body exceeded {max_bytes:,} "
+                    f"byte limit at {total:,} bytes"
+                )
+            chunks.append(chunk)
+
+        # Populate _content so .text / .json() work after the
+        # stream context exits — same attr httpx uses internally.
+        resp._content = b"".join(chunks)
+    # The response object (headers, status_code, _content) survives the
+    # context-manager exit; only the transport is closed.
+    return resp
+
+
 async def guarded_fetch(
     url: str,
     *,
@@ -907,40 +978,29 @@ async def guarded_fetch(
             follow_redirects=follow_redirects,
             timeout=timeout,
             http2=http2,
-        ) as client, client.stream(
-            method, url, headers=headers, params=params,
-        ) as resp:
-            # Layer 1: Content-Length gate
-            if max_bytes is not None:
-                cl = resp.headers.get("content-length")
-                if cl is not None:
-                    try:
-                        if int(cl) > max_bytes:
-                            raise ResponseTooLarge(
-                                f"Content-Length {cl} exceeds "
-                                f"{max_bytes:,} byte limit"
-                            )
-                    except ValueError:
-                        pass  # malformed header — fall through to streaming
-
-            # Layer 2: streaming size cap
-            chunks: list[bytes] = []
-            total = 0
-            async for chunk in resp.aiter_bytes(chunk_size=65_536):
-                total += len(chunk)
-                if max_bytes is not None and total > max_bytes:
-                    raise ResponseTooLarge(
-                        f"Response body exceeded {max_bytes:,} "
-                        f"byte limit at {total:,} bytes"
-                    )
-                chunks.append(chunk)
-
-            # Populate _content so .text / .json() work after the
-            # stream context exits — same attr httpx uses internally.
-            resp._content = b"".join(chunks)
-        # The response object (headers, status_code, _content) survives the
-        # context-manager exit; only the transport is closed.
-        return resp
+        ) as client:
+            # Built first so the trace sees the URL and headers as they go
+            # on the wire, query encoding included, and so a dry run can
+            # stop here with that record and nothing sent.
+            request = client.build_request(
+                method, url, headers=headers, params=params,
+            )
+            exchange = _trace.begin(
+                "httpx", request.method, str(request.url), request.headers,
+            )
+            try:
+                resp = await _read_guarded(client, request, max_bytes)
+            except Exception as exc:
+                _trace.fail(exchange, exc)
+                raise
+            _trace.finish(
+                exchange,
+                status=resp.status_code,
+                http_version=resp.http_version,
+                response_headers=resp.headers,
+                body_bytes=len(resp.content),
+            )
+            return resp
 
     try:
         async with asyncio.timeout(deadline):
