@@ -489,6 +489,8 @@ Vaswani, A., Shazeer, N., Parmar, N., Uszkoreit, J., Jones, L., ... (2017).
 *Attention Is All You Need* (Version 7). arXiv. https://doi.org/10.48550/ARXIV.1706.03762
 ```
 
+An `HTTP 406` or `HTTP 429` error from the search or paper actions is arXiv's edge shedding load under a system-wide limit (arXiv staff on the API discussion list, September 2026: "it's not you, it's too many total users"). It says nothing about the query, its encoding, or your request rate; the same query succeeds once the window passes, typically within a few minutes, and requests made inside the window prolong it. The tool reports it as such and does not retry in-call. A `503` is retried with backoff, honoring `Retry-After`.
+
 **arXiv search** — uses arXiv query syntax with field prefixes and boolean operators:
 
 ```

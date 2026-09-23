@@ -53,6 +53,33 @@ _ARXIV_HEADERS = {
 
 _ARXIV_MAX_RETRIES = 3
 _ARXIV_RETRY_BACKOFF = 3.0  # seconds; doubles each retry
+_ARXIV_RETRY_AFTER_CAP = 30.0  # seconds; longest Retry-After honored per attempt
+
+# Statuses arXiv's edge uses to shed load under a system-wide limit.  Both
+# are undocumented.  arXiv staff describe a 429 whose body reads "Rate
+# exceeded." as "a system wide limit ... too many total users, generally a
+# temporary spike in bots" (arXiv API Discussion, 2026-09-14), and the same
+# refusal reaches httpx clients as an empty-bodied 406 from Varnish while
+# curl on the same host sees the 429 (arXiv API Discussion, 2026-09-22, and
+# measured here).  Neither says anything about the query, its encoding, the
+# Accept header, or this client's request rate: the byte-identical request
+# returns 200 once the window passes, typically minutes later, and requests
+# made inside the window extend it.  So both are reported as arXiv-side and
+# not retried in-call.  503 keeps its documented Retry-After ladder.
+_ARXIV_LOAD_SHED_STATUSES = frozenset({406, 429})
+
+
+def _retry_delay(response: httpx.Response, attempt: int) -> float:
+    """Seconds to wait before retrying a 503.
+
+    Honors a numeric ``Retry-After`` when the server sends one, capped at
+    ``_ARXIV_RETRY_AFTER_CAP`` so a hostile value cannot pin the call; falls
+    back to the doubling backoff otherwise.
+    """
+    raw = response.headers.get("retry-after", "")
+    if raw.strip().isdigit():
+        return min(float(raw), _ARXIV_RETRY_AFTER_CAP)
+    return _ARXIV_RETRY_BACKOFF * (2 ** attempt)
 
 
 def _parse_arxiv_entry(entry_el: ET.Element) -> dict:
@@ -135,6 +162,17 @@ def _parse_arxiv_entry(entry_el: ET.Element) -> dict:
     }
 
 
+def _load_shed_error(status: int) -> str:
+    """Error string for a 406/429 from arXiv's edge."""
+    return (
+        f"Error: arXiv API returned HTTP {status}. This is arXiv's edge shedding "
+        "load under a system-wide limit, not a problem with the query or this "
+        "client's request rate: the same query succeeds once the window passes, "
+        "typically within a few minutes. Wait before retrying, since requests "
+        "made inside the window prolong it."
+    )
+
+
 async def _arxiv_request(params: dict) -> list[dict] | str:
     """HTTP GET to arXiv API, rate-limited, with retry on 503.
 
@@ -155,9 +193,11 @@ async def _arxiv_request(params: dict) -> list[dict] | str:
 
         if response.status_code == 200:
             break
+        if response.status_code in _ARXIV_LOAD_SHED_STATUSES:
+            return _load_shed_error(response.status_code)
         if response.status_code == 503:
             if attempt < _ARXIV_MAX_RETRIES:
-                backoff = _ARXIV_RETRY_BACKOFF * (2 ** attempt)
+                backoff = _retry_delay(response, attempt)
                 logger.info("arXiv 503, retry %d after %.1fs", attempt + 1, backoff)
                 await asyncio.sleep(backoff)
                 continue

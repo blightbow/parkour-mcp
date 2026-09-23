@@ -331,6 +331,9 @@ search operators:
 - Boolean operators: AND, OR, ANDNOT
 - Examples: "ti:attention AND cat:cs.CL", "au:vaswani AND ti:transformer"
 
+An HTTP 406 or 429 error is arXiv shedding load under a system-wide limit,
+not a problem with the query: wait a few minutes and retry it unchanged.
+
 Papers retrieved via the paper action are automatically tracked on the
 research shelf.""",
 

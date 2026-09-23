@@ -12,12 +12,14 @@ _arxiv_module = sys.modules["parkour_mcp.arxiv"]
 
 from parkour_mcp._pipeline import _arxiv_fast_path  # noqa: E402
 from parkour_mcp.arxiv import (  # noqa: E402
+    _ARXIV_RETRY_AFTER_CAP,
     ARXIV_API_URL,
     _arxiv_request,
     _fetch_arxiv_paper,
     _format_arxiv_list,
     _format_arxiv_paper,
     _parse_arxiv_entry,
+    _retry_delay,
     arxiv,
 )
 from parkour_mcp.detection import _detect_arxiv_url, _strip_version  # noqa: E402
@@ -273,6 +275,64 @@ class TestArxivRequest:
         result = await _arxiv_request({"id_list": "1706.03762"})
         assert isinstance(result, str)
         assert "500" in result
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_503_honors_retry_after(self, monkeypatch):
+        """A 503 carrying Retry-After waits that long, not the doubling backoff."""
+        slept: list[float] = []
+
+        async def fake_sleep(seconds):
+            slept.append(seconds)
+
+        monkeypatch.setattr(_arxiv_module.asyncio, "sleep", fake_sleep)
+        route = respx.get(ARXIV_API_URL)
+        route.side_effect = [
+            httpx.Response(503, headers={"Retry-After": "7"}),
+            httpx.Response(200, text=ARXIV_SINGLE_ENTRY_XML),
+        ]
+        result = await _arxiv_request({"id_list": "1706.03762"})
+        assert isinstance(result, list)
+        assert slept == [7.0]
+
+    @pytest.mark.parametrize("status", [406, 429])
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_load_shedding_is_reported_not_retried(self, status):
+        """406 and 429 are arXiv's system-wide load shedding.
+
+        The window lasts minutes and requests made inside it extend it, so
+        the tool makes exactly one request and names the cause so the
+        caller does not rewrite a query that was never the problem.
+        """
+        route = respx.get(ARXIV_API_URL).mock(return_value=httpx.Response(status))
+        result = await _arxiv_request({"search_query": 'abs:"vision tokens"'})
+        assert isinstance(result, str)
+        assert result.startswith("Error:")
+        assert str(status) in result
+        assert "system-wide" in result
+        assert "not a problem with the query" in result
+        assert route.call_count == 1
+
+
+class TestRetryDelay:
+    def _resp(self, **headers):
+        return httpx.Response(503, headers=headers)
+
+    def test_backoff_doubles_without_retry_after(self, monkeypatch):
+        monkeypatch.setattr(_arxiv_module, "_ARXIV_RETRY_BACKOFF", 3.0)
+        assert [_retry_delay(self._resp(), n) for n in range(3)] == [3.0, 6.0, 12.0]
+
+    def test_numeric_retry_after_wins(self):
+        assert _retry_delay(self._resp(**{"Retry-After": "5"}), 2) == 5.0
+
+    def test_retry_after_is_capped(self):
+        assert _retry_delay(self._resp(**{"Retry-After": "3600"}), 0) == _ARXIV_RETRY_AFTER_CAP
+
+    def test_http_date_retry_after_falls_back_to_backoff(self, monkeypatch):
+        monkeypatch.setattr(_arxiv_module, "_ARXIV_RETRY_BACKOFF", 3.0)
+        resp = self._resp(**{"Retry-After": "Wed, 23 Sep 2026 04:00:00 GMT"})
+        assert _retry_delay(resp, 1) == 6.0
 
 
 # ---------------------------------------------------------------------------
