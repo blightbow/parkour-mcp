@@ -264,12 +264,139 @@ matters; nobody has.
 
 ## `fetch_direct.py` — deferred enhancements
 
-### Classifier rejects `text/markdown` and `application/yaml`
+### Classifier rejects `text/markdown`, `application/yaml`, and `application/pdf`
 
 - **Location**: `parkour_mcp/common.py#_classify_content_type` (whitelist), with the rejection emitted in `parkour_mcp/fetch_direct.py#web_fetch_direct` when the classifier returns `None`.
 - **Issue**: The classifier whitelists `text/html`, `application/json`, `application/xml`, and `text/plain`. Markdown (`text/markdown`) and YAML (`application/yaml`, `text/yaml`) return `None`, producing `Error: Unsupported content type '...'`. Both are machine-readable text formats, and the existing non-HTML branch in `web_fetch_direct` already renders raw text with frontmatter, so the data path could carry them trivially. Concrete affected target: Kagi's v1 API spec is served as `text/markdown` (`.md` flat pages) and `application/yaml` (bundle download); see the `kagi.py` bullet in `CLAUDE.md` for URLs. Sessions that need the source-of-truth Kagi spec currently have to shell out to `curl`.
 - **Why deferred**: Out of scope for the documentation-first turn that surfaced it. The fix is small (two added branches in `_classify_content_type` returning new classifier labels), and `_SOURCE_EXT_MAP` in `common.py` already maps `.md` to `markdown` and `.yaml`/`.yml` to `yaml`, so the syntax-tag plumbing is in place.
 - **Mitigation**: Fetch via `curl` until the classifier is extended.
+
+The three types land together: markdown and YAML are two classifier
+branches, and PDF is the same seam plus a decoder. The PDF part is planned
+below so the decision does not get re-derived.
+
+### `application/pdf` support plan
+
+- **Why it matters more than the other two**: Claude Desktop has no
+  file-reading tool outside Cowork, and its built-in fetch only follows URLs
+  already in context from user messages, web search results, or prior
+  fetches. A PDF URL that Parkour surfaces (arXiv `/pdf/`, Semantic Scholar
+  `openAccessPdf`, RFC Editor `.pdf`, the Kagi `pdfs` lens) is therefore
+  unreachable from Desktop, and Parkour itself refuses it. Claude Code's
+  `Read` tool decodes a PDF natively, but its `pages=` path shells out to
+  poppler's `pdftoppm` and the tool description steers the model onto that
+  path above 10 pages, so a poppler-less install fails there too
+  (anthropics/claude-code#84860). Decoding server-side fixes both hosts and
+  feeds the slicing and BM25 pipeline, which is the product; whole-document
+  ingestion by the host would not.
+- **Dead route, do not retry**: returning the PDF bytes as an MCP embedded
+  resource (`type: resource`, `application/pdf` blob) so the host's native
+  PDF reader takes it. Claude Desktop rejects it as a malformed image
+  (modelcontextprotocol/csharp-sdk#1261). Image content blocks do pass
+  through, which is what makes a page-rendering leg viable.
+- **Engine**: `pdf-inspector` (Firecrawl, MIT, pure Rust on `lopdf`,
+  ~6 MB abi3 wheel on all five platform pairs the manifest declares).
+  Pin the version: it went from 0.1.8 to 1.14 in one month and has a
+  single committer. Measured on a staged corpus, `process_pdf_bytes`
+  markdown, headings counted by `^#{1,6} `:
+
+  | document | pdf-inspector 1.24 | pdf_oxide 0.3.78 |
+  |---|---|---|
+  | Attention Is All You Need, 15 pp, single column | 36 headings, every numbered section | 4 headings |
+  | RFC 9110 as PDF, 311 pp | 403 headings, full section tree, 0.5 s | 8 headings, no numbered sections |
+  | BERT, two-column ACL | 40 headings, columns flow correctly | 8 headings, title split in two with author names interleaved, title fragments injected into the Introduction |
+
+  `pdf_oxide` renders numbered headings as bold runs, so a slicing pipeline
+  gets no section tree from it, and its column handling on BERT reproduces
+  the reading-order defect its own QA sweep reports. Its API also carries
+  PAdES signing, redaction, and Office export from one maintainer at 83
+  releases in ten months. Its one unique asset is a pure-Rust `render_page`.
+- **Why not PyMuPDF**: AGPL, and the quality is in the C library, not the
+  Python. Since MuPDF 1.25 and 1.26 the segmentation, paragraph breaking,
+  table hunting, style flags, and structure-tree merge all live in the
+  stext device, and `pymupdf-layout` is an AGPL GNN over those C structs.
+  `mupdf-rs`, `mupdf.js`, `go-fitz`, and `mutool` inherit the license, so
+  no binding language reaches it. The Python-side heuristics (font-size
+  heading histogram, column boxes, the pdfplumber-derived table finder) are
+  the reproducible half and are what pdf-inspector supplies.
+- **Post-passes, written over positioned text items, not over markdown**:
+  font-size tiers promote noise (the license notice on a first page, a
+  display equation), and the rotated arXiv margin stamp lands as a level-1
+  heading inside the Introduction, which would fabricate a section on every
+  arXiv PDF. `extract_text_with_positions_and_rotations` exposes what is
+  needed to drop rotated runs; the stamp's fixed shape
+  (`arXiv:<id> [<cat>] <date>`) is a `detection.py` pattern. Working on the
+  items rather than the rendered markdown is both more correct (geometry is
+  the only signal for the stamp) and what keeps the passes portable to a
+  Rust core if one is ever built.
+- **Plumbing**: PDFs sit close to the 5 MiB default cap (the arXiv and RFC
+  samples were 2.2 and 2.9 MB) and figure-heavy or scanned ones exceed it,
+  so the fetch takes the 50 MiB ceiling that MediaWiki and GitHub blobs
+  already use. `PdfResult` carries title,
+  author, and dates, which feed frontmatter and, for arXiv, the shelf. A
+  paper with no `/html/` rendering currently errors on a targeted `/abs/`
+  request; the PDF path is the fallback for that case.
+- **Rendering leg, deferred**: page-to-PNG as MCP image content for figures
+  and scanned pages. `pypdfium2` (BSD, 3.5 MB, wheels everywhere) is the
+  pragmatic Python-side renderer; `pdf_oxide` if a single wheel matters
+  more than a second maintainer. Needs a per-call page cap because image
+  tokens are expensive. Land text first and let a real request pull this in.
+
+## Rust core: direction recorded, not started
+
+The project's transformation dependencies are converging on Rust (tantivy,
+htmd, semantic-text-splitter, wreq, and now pdf-inspector), each reached
+through someone else's Python binding. A first-party crate that links them
+directly and exposes one binding is a coherent shape. It is not started,
+because none of its justifications is a live defect yet. This records the
+shape and the conditions that would start it, so the decision is made on a
+trigger rather than re-derived.
+
+- **What it would buy, in order of weight**: (1) the tantivy tokenizer
+  ceiling goes away, because a from-source tantivy reaches lindera and
+  jieba with real positions, retiring the n-gram approach and its accepted
+  false positives (see "Unspaced-script search matches n-gram sets, not
+  substrings"); (2) binding friction of the htmd-py kind becomes a
+  `Cargo.toml` patch line instead of a PyPI publishing exercise; (3) a
+  document tree becomes the intermediate representation instead of a
+  markdown string, so sections, ancestry, and slices derive from structure
+  rather than being rediscovered by regex (`_promote_list_headings`, the
+  heading-anchor repairs, fuzzy slug matching exist only because the tree
+  is thrown away at the htmd boundary). PDF makes (3) concrete: font-size
+  heading detection yields a tree, and flattening it to markdown only to
+  re-parse it is perverse.
+- **What it would not buy**: speed. The splitter is the dominant phase and
+  is accepted; FFI string copies are not what hurts. Do not sell this as a
+  performance project.
+- **What stays in Python regardless**: source adapters (API I/O plus
+  formatting), MCP registration and profiles, caches and eviction policy,
+  frontmatter, fencing, truncation, SSRF, transport. The line is bytes in,
+  structured document out on the Rust side.
+- **Costs**: the MCPB bundle is `uv`-type and resolves from PyPI at install
+  time, so the crate must publish wheels for macOS on both architectures,
+  manylinux on both, and Windows, or the extension fails to install there;
+  a maturin build matrix in the release workflow where there is currently
+  no compile step. The markdown and pipeline test suites are Python-shaped
+  and would migrate with the logic; the perf fixtures and the byte-level
+  output pin are the regression gate for any port. Keep the tree
+  inspectable from Python so `parkour-mcp call` and the fixture tooling
+  keep working.
+- **Triggers, any one of which starts it**: a fix Parkour needs lands in a
+  crate but not in its Python wheel, or a wheel stops publishing (the
+  pdf-inspector binding exists for Firecrawl's needs, not ours, and is the
+  likeliest candidate); a real report of CJK search precision hurting
+  someone; a fourth structured source that needs the tree and not the
+  markdown.
+- **Sequencing when triggered**: strangler pattern. Start with whichever
+  path the trigger names, behind the existing bytes-to-document seam, with
+  the perf and output-size pins as the gate. Do not start with a big-bang
+  port of `markdown.py`, which is the most test-covered and least broken
+  part of the system.
+- **What to keep portable meanwhile**: post-passes written over the
+  engine's structured output rather than its rendered markdown, and one
+  bytes-to-document seam per format so the engine behind it is swappable.
+  Nothing further; abstracting for a core that may never be built is its
+  own astonishment.
 
 ## `kagi.py` — v0 dormant island
 
