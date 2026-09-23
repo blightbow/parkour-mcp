@@ -22,7 +22,7 @@ description = "List section headings and anchor slugs for a web page (for target
 [[tool]]
 name = "web_fetch_incisive"
 pascal = "WebFetchIncisive"
-description = "Fetch a Markdown rendered version of a HTML webpage (also returns raw content for common content types: JSON, XML, plain text). `requires_js=true` renders JavaScript-dependent pages through a headless browser, with an `actions` ReAct chain for interaction"
+description = "Fetch a Markdown rendered version of a HTML webpage, a PDF, or a markdown file, with section, search, and slice support (JSON, XML, YAML, and plain text are returned raw). `requires_js=true` renders JavaScript-dependent pages through a headless browser, with an `actions` ReAct chain for interaction"
 
 [[tool]]
 name = "semantic_scholar"

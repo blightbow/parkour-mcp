@@ -310,7 +310,9 @@ default. Pass actions to run a ReAct interaction chain before extraction
 A browser render annotates interactive elements for follow-up actions;
 max_elements caps that list, and 0 omits it.
 
-Supports HTML, plain text, JSON, and XML content types.""",
+HTML, PDF, and markdown bodies are converted to markdown and support
+section, search, and slices; plain text, JSON, XML, and YAML are
+returned raw.""",
 
     "arxiv": """Search and retrieve academic papers from arXiv.
 

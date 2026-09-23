@@ -38,6 +38,25 @@ from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 # ---------------------------------------------------------------------------
 # arXiv
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# PDF
+# ---------------------------------------------------------------------------
+
+def _detect_pdf_url(url: str) -> bool:
+    """Whether the URL's shape says it serves a PDF, before any fetch.
+
+    True for a path ending in ``.pdf`` and for arXiv ``/pdf/`` paths, which
+    carry no extension.  A prior, not a verdict: the fetch tools use it to
+    pick the response size ceiling before the Content-Type is known, and
+    classify the body itself once it arrives.
+    """
+    parsed = urlparse(url)
+    path = parsed.path.lower()
+    if path.endswith(".pdf"):
+        return True
+    return parsed.hostname in ("arxiv.org", "export.arxiv.org") and path.startswith("/pdf/")
+
+
 # Matches arxiv.org/{abs,pdf}/<id> and export.arxiv.org variants.
 # Excludes /html/ — arXiv's HTML endpoint serves full rendered papers;
 # intercepting it would discard full text in favor of metadata-only.

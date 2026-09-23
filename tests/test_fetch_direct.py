@@ -1714,6 +1714,7 @@ ARXIV_HTML_PAGE = """<html><head><title>Superposition Yields Robust Neural Scali
 _ARXIV_ABS = "https://arxiv.org/abs/2505.10465"
 _ARXIV_PDF = "https://arxiv.org/pdf/2505.10465"
 _ARXIV_HTML = "https://arxiv.org/html/2505.10465"
+_ARXIV_PDF_FILE = "https://arxiv.org/pdf/2505.10465"
 
 
 def _mock_arxiv_html(status: int = 200):
@@ -1793,6 +1794,7 @@ class TestArxivFullTextRewrite:
     @respx.mock
     async def test_missing_html_rendering_points_back_to_abs(self):
         _mock_arxiv_html(status=404)
+        respx.get(_ARXIV_PDF_FILE).mock(return_value=httpx.Response(404))
         result = await web_fetch_direct(_ARXIV_ABS, search="anything")
         assert result.startswith("Error:")
         assert "no HTML rendering" in result
@@ -1826,7 +1828,195 @@ class TestArxivFullTextRewrite:
     @respx.mock
     async def test_sections_on_missing_html_rendering_points_back_to_abs(self):
         _mock_arxiv_html(status=404)
+        respx.get(_ARXIV_PDF_FILE).mock(return_value=httpx.Response(404))
         result = await web_fetch_sections(_ARXIV_PDF)
         assert result.startswith("Error:")
         assert "no HTML rendering" in result
         assert _ARXIV_PDF in result
+
+
+# ---------------------------------------------------------------------------
+# Document kinds beyond HTML: PDF and markdown go through the section, slice,
+# and search pipeline; YAML joins the raw kinds.
+# ---------------------------------------------------------------------------
+
+from tests._pdf_fixture import build_pdf  # noqa: E402
+
+_PDF_URL = "https://example.com/paper.pdf"
+
+
+def _mock_pdf(url: str = _PDF_URL, content_type: str = "application/pdf", **kw):
+    return respx.get(url).mock(
+        return_value=httpx.Response(
+            200, content=build_pdf(**kw), headers={"content-type": content_type},
+        )
+    )
+
+
+class TestPdfFetch:
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_pdf_is_decoded_to_markdown(self):
+        _mock_pdf(stamp="rotated")
+        result = await web_fetch_direct(_PDF_URL)
+        assert "content_type: pdf" in result
+        assert "pages: 1" in result
+        assert "1 Introduction" in result
+        assert "Body line one of the method" in result
+        assert "arXiv:2101.00001v1" not in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_octet_stream_pdf_is_sniffed(self):
+        _mock_pdf(content_type="application/octet-stream", stamp=None)
+        result = await web_fetch_direct(_PDF_URL)
+        assert "content_type: pdf" in result
+        assert "1 Introduction" in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_section_extraction(self):
+        _mock_pdf(stamp=None)
+        result = await web_fetch_direct(_PDF_URL, section="2 Method")
+        assert "Body line one of the method" in result
+        assert "Body line one of the introduction" not in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_search_and_cached_follow_up(self):
+        route = _mock_pdf(stamp=None)
+        result = await web_fetch_direct(_PDF_URL, search="method paragraph")
+        assert not result.startswith("Error:")
+        assert "method paragraph" in result
+        await web_fetch_direct(_PDF_URL, search="introduction")
+        assert route.call_count == 1
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_sections_tool_lists_headings(self):
+        _mock_pdf(stamp=None)
+        result = await web_fetch_sections(_PDF_URL)
+        assert "total_sections:" in result
+        assert "1 Introduction" in result
+        assert "2 Method" in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_undecodable_pdf_reports_error(self):
+        respx.get(_PDF_URL).mock(
+            return_value=httpx.Response(
+                200, content=b"%PDF-1.4\nnot really\n",
+                headers={"content-type": "application/pdf"},
+            )
+        )
+        result = await web_fetch_direct(_PDF_URL)
+        assert result.startswith("Error:")
+        assert "decode" in result.lower()
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_pdf_shaped_url_gets_relaxed_size_cap(self, monkeypatch):
+        from parkour_mcp import fetch_direct as fd
+        from parkour_mcp.common import _MAX_SECTIONS_RESPONSE_BYTES
+
+        seen = {}
+        real = fd.guarded_fetch
+
+        async def spy(url, **kw):
+            seen["max_bytes"] = kw.get("max_bytes")
+            return await real(url, **kw)
+
+        monkeypatch.setattr(fd, "guarded_fetch", spy)
+        _mock_pdf(stamp=None)
+        await web_fetch_direct(_PDF_URL)
+        assert seen["max_bytes"] == _MAX_SECTIONS_RESPONSE_BYTES
+
+
+class TestArxivPdfFallback:
+    """A targeted arXiv request with no /html/ rendering decodes the PDF."""
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_search_falls_back_to_pdf(self):
+        _mock_arxiv_html(status=404)
+        pdf_route = _mock_pdf(url=_ARXIV_PDF_FILE, stamp="rotated")
+        result = await web_fetch_direct(_ARXIV_ABS, search="method paragraph")
+        assert not result.startswith("Error:")
+        assert pdf_route.called
+        assert f"source: {_ARXIV_PDF_FILE}" in result
+        assert "no HTML rendering" in result
+        assert "method paragraph" in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_follow_up_on_abs_hits_the_pdf_cache(self):
+        html_route, _ = _mock_arxiv_html(status=404)
+        pdf_route = _mock_pdf(url=_ARXIV_PDF_FILE, stamp=None)
+        await web_fetch_direct(_ARXIV_ABS, search="method paragraph")
+        await web_fetch_direct(_ARXIV_ABS, search="introduction")
+        assert html_route.call_count == 1
+        assert pdf_route.call_count == 1
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_sections_falls_back_to_pdf(self):
+        _mock_arxiv_html(status=404)
+        _mock_pdf(url=_ARXIV_PDF_FILE, stamp=None)
+        result = await web_fetch_sections(_ARXIV_PDF)
+        assert "total_sections:" in result
+        assert "1 Introduction" in result
+        assert "no HTML rendering" in result
+
+
+class TestMarkdownAndYamlFetch:
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_markdown_goes_through_sections(self):
+        respx.get("https://example.com/spec.md").mock(
+            return_value=httpx.Response(
+                200, text="# Spec\n\n## Search\n\nSearch body.\n\n## Extract\n\nExtract body.\n",
+                headers={"content-type": "text/markdown; charset=utf-8"},
+            )
+        )
+        result = await web_fetch_direct("https://example.com/spec.md", section="Extract")
+        assert "content_type: markdown" in result
+        assert "Extract body." in result
+        assert "Search body." not in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_markdown_search(self):
+        respx.get("https://example.com/spec.md").mock(
+            return_value=httpx.Response(
+                200, text="# Spec\n\n## Search\n\nSearch body.\n",
+                headers={"content-type": "text/markdown"},
+            )
+        )
+        result = await web_fetch_direct("https://example.com/spec.md", search="body")
+        assert not result.startswith("Error:")
+        assert "Search body." in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_yaml_is_raw(self):
+        respx.get("https://example.com/openapi.yaml").mock(
+            return_value=httpx.Response(
+                200, text="openapi: 3.1.0\ninfo:\n  title: Demo\n",
+                headers={"content-type": "application/yaml"},
+            )
+        )
+        result = await web_fetch_direct("https://example.com/openapi.yaml")
+        assert "content_type: yaml" in result
+        assert "openapi: 3.1.0" in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_yaml_refuses_search(self):
+        respx.get("https://example.com/openapi.yaml").mock(
+            return_value=httpx.Response(
+                200, text="openapi: 3.1.0\n", headers={"content-type": "text/yaml"},
+            )
+        )
+        result = await web_fetch_direct("https://example.com/openapi.yaml", search="openapi")
+        assert result.startswith("Error:")
+        assert "markdown, or PDF" in result

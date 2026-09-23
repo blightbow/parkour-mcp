@@ -2,14 +2,17 @@
 
 import logging
 import re
+from functools import partial
 from pathlib import Path
 from urllib.parse import urlparse
 
 from ._pipeline import (
     _arxiv_fast_path,
     _cached_mediawiki_fetch,
+    _classify_body,
     _discourse_fast_path,
     _dispatch_slicing,
+    _document_to_markdown,
     _doi_fast_path,
     _extract_fragment,
     _get_slices,
@@ -20,12 +23,14 @@ from ._pipeline import (
     _page_cache,
     _process_markdown_sections,
     _reddit_fast_path,
+    _render_body,
     _resolve_fragment_source,
     _s2_fast_path,
     _search_slices,
 )
 from ._transport import (
     FetchError,
+    FetchResponse,
     FetchStatusError,
     FetchTimeout,
     guarded_fetch,
@@ -35,7 +40,6 @@ from .common import (
     _MAX_RESPONSE_BYTES,
     _MAX_SECTIONS_RESPONSE_BYTES,
     ResponseTooLarge,
-    _classify_content_type,
     check_url_scheme,
     check_url_ssrf,
     proxy_warning,
@@ -50,6 +54,7 @@ from .detection import (
     _detect_doi_url,
     _detect_hf_url,
     _detect_ietf_url,
+    _detect_pdf_url,
     _detect_reddit_url,
     _detect_s2_url,
     _extract_comment_permalink,
@@ -81,7 +86,6 @@ from .markdown import (
     _TRUST_ADVISORY,
     FMEntries,
     _append_frontmatter_entry,
-    _apply_hard_truncation,
     _build_frontmatter,
     _build_section_list,
     _detect_js_dependent,
@@ -93,6 +97,7 @@ from .markdown import (
     http_error_with_body,
 )
 from .mediawiki import _mediawiki_html_to_markdown
+from .pdf import PdfDecodeError
 from .reddit import (
     _build_comment_section_tree,
     _fetch_reddit_json,
@@ -125,7 +130,7 @@ _JS_SHELL_SEEN: set[str] = set()
 # re-enters its fast path and re-fetches, with output identical to a hit).
 _RENDERERS_STATIC_ONLY: frozenset[str] = frozenset({"direct", "reddit", "discourse"})
 _RENDERERS_JS_ONLY: frozenset[str] = frozenset({"js"})
-_RENDERERS_MODE_AGNOSTIC: frozenset[str] = frozenset({"wiki", "github", "huggingface"})
+_RENDERERS_MODE_AGNOSTIC: frozenset[str] = frozenset({"wiki", "github", "huggingface", "pdf"})
 
 
 def _arxiv_full_text_rewrite(url: str) -> tuple[str, str | None]:
@@ -147,13 +152,45 @@ def _arxiv_full_text_rewrite(url: str) -> tuple[str, str | None]:
 
 
 def _arxiv_no_html_error(requested_url: str, html_url: str) -> str:
-    """Error for a rewritten arXiv fetch whose /html/ rendering does not exist."""
+    """Error for a rewritten arXiv fetch with neither an /html/ rendering nor a fetchable PDF."""
     return (
         f"Error: arXiv has no HTML rendering for this paper (HTTP 404 for "
-        f"{html_url}), so search, slices, and section cannot be served. "
-        f"Fetch {requested_url} without those parameters for the abstract "
-        "and metadata."
+        f"{html_url}) and the PDF could not be fetched, so search, slices, "
+        f"and section cannot be served. Fetch {requested_url} without those "
+        "parameters for the abstract and metadata."
     )
+
+
+async def _arxiv_pdf_fallback(
+    requested_url: str, html_url: str,
+) -> tuple[FetchResponse, str, str] | None:
+    """Fetch the paper's PDF when its /html/ rendering returned 404.
+
+    Returns ``(response, pdf_url, note)`` or None when the PDF fetch fails
+    too.  The caller keeps the /html/ URL as the cache key so a follow-up
+    targeted call on the /abs/ URL, which rewrites to /html/, lands on the
+    entry this fetch populates.
+    """
+    arxiv_id = _detect_arxiv_url(requested_url)
+    if not arxiv_id:
+        return None
+    pdf_url = f"https://arxiv.org/pdf/{arxiv_id}"
+    try:
+        # pdf_url is f-string constructed against hardcoded arxiv.org from
+        # an ID the arXiv regex validated — host not user-controlled.
+        response = await guarded_fetch(  # nosemgrep: ssrf-check-precedes-outbound-fetch
+            pdf_url, max_bytes=_MAX_SECTIONS_RESPONSE_BYTES,
+        )
+        response.raise_for_status()
+    except FetchError:
+        logger.debug("arXiv PDF fallback failed for %s", pdf_url, exc_info=True)
+        return None
+    note = (
+        f"{requested_url} carries only the abstract and metadata and arXiv "
+        f"has no HTML rendering for it (HTTP 404 for {html_url}); decoded "
+        f"{pdf_url} for the full text this request needs"
+    )
+    return response, pdf_url, note
 
 
 async def web_fetch_direct(
@@ -170,9 +207,10 @@ async def web_fetch_direct(
 ) -> str:
     """Fetch content from a URL, by static HTTP or a headless browser.
 
-    Returns markdown with YAML frontmatter. Supports HTML, plain text, JSON,
-    and XML content types. For HTML pages, use the section parameter to extract
-    specific sections by heading name.
+    Returns markdown with YAML frontmatter. HTML, PDF, and markdown bodies
+    are converted to markdown and support section, search, and slices;
+    plain text, JSON, XML, and YAML are returned raw. For HTML pages, use
+    the section parameter to extract specific sections by heading name.
 
     JavaScript-dependent pages: pass ``requires_js=True`` to render through a
     headless browser instead of static HTTP. Supply ``actions`` to run a ReAct
@@ -509,8 +547,10 @@ async def web_fetch_direct(
     # body content and keep the tighter cap that rejects Socrata-style
     # firehoses.  The orient-then-extract flow (web_fetch_sections → this
     # tool with section=) would otherwise break on documents large enough
-    # to need sectioning in the first place.
-    constrained = bool(section_names) or want_slicing
+    # to need sectioning in the first place.  A URL shaped like a PDF gets
+    # the relaxed cap too: its output is bounded by max_tokens after
+    # decoding, and figure-heavy papers exceed the tight cap routinely.
+    constrained = bool(section_names) or want_slicing or _detect_pdf_url(url)
     effective_max_bytes = (
         _MAX_SECTIONS_RESPONSE_BYTES if constrained else _MAX_RESPONSE_BYTES
     )
@@ -522,12 +562,15 @@ async def web_fetch_direct(
     except FetchTimeout:
         return f"Error: Request timed out for {url}"
     except FetchStatusError as e:
-        if arxiv_rewrite_note and e.response.status_code == 404:
+        if not (arxiv_rewrite_note and e.response.status_code == 404):
+            return http_error_with_body(
+                url, e.response.status_code, e.response.text,
+                is_html="html" in e.response.headers.get("content-type", "").lower(),
+            )
+        fallback = await _arxiv_pdf_fallback(requested_url, url)
+        if fallback is None:
             return _arxiv_no_html_error(requested_url, url)
-        return http_error_with_body(
-            url, e.response.status_code, e.response.text,
-            is_html="html" in e.response.headers.get("content-type", "").lower(),
-        )
+        response, source_url, arxiv_rewrite_note = fallback
     except FetchError as e:
         return f"Error: Failed to fetch {url} - {e.label}"
 
@@ -562,39 +605,27 @@ async def web_fetch_direct(
 
     # Check content type
     content_type = response.headers.get("content-type", "")
-    content_kind = _classify_content_type(content_type)
+    content_kind = _classify_body(response.headers, response.content)
 
     if content_kind is None:
         return (
             f"Error: Unsupported content type '{content_type}'. "
-            f"Supported: text/html, text/plain, application/json, application/xml."
+            "Supported: text/html, application/pdf, text/markdown, text/plain, "
+            "application/json, application/xml, application/yaml."
         )
 
     # --- Non-HTML content ---
     if content_kind != "html":
-        if want_slicing:
-            return "Error: search/slices requires HTML content."
-        text = response.text.strip()
-        if not text:
-            return f"Error: No content extracted from {url}"
-
-        title = url.rsplit("/", 1)[-1] or "Untitled"
-        ct_label = content_kind
-
-        text, truncation_hint = _apply_hard_truncation(
-            text, max_tokens,
-            hint_prefix="Full content",
-            hint_suffix="Use max_tokens to adjust.",
+        fm_entries = FMEntries({"source": source_url, "warning": fragment_warning})
+        fm_entries.append("note", arxiv_rewrite_note)
+        return _render_body(
+            response, content_kind,
+            url=url, source_url=source_url, fm_entries=fm_entries,
+            section_names=section_names, search=search, slices=slices,
+            slices_list=slices_list if slices is not None else [],
+            max_tokens=max_tokens, auto_expand=auto_expand,
+            warning=fragment_warning, note=arxiv_rewrite_note,
         )
-
-        fm = _build_frontmatter({
-            "source": source_url,
-            "trust": _TRUST_ADVISORY,
-            "warning": fragment_warning,
-            "content_type": ct_label,
-            "truncated": truncation_hint,
-        })
-        return fm + "\n\n" + _fence_content(text, title=title)
 
     # HTML content: parse → markdown
     title, markdown_content = html_to_markdown(response.text)
@@ -997,12 +1028,15 @@ async def web_fetch_sections(url: str, slice: int = 0) -> str:
     except FetchTimeout:
         return f"Error: Request timed out for {url}"
     except FetchStatusError as e:
-        if arxiv_rewrite_note and e.response.status_code == 404:
+        if not (arxiv_rewrite_note and e.response.status_code == 404):
+            return http_error_with_body(
+                url, e.response.status_code, e.response.text,
+                is_html="html" in e.response.headers.get("content-type", "").lower(),
+            )
+        fallback = await _arxiv_pdf_fallback(requested_url, url)
+        if fallback is None:
             return _arxiv_no_html_error(requested_url, url)
-        return http_error_with_body(
-            url, e.response.status_code, e.response.text,
-            is_html="html" in e.response.headers.get("content-type", "").lower(),
-        )
+        response, _pdf_url, arxiv_rewrite_note = fallback
     except FetchError as e:
         return f"Error: Failed to fetch {url} - {e.label}"
 
@@ -1051,8 +1085,27 @@ async def web_fetch_sections(url: str, slice: int = 0) -> str:
         logger.debug("Discourse sections fast path failed for %s; falling through", url, exc_info=True)
 
     content_type = response.headers.get("content-type", "")
-    if _classify_content_type(content_type) != "html":
-        return f"Error: Section listing requires HTML content (got '{content_type}')."
+    content_kind = _classify_body(response.headers, response.content)
+    if content_kind in ("pdf", "markdown"):
+        try:
+            title, markdown_content, _extra = _document_to_markdown(
+                content_kind, response.content, response.text, url,
+            )
+        except PdfDecodeError as e:
+            return f"Error: Could not decode the PDF at {url}: {e}"
+        if not markdown_content.strip():
+            return f"Error: No content extracted from {url}"
+        respond = partial(
+            _sections_response,
+            title, original_url, markdown_content, section_names,
+            cache_url=original_url, slice_index=slice, note=arxiv_rewrite_note,
+        )
+        return respond(renderer="pdf") if content_kind == "pdf" else respond(renderer="direct")
+    if content_kind != "html":
+        return (
+            f"Error: Section listing requires HTML, PDF, or markdown content "
+            f"(got '{content_type}')."
+        )
 
     title, markdown_content = html_to_markdown(response.text)
 

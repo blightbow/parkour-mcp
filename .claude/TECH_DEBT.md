@@ -264,18 +264,13 @@ matters; nobody has.
 
 ## `fetch_direct.py` — deferred enhancements
 
-### Classifier rejects `text/markdown`, `application/yaml`, and `application/pdf`
+### `application/pdf` support: landed; page rendering deferred
 
-- **Location**: `parkour_mcp/common.py#_classify_content_type` (whitelist), with the rejection emitted in `parkour_mcp/fetch_direct.py#web_fetch_direct` when the classifier returns `None`.
-- **Issue**: The classifier whitelists `text/html`, `application/json`, `application/xml`, and `text/plain`. Markdown (`text/markdown`) and YAML (`application/yaml`, `text/yaml`) return `None`, producing `Error: Unsupported content type '...'`. Both are machine-readable text formats, and the existing non-HTML branch in `web_fetch_direct` already renders raw text with frontmatter, so the data path could carry them trivially. Concrete affected target: Kagi's v1 API spec is served as `text/markdown` (`.md` flat pages) and `application/yaml` (bundle download); see the `kagi.py` bullet in `CLAUDE.md` for URLs. Sessions that need the source-of-truth Kagi spec currently have to shell out to `curl`.
-- **Why deferred**: Out of scope for the documentation-first turn that surfaced it. The fix is small (two added branches in `_classify_content_type` returning new classifier labels), and `_SOURCE_EXT_MAP` in `common.py` already maps `.md` to `markdown` and `.yaml`/`.yml` to `yaml`, so the syntax-tag plumbing is in place.
-- **Mitigation**: Fetch via `curl` until the classifier is extended.
-
-The three types land together: markdown and YAML are two classifier
-branches, and PDF is the same seam plus a decoder. The PDF part is planned
-below so the decision does not get re-derived.
-
-### `application/pdf` support plan
+`text/markdown`, `application/yaml`, and `application/pdf` are classified
+by `common.py#_classify_content_type` and rendered by
+`_pipeline.py#_render_body`; the decoder is `pdf.py`. What follows is the
+evidence behind the engine choice, kept so it is not re-derived, and the
+one leg still open.
 
 - **Why it matters more than the other two**: Claude Desktop has no
   file-reading tool outside Cowork, and its built-in fetch only follows URLs
@@ -319,23 +314,23 @@ below so the decision does not get re-derived.
   no binding language reaches it. The Python-side heuristics (font-size
   heading histogram, column boxes, the pdfplumber-derived table finder) are
   the reproducible half and are what pdf-inspector supplies.
-- **Post-passes, written over positioned text items, not over markdown**:
-  font-size tiers promote noise (the license notice on a first page, a
-  display equation), and the rotated arXiv margin stamp lands as a level-1
-  heading inside the Introduction, which would fabricate a section on every
-  arXiv PDF. `extract_text_with_positions_and_rotations` exposes what is
-  needed to drop rotated runs; the stamp's fixed shape
-  (`arXiv:<id> [<cat>] <date>`) is a `detection.py` pattern. Working on the
-  items rather than the rendered markdown is both more correct (geometry is
-  the only signal for the stamp) and what keeps the passes portable to a
-  Rust core if one is ever built.
+- **Post-passes, written over positioned text items, not over markdown**
+  (`pdf.py#_repair_markdown`): font-size tiers promote noise (the license
+  notice on a first page, a display equation), and the rotated arXiv
+  margin stamp lands as a level-1 heading inside the Introduction, which
+  would fabricate a section on every arXiv PDF. The positioned-text call
+  exposes rotation per run, which is the only signal for the stamp, and a
+  page-level rotation list that keeps a landscape page's text. The stamp's
+  fixed shape is also matched as a line pattern so an unrotated copy is
+  caught. Working on the items rather than the rendered markdown is what
+  keeps the passes portable to a Rust core if one is ever built.
 - **Plumbing**: PDFs sit close to the 5 MiB default cap (the arXiv and RFC
   samples were 2.2 and 2.9 MB) and figure-heavy or scanned ones exceed it,
-  so the fetch takes the 50 MiB ceiling that MediaWiki and GitHub blobs
-  already use. `PdfResult` carries title,
-  author, and dates, which feed frontmatter and, for arXiv, the shelf. A
-  paper with no `/html/` rendering currently errors on a targeted `/abs/`
-  request; the PDF path is the fallback for that case.
+  so a PDF-shaped URL (`detection.py#_detect_pdf_url`) takes the 50 MiB
+  ceiling that MediaWiki and GitHub blobs already use. A paper with no
+  `/html/` rendering used to error on a targeted `/abs/` request; the PDF
+  is now the fallback (`fetch_direct.py#_arxiv_pdf_fallback`). The PDF's
+  title and author stay inside the fence: they come from the file.
 - **Rendering leg, deferred**: page-to-PNG as MCP image content for figures
   and scanned pages. `pypdfium2` (BSD, 3.5 MB, wheels everywhere) is the
   pragmatic Python-side renderer; `pdf_oxide` if a single wheel matters

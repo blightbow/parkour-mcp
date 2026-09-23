@@ -381,7 +381,8 @@ Conditional:
 |--------------------|------|
 | `site`             | MediaWiki pages |
 | `generator`        | MediaWiki pages |
-| `content_type`     | Non-HTML content (json, xml, plain) |
+| `content_type`     | Non-HTML content (pdf, markdown, json, xml, yaml, plain text) |
+| `pages`            | PDF documents: page count |
 | `truncated`        | Content exceeds `max_tokens` |
 | `warning`          | Fragment could not be resolved, parameter conflicts, search query terms silently dropped by the parser, or other advisory |
 | `footnotes_only`   | Footnote-only responses |

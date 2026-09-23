@@ -252,19 +252,46 @@ _LANGUAGE_MAP: dict[str, str] = {
 def _classify_content_type(content_type: str) -> str | None:
     """Coarsely classify an HTTP Content-Type.
 
-    Returns ``"html"``, ``"json"``, ``"xml"``, ``"plain text"``, or None
-    for an unsupported type.  XHTML counts as HTML; the priority order
-    means a type is never classified as both XML and HTML.
+    Returns ``"html"``, ``"pdf"``, ``"markdown"``, ``"json"``, ``"xml"``,
+    ``"yaml"``, ``"plain text"``, or None for an unsupported type.  XHTML
+    counts as HTML; the priority order means a type is never classified as
+    both XML and HTML.  ``"pdf"`` and ``"markdown"`` are document kinds:
+    the fetch tools convert them to markdown and run the section, slice,
+    and search pipeline on the result.  The remaining kinds are surfaced
+    as raw text.  A PDF served under a generic type is caught by
+    `_sniff_pdf` on the body, not here.
     """
     if "text/html" in content_type or "application/xhtml" in content_type:
         return "html"
+    if "application/pdf" in content_type or "application/x-pdf" in content_type:
+        return "pdf"
+    if "text/markdown" in content_type or "text/x-markdown" in content_type:
+        return "markdown"
     if "application/json" in content_type or "text/json" in content_type:
         return "json"
     if "application/xml" in content_type or "text/xml" in content_type:
         return "xml"
+    if (
+        "application/yaml" in content_type or "application/x-yaml" in content_type
+        or "text/yaml" in content_type or "text/x-yaml" in content_type
+    ):
+        return "yaml"
     if "text/plain" in content_type:
         return "plain text"
     return None
+
+
+_PDF_MAGIC = b"%PDF-"
+
+
+def _sniff_pdf(body: bytes) -> bool:
+    """Whether *body* is a PDF regardless of what the origin labelled it.
+
+    Raw-file hosts (GitHub raw, S3 buckets, CI artifact stores) commonly
+    serve PDFs as ``application/octet-stream``; the header bytes are the
+    honest signal.
+    """
+    return body[: len(_PDF_MAGIC)] == _PDF_MAGIC
 
 
 # ---------------------------------------------------------------------------

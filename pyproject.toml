@@ -38,6 +38,7 @@ dependencies = [
     "yt-dlp>=2026.3.17",
     "youtube-transcript-api>=1.2.4",
     "defusedxml>=0.7.1",
+    "pdf-inspector==1.24.0",
 ]
 classifiers = [
     "Programming Language :: Python :: 3",

@@ -9,6 +9,7 @@ import logging
 import re
 from collections import OrderedDict
 from collections.abc import Mapping
+from functools import partial
 from pathlib import Path
 from urllib.parse import urldefrag
 
@@ -20,6 +21,8 @@ from .arxiv import _fetch_arxiv_paper
 from .common import (
     _FETCH_HEADERS,
     _LANGUAGE_MAP,
+    _classify_content_type,
+    _sniff_pdf,
     s2_enabled,
     tool_name,
 )
@@ -54,6 +57,7 @@ from .markdown import (
     _TRUST_ADVISORY,
     FMEntries,
     _append_frontmatter_entry,
+    _apply_hard_truncation,
     _apply_semantic_truncation,
     _build_frontmatter,
     _build_section_list,
@@ -68,6 +72,7 @@ from .mediawiki import (
     _fetch_mediawiki_page,
     _mediawiki_html_to_markdown,
 )
+from .pdf import PdfDecodeError, pdf_to_markdown
 from .reddit import _fetch_reddit_content, _split_by_comments
 
 logger = logging.getLogger(__name__)
@@ -2012,3 +2017,124 @@ def _dispatch_slicing(
             "Error: Page cache unavailable."
     return _get_slices(url, slices_list, max_tokens, fm_base, title=title) or \
         "Error: Page cache unavailable."
+
+
+# ---------------------------------------------------------------------------
+# Fetched-body rendering shared by the static and browser paths
+# ---------------------------------------------------------------------------
+# Everything that is not HTML arrives here from both `web_fetch_direct` and
+# `_render_js`'s content-type pre-check.  Two families:
+#
+# - Document kinds ("pdf", "markdown") are converted to markdown and go
+#   through the same section, slice, and search pipeline as an HTML page,
+#   so a PDF is explorable rather than dumped.
+# - Raw kinds ("json", "xml", "yaml", "plain text") are surfaced verbatim
+#   under a hard token cap.  Nothing is enriched; returning the body beats
+#   an avoidable error.
+
+_DOCUMENT_KINDS: frozenset[str] = frozenset({"pdf", "markdown"})
+
+
+def _classify_body(headers: Mapping[str, str], body: bytes) -> str | None:
+    """Classify a fetched body by its Content-Type, then by its bytes.
+
+    The header wins when it names a known type.  A PDF served as
+    ``application/octet-stream`` or ``text/plain`` is recognised from its
+    magic bytes so the raw-file hosts that mislabel it still decode.
+    """
+    kind = _classify_content_type(headers.get("content-type", ""))
+    if kind in (None, "plain text") and _sniff_pdf(body):
+        return "pdf"
+    return kind
+
+
+def _document_to_markdown(content_kind: str, body: bytes, text: str, url: str):
+    """Convert a document-kind body to ``(title, markdown, frontmatter)``.
+
+    *frontmatter* holds the kind-specific trusted metadata (``content_type``
+    and, for a PDF, ``pages``).  The title is untrusted and travels
+    separately, as `_process_markdown_sections` requires.  Raises
+    `PdfDecodeError` for a PDF body the decoder rejects.
+    """
+    if content_kind == "pdf":
+        doc = pdf_to_markdown(body)
+        title = doc.title or url.rsplit("/", 1)[-1] or "Untitled"
+        return title, doc.markdown, {"content_type": "pdf", "pages": doc.page_count}
+    markdown = text.strip()
+    title = None
+    for line in markdown.splitlines():
+        if line.startswith("#"):
+            title = line.lstrip("#").strip()
+            break
+    return title or url.rsplit("/", 1)[-1] or "Untitled", markdown, {"content_type": "markdown"}
+
+
+def _render_body(
+    response,
+    content_kind: str,
+    *,
+    url: str,
+    source_url: str,
+    fm_entries: FMEntries,
+    section_names: list[str] | None,
+    search: str | None,
+    slices,
+    slices_list: list[int],
+    max_tokens: int,
+    auto_expand: bool,
+    warning=None,
+    note=None,
+) -> str:
+    """Render a non-HTML fetched body as a complete tool response.
+
+    *fm_entries* arrives carrying the caller's ``source``, ``warning``, and
+    ``note`` values; this function adds the kind-specific keys.  *warning*
+    and *note* are the same values again, for the slice dispatcher, which
+    builds its own frontmatter.  Document kinds are cached under *url* with
+    the ``pdf`` or ``direct`` renderer tag.
+    """
+    want_slicing = search is not None or slices is not None
+
+    if content_kind in _DOCUMENT_KINDS:
+        try:
+            title, markdown_content, extra = _document_to_markdown(
+                content_kind, response.content, response.text, url,
+            )
+        except PdfDecodeError as e:
+            return f"Error: Could not decode the PDF at {url}: {e}"
+        if not markdown_content.strip():
+            return f"Error: No content extracted from {url}"
+        for key, value in extra.items():
+            fm_entries[key] = value
+        if not section_names and not want_slicing and url not in _page_cache:
+            fm_entries.set_tip("webfetchsections_scout")
+        process = partial(
+            _process_markdown_sections,
+            markdown_content, section_names, max_tokens, fm_entries,
+            title=title, cache_url=url, auto_expand=auto_expand,
+        )
+        output = process(renderer="pdf") if content_kind == "pdf" else process(renderer="direct")
+        if want_slicing:
+            return _dispatch_slicing(
+                url, search, slices, slices_list,
+                max_tokens=max_tokens, source_url=source_url,
+                warning=warning, note=note, fallback=output,
+            )
+        return output
+
+    if want_slicing:
+        return "Error: search/slices requires HTML, markdown, or PDF content."
+    text = response.text.strip()
+    if not text:
+        return f"Error: No content extracted from {url}"
+
+    title = url.rsplit("/", 1)[-1] or "Untitled"
+    text, truncation_hint = _apply_hard_truncation(
+        text, max_tokens,
+        hint_prefix="Full content",
+        hint_suffix="Use max_tokens to adjust.",
+    )
+    fm_entries["trust"] = _TRUST_ADVISORY
+    fm_entries["content_type"] = content_kind
+    fm_entries["truncated"] = truncation_hint
+    return _build_frontmatter(fm_entries) + "\n\n" + _fence_content(text, title=title)

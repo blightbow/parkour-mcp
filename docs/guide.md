@@ -444,7 +444,7 @@ When a requested footnote index or CITEREF key cannot be resolved, the frontmatt
 
 arXiv `/abs/` and `/pdf/` URLs are intercepted by the fetch tools and served via the arXiv Atom API, returning structured metadata instead of scraped HTML. This gives you author affiliations, categories, version history, DOI crosslinks, and journal refs — data that would otherwise require manual extraction from the landing page. `/pdf/` URLs get a frontmatter hint noting that the original URL was a PDF link.
 
-A targeted request on an `/abs/` or `/pdf/` URL (`search=`, `slices=`, `section=`, or a `WebFetchSections` listing) is served from the `/html/` full text instead: the metadata endpoint has no body to search, so the fetch is rewritten to `https://arxiv.org/html/<id>`, `source` reports the `/html/` URL, and a frontmatter `note` names the rewrite. A paper with no HTML rendering returns an error that points back to the `/abs/` URL for the abstract and metadata.
+A targeted request on an `/abs/` or `/pdf/` URL (`search=`, `slices=`, `section=`, or a `WebFetchSections` listing) is served from the `/html/` full text instead: the metadata endpoint has no body to search, so the fetch is rewritten to `https://arxiv.org/html/<id>`, `source` reports the `/html/` URL, and a frontmatter `note` names the rewrite. A paper with no HTML rendering falls back to its PDF: `https://arxiv.org/pdf/<id>` is fetched and decoded, `source` reports the PDF URL, and the `note` says why. Only when the PDF fetch fails too does the request return an error pointing back to the `/abs/` URL for the abstract and metadata.
 
 `/html/` URLs are deliberately **not** intercepted. arXiv's HTML endpoint serves the full rendered paper, which is more useful as full text with BM25 slicing support than as metadata-only. Not all papers have HTML renders (many older or pre-LaTeX papers lack them), so the `full_text` hint is only emitted after a HEAD check confirms availability. When HTML is unavailable, a `warning` field is emitted instead and the SemanticScholar cross-reference steers toward body text snippets as an alternative.
 
@@ -1140,9 +1140,25 @@ We've integrated access to the Kagi Universal Summarizer API for similar reasons
 - it's cheaper for the user (no API cost)
 - our original use case is to avoid summarization regardless
 
+## PDF and Markdown Documents
+
+A URL that serves `application/pdf` is decoded to markdown and then treated exactly like an HTML page: `WebFetchSections` lists its headings, and `section=`, `search=`, and `slices=` work on the fetch tools. A PDF served under a generic type such as `application/octet-stream` is recognised from its leading bytes. The frontmatter reports `content_type: pdf` and `pages: N`; the document's own title and author stay inside the fence, since they come from the file.
+
+```
+>>> web_fetch_sections("https://arxiv.org/pdf/1810.04805v2")
+---
+source: https://arxiv.org/pdf/1810.04805v2
+total_sections: 40
+---
+```
+
+Two kinds of noise a PDF's font-size heading tiers produce are repaired before sectioning: text set sideways in the margin (the arXiv stamp is the common case) is dropped rather than becoming a heading in the middle of a paragraph, and a display equation or a run of licence boilerplate in a large face is demoted back to prose. Tables come through as text in reading order rather than as markdown tables, and figures are not rendered.
+
+`text/markdown` bodies take the same route without a decoder: the markdown is sectioned, sliced, and indexed as served, with `content_type: markdown`.
+
 ## Everything Else
 
-While the intended use of these tools is to assist with long form content, the fetch tools will handle attempts for text/plain, application/json, and application/xml without throwing an error. The tools do not enrich these contents in any way, but surfacing simple content is preferable to throwing an avoidable error.
+While the intended use of these tools is to assist with long form content, the fetch tools will handle attempts for text/plain, application/json, application/xml, and application/yaml without throwing an error. The tools do not enrich these contents in any way, but surfacing simple content is preferable to throwing an avoidable error. `search=` and `slices=` are refused on these kinds, since there is no document structure to index.
 
 **JSON endpoint** — returns raw content with type metadata:
 

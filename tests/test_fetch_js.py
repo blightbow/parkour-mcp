@@ -843,3 +843,25 @@ class TestBrowserOverride:
             firefox = info["firefox"][1]
 
         assert mod._detect_playwright_browser(_FakePlaywright()) == ("none", "None")
+
+
+class TestPdfPreCheck:
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_pdf_url_skips_browser_and_decodes(self):
+        from tests._pdf_fixture import build_pdf
+
+        respx.head("https://example.com/paper.pdf").mock(
+            return_value=httpx.Response(200, headers={"content-type": "application/pdf"})
+        )
+        respx.get("https://example.com/paper.pdf").mock(
+            return_value=httpx.Response(
+                200, content=build_pdf(stamp=None),
+                headers={"content-type": "application/pdf"},
+            )
+        )
+        result = await web_fetch_direct("https://example.com/paper.pdf", requires_js=True)
+        assert "content_type: pdf" in result
+        assert "pages: 1" in result
+        assert "JavaScript rendering was skipped" in result
+        assert "1 Introduction" in result

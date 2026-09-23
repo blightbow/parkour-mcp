@@ -21,13 +21,17 @@ from playwright._impl._driver import compute_driver_executable, get_driver_env
 from playwright.async_api import BrowserType, async_playwright
 
 from ._pipeline import (
+    _classify_body,
     _discourse_fast_path,
     _dispatch_slicing,
     _process_markdown_sections,
+    _render_body,
 )
 from ._transport import guarded_fetch
 from .common import (
     _FETCH_HEADERS,
+    _MAX_RESPONSE_BYTES,
+    _MAX_SECTIONS_RESPONSE_BYTES,
     BlockedAddress,
     ResponseTooLarge,
     _classify_content_type,
@@ -37,10 +41,7 @@ from .common import (
 )
 from .discourse import _detect_discourse_headers
 from .markdown import (
-    _TRUST_ADVISORY,
     FMEntries,
-    _apply_hard_truncation,
-    _build_frontmatter,
     _fence_content,
     html_to_markdown,
     http_error_with_body,
@@ -639,38 +640,36 @@ async def _render_js(
             if content_kind is not None and content_kind != "html":
                 # Route the body fetch through guarded_fetch so a raw
                 # JSON/XML payload gets the same size cap and wall-clock
-                # deadline the static web_fetch_direct path applies.
+                # deadline the static web_fetch_direct path applies.  A PDF
+                # gets the relaxed cap for the same reason it does there.
                 # web_fetch_direct runs check_url_ssrf before dispatching
                 # here, so url is already SSRF-validated.
                 try:
                     get_resp = await guarded_fetch(  # nosemgrep: ssrf-check-precedes-outbound-fetch
                         url, headers=_FETCH_HEADERS,
+                        max_bytes=(
+                            _MAX_SECTIONS_RESPONSE_BYTES if content_kind == "pdf"
+                            else _MAX_RESPONSE_BYTES
+                        ),
                     )
                 except ResponseTooLarge as e:
                     return f"Error: Response too large for {url} — {e}"
                 get_resp.raise_for_status()
-                text = get_resp.text.strip()
-                if not text:
-                    return f"Error: No content extracted from {url}"
+                content_kind = _classify_body(get_resp.headers, get_resp.content) or content_kind
 
-                title = url.rsplit("/", 1)[-1] or "Untitled"
-                skip_warning = f"Content-type is {content_kind}; JavaScript rendering was skipped"
-
-                text, truncation_hint = _apply_hard_truncation(
-                    text, max_tokens,
-                    hint_prefix="Full content",
-                    hint_suffix="Use max_tokens to adjust.",
+                fm_entries = FMEntries({"source": source_url})
+                fm_entries.append(
+                    "warning",
+                    f"Content-type is {content_kind}; JavaScript rendering was skipped",
                 )
-
-                warnings = [skip_warning, fragment_warning] if fragment_warning else skip_warning
-                fm = _build_frontmatter({
-                    "source": source_url,
-                    "trust": _TRUST_ADVISORY,
-                    "warning": warnings,
-                    "content_type": content_kind,
-                    "truncated": truncation_hint,
-                })
-                return fm + "\n\n" + _fence_content(text, title=title)
+                fm_entries.append("warning", fragment_warning)
+                return _render_body(
+                    get_resp, content_kind,
+                    url=url, source_url=source_url, fm_entries=fm_entries,
+                    section_names=section_names, search=search, slices=slices,
+                    slices_list=slices_list, max_tokens=max_tokens,
+                    auto_expand=auto_expand, warning=fragment_warning,
+                )
         except Exception:
             # HEAD failed or ambiguous — fall through to Playwright
             logger.debug("content-type pre-check failed for %s; falling through to Playwright", url, exc_info=True)

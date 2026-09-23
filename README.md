@@ -328,7 +328,7 @@ cog.outl(render_tool_table())
 |--------------------|-------------------------|-------------|
 | kagi_search        | KagiSearch              | Search the web using Kagi.com's curated, SEO-resistant index |
 | web_fetch_sections | WebFetchSections        | List section headings and anchor slugs for a web page (for targeted extraction). Long documents paginate via `slice=` in 100-section windows |
-| web_fetch_incisive | WebFetchIncisive        | Fetch a Markdown rendered version of a HTML webpage (also returns raw content for common content types: JSON, XML, plain text). `requires_js=true` renders JavaScript-dependent pages through a headless browser, with an `actions` ReAct chain for interaction |
+| web_fetch_incisive | WebFetchIncisive        | Fetch a Markdown rendered version of a HTML webpage, a PDF, or a markdown file, with section, search, and slice support (JSON, XML, YAML, and plain text are returned raw). `requires_js=true` renders JavaScript-dependent pages through a headless browser, with an `actions` ReAct chain for interaction |
 | semantic_scholar   | SemanticScholar         | Search and retrieve academic paper data from Semantic Scholar (search, paper details, references, authors, body text snippets) |
 | arxiv              | ArXiv                   | Search and retrieve academic papers from arXiv (search with field-prefix syntax, paper details, category browsing) |
 | github             | GitHub                  | Search and retrieve code, issues, pull requests, commits, and comparisons from GitHub (9 actions: search_issues, search_code, search_repos, repo, tree, issue, pull_request, file, issue_templates) |

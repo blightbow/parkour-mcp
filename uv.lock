@@ -841,6 +841,7 @@ dependencies = [
     { name = "kagiapi" },
     { name = "markdownify" },
     { name = "mcp", extra = ["cli"] },
+    { name = "pdf-inspector" },
     { name = "playwright" },
     { name = "pyyaml" },
     { name = "semantic-text-splitter" },
@@ -891,6 +892,7 @@ requires-dist = [
     { name = "kagiapi" },
     { name = "markdownify" },
     { name = "mcp", extras = ["cli"], specifier = ">=1.28,<2" },
+    { name = "pdf-inspector", specifier = "==1.24.0" },
     { name = "playwright" },
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "semantic-text-splitter", specifier = ">=0.29.0" },
@@ -926,6 +928,19 @@ dev = [
     { name = "tabulate", specifier = ">=0.9" },
     { name = "tree-sitter-python", specifier = ">=0.23" },
     { name = "vulture", specifier = ">=2.16" },
+]
+
+[[package]]
+name = "pdf-inspector"
+version = "1.24.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/d9/fe/7297d862548567a600f17f80eca97239149a43e6ebb317632ecbac09c72d/pdf_inspector-1.24.0.tar.gz", hash = "sha256:976d2cbb54228d34daae5c82adb960e0eae8c1d4f885a4b9924cb06aca8e7da5", size = 2105521, upload-time = "2026-09-23T04:39:20.119Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/19/ac/a7a1ff48898f66324f47c6609d83dd14dd764ecdf98c9ea2cb25c6a123cd/pdf_inspector-1.24.0-cp38-abi3-macosx_10_12_x86_64.whl", hash = "sha256:a93cb38057841e75ae6037aeb55954fb4dfd3c5968dddfe8d6317c404736d93a", size = 6336966, upload-time = "2026-09-23T04:39:08.091Z" },
+    { url = "https://files.pythonhosted.org/packages/46/4e/8881e2bac09121818aa25cdbaa2aaf01a2ec83df1ce16e72cbc3564f0957/pdf_inspector-1.24.0-cp38-abi3-macosx_11_0_arm64.whl", hash = "sha256:e236c5dcca5d370fe4d8ec060bb7768353d31276499cb5376d0465c2d96be40c", size = 6040698, upload-time = "2026-09-23T04:39:10.512Z" },
+    { url = "https://files.pythonhosted.org/packages/07/15/a84a17b9424579017c24bc4a7e66b4f1fffe1b1df0f80bb2468dd5099f45/pdf_inspector-1.24.0-cp38-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:042da19427583edf0ddc51f9df2dc03897a0e3f5374c1346c7357ac46ce34be4", size = 6611433, upload-time = "2026-09-23T04:39:12.403Z" },
+    { url = "https://files.pythonhosted.org/packages/d7/c5/2c4b0e16ed03ee4048b96a963807f23415f93ce99c79210ad91ebdd94c01/pdf_inspector-1.24.0-cp38-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:afc1dc63f3d4cd0d06d80dedeac6d20afc60657ad563555c23302d22529c6bce", size = 6874970, upload-time = "2026-09-23T04:39:14.582Z" },
+    { url = "https://files.pythonhosted.org/packages/96/6c/9e824bb0fb4271c89a21df163fe6893a2b996730c71321b33259925fd84b/pdf_inspector-1.24.0-cp38-abi3-win_amd64.whl", hash = "sha256:79b2357038482563d76405cb61e48f4288ad3873ee93b6b4e40a04e0c43aade1", size = 6169624, upload-time = "2026-09-23T04:39:17.584Z" },
 ]
 
 [[package]]

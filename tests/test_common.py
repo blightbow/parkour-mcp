@@ -15,11 +15,13 @@ import respx
 from parkour_mcp.common import (
     _PROXY_ENV_VARS,
     BlockedAddress,
+    _classify_content_type,
     _GuardedTransport,
     _is_private_ip,
     _parse_truthy_env,
     _PinningBackend,
     _resolve_and_check,
+    _sniff_pdf,
     check_url_scheme,
     check_url_ssrf,
     guarded_client,
@@ -605,3 +607,32 @@ class TestForceHttp1:
         with common.force_http1(), pytest.raises(httpx.RemoteProtocolError):
             await common.guarded_fetch("https://api.example.com/x")
         assert calls == [False]
+
+
+class TestClassifyContentType:
+    @pytest.mark.parametrize("content_type, kind", [
+        ("text/html; charset=utf-8", "html"),
+        ("application/xhtml+xml", "html"),
+        ("application/pdf", "pdf"),
+        ("application/x-pdf", "pdf"),
+        ("text/markdown; charset=utf-8", "markdown"),
+        ("text/x-markdown", "markdown"),
+        ("application/json", "json"),
+        ("application/xml", "xml"),
+        ("application/yaml", "yaml"),
+        ("application/x-yaml", "yaml"),
+        ("text/yaml", "yaml"),
+        ("text/plain", "plain text"),
+        ("application/octet-stream", None),
+        ("", None),
+    ])
+    def test_kinds(self, content_type, kind):
+        assert _classify_content_type(content_type) == kind
+
+
+class TestSniffPdf:
+    def test_magic_bytes(self):
+        assert _sniff_pdf(b"%PDF-1.7\n%\xe2\xe3")
+        assert not _sniff_pdf(b"%PDX-1.7")
+        assert not _sniff_pdf(b"")
+        assert not _sniff_pdf(b"<html>%PDF-")
