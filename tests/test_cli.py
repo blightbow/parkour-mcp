@@ -27,11 +27,15 @@ class TestParser:
         assert args.profile == "code"
 
     def test_call_arguments(self):
-        args = _parse(["call", "ArXiv", '{"action": "paper"}', "--dry-run", "--as-curl"])
+        args = _parse([
+            "call", "ArXiv", '{"action": "paper"}', "--dry-run", "--as-curl",
+            "--http1", "--record", "out.json",
+        ])
         assert args.command == "call"
         assert args.tool == "ArXiv"
         assert json.loads(args.args) == {"action": "paper"}
-        assert args.dry_run and args.as_curl
+        assert args.dry_run and args.as_curl and args.http1
+        assert args.record == "out.json"
 
 
 class TestResolveTool:
@@ -104,6 +108,41 @@ class TestRunCall:
         args = _parse(["call", "stub", "{}", "--trace", str(path)])
         _cli.run_call(args, catalog=[("stub", stub)], profile="code")
         assert __import__("os").environ[_trace.TRACE_ENV] == str(path)
+
+    @respx.mock
+    def test_record_writes_a_fixture_of_the_responses(self, tmp_path, capsys):
+        respx.get(ARXIV_API_URL).mock(
+            return_value=httpx.Response(200, text=ARXIV_SINGLE_ENTRY_XML)
+        )
+        path = tmp_path / "arxiv.json"
+        args = _parse([
+            "call", "arxiv", '{"action": "search", "query": "ti:attention"}',
+            "--record", str(path),
+        ])
+        _cli.run_call(args, catalog=CATALOG, profile="code")
+        document = json.loads(path.read_text())
+        assert len(document["exchanges"]) == 1
+        assert "Attention Is All You Need" in document["exchanges"][0]["body_text"]
+        assert "recorded 1 exchange(s)" in capsys.readouterr().err
+
+    @respx.mock
+    def test_http1_reaches_the_transport(self, monkeypatch):
+        from parkour_mcp import common
+
+        seen: list[bool] = []
+        real = common.guarded_client
+
+        def spy(**kwargs):
+            seen.append(kwargs["http2"])
+            return real(**kwargs)
+
+        monkeypatch.setattr(common, "guarded_client", spy)
+        respx.get(ARXIV_API_URL).mock(
+            return_value=httpx.Response(200, text=ARXIV_SINGLE_ENTRY_XML)
+        )
+        args = _parse(["call", "arxiv", '{"action": "search", "query": "x"}', "--http1"])
+        _cli.run_call(args, catalog=CATALOG, profile="code")
+        assert seen == [False]
 
     def test_bad_json_is_a_usage_error(self):
         args = _parse(["call", "arxiv", "not json"])

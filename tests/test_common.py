@@ -559,3 +559,49 @@ class TestGuardedFetchHttp2Fallback:
         assert resp.status_code == 200
         assert resp.text == "ok"
         assert route.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# force_http1
+# ---------------------------------------------------------------------------
+
+
+class TestForceHttp1:
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_httpx_path_skips_h2_and_its_fallback(self, monkeypatch):
+        from parkour_mcp import common
+
+        seen: list[bool] = []
+        real = common.guarded_client
+
+        def spy(**kwargs):
+            seen.append(kwargs["http2"])
+            return real(**kwargs)
+
+        monkeypatch.setattr(common, "guarded_client", spy)
+        respx.get("https://api.example.com/x").mock(return_value=httpx.Response(200))
+        await common.guarded_fetch("https://api.example.com/x")
+        with common.force_http1():
+            await common.guarded_fetch("https://api.example.com/x")
+        assert seen == [True, False]
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_protocol_error_is_not_retried_when_forced(self, monkeypatch):
+        from parkour_mcp import common
+
+        calls: list[bool] = []
+        real = common.guarded_client
+
+        def spy(**kwargs):
+            calls.append(kwargs["http2"])
+            return real(**kwargs)
+
+        monkeypatch.setattr(common, "guarded_client", spy)
+        respx.get("https://api.example.com/x").mock(
+            side_effect=httpx.RemoteProtocolError("broken")
+        )
+        with common.force_http1(), pytest.raises(httpx.RemoteProtocolError):
+            await common.guarded_fetch("https://api.example.com/x")
+        assert calls == [False]

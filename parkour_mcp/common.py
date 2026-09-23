@@ -1,12 +1,15 @@
 """Shared constants and utilities for parkour-mcp."""
 
 import asyncio
+import contextlib
 import ipaddress
 import logging
 import os
 import platform
 import socket
 import time
+from collections.abc import Iterator
+from contextvars import ContextVar
 from importlib.metadata import version as _pkg_version
 from pathlib import Path
 from urllib.parse import urlparse
@@ -267,6 +270,28 @@ def _classify_content_type(content_type: str) -> str | None:
 # ---------------------------------------------------------------------------
 # Rate limiter
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# HTTP version override
+# ---------------------------------------------------------------------------
+# Both transports negotiate HTTP/2 by default.  A WAF coherence gate scores
+# the HTTP version against the claimed identity, and the two vendors this
+# project has met want opposite pairings (see `guarded_fetch`), so the way to
+# learn which one an origin applies is to change the version and nothing
+# else.  `parkour-mcp call --http1` sets this for one call; nothing in the
+# server does.
+_force_http1: ContextVar[bool] = ContextVar("parkour_force_http1", default=False)
+
+
+@contextlib.contextmanager
+def force_http1() -> Iterator[None]:
+    """Issue every fetch inside the block over HTTP/1.1, on both transports."""
+    token = _force_http1.set(True)
+    try:
+        yield
+    finally:
+        _force_http1.reset(token)
+
 
 class RateLimiter:
     """Async rate limiter with minimum interval between calls.
@@ -998,15 +1023,17 @@ async def guarded_fetch(
                 status=resp.status_code,
                 http_version=resp.http_version,
                 response_headers=resp.headers,
-                body_bytes=len(resp.content),
+                body=resp.content,
             )
             return resp
 
     try:
         async with asyncio.timeout(deadline):
             try:
-                return await _attempt(http2=True)
+                return await _attempt(http2=not _force_http1.get())
             except httpx.RemoteProtocolError:
+                if _force_http1.get():
+                    raise
                 # The origin negotiated HTTP/2 via ALPN, then broke the
                 # protocol (a buggy server stack, or a stale pooled h2
                 # connection).  HTTP/1.1 is the more battle-hardened

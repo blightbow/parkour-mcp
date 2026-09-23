@@ -83,3 +83,11 @@ _.drop_image_only_links  # parkour_mcp/markdown.py#_build_htmd_options
 # WAFs satisfied over one modern transport, rather than one placated by
 # downgrading). Vulture does not scan tests, so it sees the write with no read.
 http_version  # parkour_mcp/_transport.py#FetchResponse
+
+# Exchange is the wire-trace record. body_bytes is written once per response
+# and leaves the process through dataclasses.asdict in _emit, as one key of
+# the JSON line the PARKOUR_TRACE sink and `parkour-mcp call --trace` print;
+# the only in-tree reads are the tests that pin that line's shape. Vulture
+# scans neither the serialized dict nor the tests, so it sees a write with
+# no read.
+body_bytes  # parkour_mcp/_trace.py#Exchange

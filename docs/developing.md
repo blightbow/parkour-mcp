@@ -97,6 +97,12 @@ uv run parkour-mcp call ArXiv '{"action": "search", "query": "abs:\"vision token
 
 # Render each exchange as a curl command behind its rate-limit contract
 uv run parkour-mcp call WebFetchIncisive '{"url": "https://example.com"}' --as-curl
+
+# Same call over HTTP/1.1 on both transports, changing nothing else
+uv run parkour-mcp call WebFetchIncisive '{"url": "https://example.com"}' --http1 --as-curl
+
+# Record the responses as a fixture tests can mount
+uv run parkour-mcp call ArXiv '{"action": "paper", "query": "2505.10465"}' --record tests/fixtures/arxiv_paper.json
 ```
 
 Tool names accept the internal key (`arxiv`), the Claude Code name
@@ -109,6 +115,18 @@ request as sent, the status, the locating response headers (`server`,
 `via`, `x-cache`, `age`, `retry-after`, and the rate-limit family), the
 elapsed time, and the limiter that governed the call. That record is what
 `--as-curl` and `--dry-run` read; see `parkour_mcp/_trace.py`.
+
+`--http1` exists because a WAF coherence gate scores the HTTP version
+against the claimed identity, and the vendors this project has met want
+opposite pairings (`TECH_DEBT.md`, generic fetch transport). Changing the
+version and nothing else is how to learn which pairing an origin refuses;
+the trace records the version that was actually negotiated.
+
+`--record FILE` writes the call's responses as a fixture, with the
+wire-encoding headers removed since the transport already decoded the
+body. `tests/_replay.py#mount_fixture` mounts it as respx routes inside
+`respx.mock`, so a live observation becomes an offline regression test
+without transcribing the response by hand.
 
 Two rules the harness enforces rather than documents. It never bypasses a
 rate limiter: every `RateLimiter` carries its contract (`name`, `policy`,

@@ -1,5 +1,6 @@
 """Wire trace: what a fetch records, when it stops, and how it renders."""
 
+import base64
 import dataclasses
 import json
 
@@ -9,6 +10,8 @@ import respx
 
 from parkour_mcp import _trace
 from parkour_mcp.common import RateLimiter, guarded_fetch
+
+from ._replay import mount_fixture
 
 URL = "https://export.arxiv.org/api/query"
 ATOM = {"content-type": "application/atom+xml; charset=utf-8"}
@@ -131,6 +134,83 @@ class TestSink:
         await guarded_fetch(URL)
         err = capsys.readouterr().err
         assert json.loads(err.strip())["status"] == 200
+
+
+class TestFixtures:
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_capture_keeps_the_full_response_off_the_sink(self, tmp_path, monkeypatch):
+        sink = tmp_path / "trace.jsonl"
+        monkeypatch.setenv(_trace.TRACE_ENV, str(sink))
+        respx.get(URL).mock(return_value=httpx.Response(
+            200, headers={**ATOM, "x-custom": "kept"}, content=b"<feed/>",
+        ))
+        with _trace.collect() as seen, _trace.capture():
+            await guarded_fetch(URL)
+        assert seen[0].body == b"<feed/>"
+        assert seen[0].full_headers is not None
+        assert seen[0].full_headers["x-custom"] == "kept"
+        record = json.loads(sink.read_text())
+        assert "body" not in record and "full_headers" not in record
+        assert record["body_bytes"] == 7
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_uncaptured_exchange_carries_no_body(self):
+        respx.get(URL).mock(return_value=httpx.Response(200, headers=ATOM, content=b"x"))
+        with _trace.collect() as seen:
+            await guarded_fetch(URL)
+        assert seen[0].body is None and seen[0].full_headers is None
+        assert seen[0].body_bytes == 1
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_round_trip_replays_the_recorded_response(self, tmp_path):
+        """A recorded call, mounted from its fixture, answers a fresh call identically."""
+        path = tmp_path / "arxiv_406.json"
+        query = f"{URL}?search_query=abs%3A%22vision+tokens%22&max_results=1"
+        respx.get(query).mock(return_value=httpx.Response(
+            406, headers={"server": "Varnish", "content-length": "0",
+                          "content-encoding": "gzip"},
+        ))
+        with _trace.collect() as seen, _trace.capture():
+            await guarded_fetch(URL, params={"search_query": 'abs:"vision tokens"', "max_results": 1})
+        assert _trace.write_fixture(seen, path) == 1
+
+        document = json.loads(path.read_text())
+        assert document["version"] == _trace.FIXTURE_VERSION
+        entry = document["exchanges"][0]
+        assert entry["url"] == query
+        assert entry["status"] == 406
+        assert entry["body_text"] == ""
+        assert "content-encoding" not in entry["headers"]
+        assert "content-length" not in entry["headers"]
+        assert entry["headers"]["server"] == "Varnish"
+
+        respx.reset()
+        routes = mount_fixture(path)
+        replayed = await guarded_fetch(
+            URL, params={"search_query": 'abs:"vision tokens"', "max_results": 1},
+        )
+        assert routes[0].called
+        assert replayed.status_code == 406
+        assert replayed.headers["server"] == "Varnish"
+
+    @pytest.mark.asyncio
+    async def test_binary_body_is_base64_and_dry_runs_are_skipped(self, tmp_path):
+        captured = _exchange(status=200, full_headers={"content-type": "image/png"}, body=b"\x89PNG\xff")
+        skipped = _exchange(status=None, dry_run=True)
+        path = tmp_path / "f.json"
+        assert _trace.write_fixture([captured, skipped], path) == 1
+        entry = json.loads(path.read_text())["exchanges"][0]
+        assert "body_text" not in entry
+        assert base64.b64decode(entry["body_base64"]) == b"\x89PNG\xff"
+
+    def test_wrong_version_is_refused(self, tmp_path):
+        path = tmp_path / "old.json"
+        path.write_text(json.dumps({"version": 0, "exchanges": []}))
+        with pytest.raises(ValueError, match="fixture version 0"):
+            mount_fixture(path)
 
 
 # ---------------------------------------------------------------------------

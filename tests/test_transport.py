@@ -539,3 +539,18 @@ class TestTrace:
             await guarded_fetch("https://example.com/")
         assert state["client"].requested == []
         assert len(seen) == 1 and seen[0].dry_run
+
+
+class TestEmulationForCall:
+    def test_default_is_the_bare_profile(self):
+        assert _transport._emulation_for_call() is _transport._EMULATION
+
+    def test_force_http1_wraps_the_profile_without_h2(self):
+        from wreq import Emulation
+
+        from parkour_mcp.common import force_http1
+
+        with force_http1():
+            chosen = _transport._emulation_for_call()
+        assert isinstance(chosen, Emulation)
+        assert chosen is not _transport._EMULATION

@@ -40,6 +40,7 @@ from urllib.parse import urljoin, urlsplit
 
 from wreq import Client, DnsOptions, Emulation, Method
 from wreq import exceptions as wreq_exceptions
+from wreq.emulation import Profile
 from wreq.redirect import Policy
 
 from . import _trace
@@ -49,6 +50,7 @@ from .common import (
     _MAX_RESPONSE_BYTES,
     FetchError,
     ResponseTooLarge,
+    _force_http1,
     _resolve_and_check,
     proxy_in_effect,
 )
@@ -60,6 +62,14 @@ _logger = logging.getLogger(__name__)
 # disagreed with the headers would reintroduce the very incoherence this module
 # exists to remove.
 _EMULATION = Emulation.Chrome149
+
+
+def _emulation_for_call() -> Emulation | Profile:
+    """The fingerprint to present: Chrome149, without HTTP/2 under `force_http1`."""
+    if _force_http1.get():
+        return Emulation(profile=_EMULATION, http2=False)
+    return _EMULATION
+
 # The trace records the fingerprint by name; `Emulation` has no stable str form.
 _EMULATION_NAME = "Chrome149"
 
@@ -204,7 +214,7 @@ def build_client(
 
     # Keyword names here are the load-bearing detail; see module docstring.
     return Client(
-        emulation=_EMULATION,
+        emulation=_emulation_for_call(),
         dns_options=dns_options,
         redirect=redirect,
         timeout=timedelta(seconds=timeout),
@@ -432,7 +442,7 @@ async def _follow(
             _trace.finish(
                 exchange, status=response.status.as_int(),
                 http_version=_version_string(response.version),
-                response_headers=response_headers, body_bytes=None,
+                response_headers=response_headers, body=None,
                 remote_addr=peer,
             )
             history.append(current)
@@ -447,7 +457,7 @@ async def _follow(
         _trace.finish(
             exchange, status=response.status.as_int(),
             http_version=_version_string(response.version),
-            response_headers=response_headers, body_bytes=len(body),
+            response_headers=response_headers, body=body,
             remote_addr=peer,
         )
         return FetchResponse(

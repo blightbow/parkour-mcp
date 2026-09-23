@@ -21,6 +21,7 @@ Nothing here changes what is sent.  A trace is a witness, not a knob.
 
 from __future__ import annotations
 
+import base64
 import contextlib
 import dataclasses
 import json
@@ -28,10 +29,11 @@ import os
 import shlex
 import sys
 import time
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -121,6 +123,10 @@ class Exchange:
     dry_run: bool = False
     started: float | None = field(default=None, repr=False)
     """Monotonic clock at send time; kept out of the emitted record."""
+    full_headers: dict[str, str] | None = field(default=None, repr=False)
+    body: bytes | None = field(default=None, repr=False)
+    """The complete response, kept only under ``capture`` for
+    ``write_fixture``.  Neither reaches the JSON-lines sink."""
 
 
 # ---------------------------------------------------------------------------
@@ -137,6 +143,7 @@ _dry_run: ContextVar[bool] = ContextVar("parkour_trace_dry_run", default=False)
 _collector: ContextVar[list[Exchange] | None] = ContextVar(
     "parkour_trace_collector", default=None
 )
+_capture: ContextVar[bool] = ContextVar("parkour_trace_capture", default=False)
 
 
 def note_limiter(limiter: RateLimiter, waited: float) -> None:
@@ -152,6 +159,16 @@ def dry_run(enabled: bool = True) -> Iterator[None]:
         yield
     finally:
         _dry_run.reset(token)
+
+
+@contextlib.contextmanager
+def capture() -> Iterator[None]:
+    """Keep full response headers and bodies on the records in the block."""
+    token = _capture.set(True)
+    try:
+        yield
+    finally:
+        _capture.reset(token)
 
 
 @contextlib.contextmanager
@@ -230,15 +247,22 @@ def finish(
     status: int,
     http_version: str | None,
     response_headers: Mapping[str, str],
-    body_bytes: int | None,
+    body: bytes | None,
     remote_addr: str | None = None,
 ) -> None:
-    """Complete and emit a record for a response that arrived."""
+    """Complete and emit a record for a response that arrived.
+
+    *body* is the decoded response body, or ``None`` for a hop whose body
+    was not read (a followed redirect).
+    """
     exchange.status = status
     exchange.http_version = http_version
     exchange.response_headers = _subset(response_headers)
-    exchange.body_bytes = body_bytes
+    exchange.body_bytes = None if body is None else len(body)
     exchange.remote_addr = remote_addr
+    if _capture.get():
+        exchange.full_headers = {k.lower(): v for k, v in response_headers.items()}
+        exchange.body = body
     exchange.elapsed_ms = _elapsed(exchange)
     _emit(exchange)
 
@@ -264,7 +288,8 @@ def _emit(exchange: Exchange) -> None:
     if not sink:
         return
     record = dataclasses.asdict(exchange)
-    record.pop("started")
+    for private in ("started", "full_headers", "body"):
+        record.pop(private)
     line = json.dumps(record, separators=(",", ":"))
     if sink == "-":
         sys.stderr.write(line + "\n")
@@ -272,6 +297,52 @@ def _emit(exchange: Exchange) -> None:
         return
     with open(sink, "a", encoding="utf-8") as fh:
         fh.write(line + "\n")
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+FIXTURE_VERSION = 1
+
+# Headers that describe the wire encoding of a body the transport has
+# already decoded.  Replaying them against the decoded body would make the
+# replaying client decode it a second time, or reject its length.
+_FIXTURE_DROPPED_HEADERS = frozenset({
+    "content-encoding", "content-length", "transfer-encoding",
+})
+
+
+def write_fixture(exchanges: Iterable[Exchange], path: str | Path) -> int:
+    """Write captured exchanges as a replayable fixture.  Returns the count.
+
+    Only exchanges recorded under ``capture`` that produced a response are
+    written; ``tests/_replay.py#mount_fixture`` mounts the file as respx
+    routes, which is how a live observation becomes an offline test.
+    """
+    entries: list[dict[str, Any]] = []
+    for exchange in exchanges:
+        if exchange.status is None or exchange.full_headers is None:
+            continue
+        entry: dict[str, Any] = {
+            "method": exchange.method,
+            "url": exchange.url,
+            "status": exchange.status,
+            "http_version": exchange.http_version,
+            "headers": {
+                k: v for k, v in exchange.full_headers.items()
+                if k not in _FIXTURE_DROPPED_HEADERS
+            },
+        }
+        body = exchange.body or b""
+        try:
+            entry["body_text"] = body.decode("utf-8")
+        except UnicodeDecodeError:
+            entry["body_base64"] = base64.b64encode(body).decode("ascii")
+        entries.append(entry)
+    document = {"version": FIXTURE_VERSION, "recorded": _now(), "exchanges": entries}
+    Path(path).write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+    return len(entries)
 
 
 # ---------------------------------------------------------------------------

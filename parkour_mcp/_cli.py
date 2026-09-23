@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import json
 import os
 import sys
@@ -21,7 +22,7 @@ from collections.abc import Callable, Sequence
 from typing import Any
 
 from . import _trace
-from .common import TOOL_NAMES, init_tool_names
+from .common import TOOL_NAMES, force_http1, init_tool_names
 
 Catalog = Sequence[tuple[str, Callable[..., Any]]]
 
@@ -73,6 +74,18 @@ def add_call_parser(subparsers: argparse._SubParsersAction) -> None:
         help=f"write one JSON line per exchange to FILE (- for stderr); "
              f"same as setting {_trace.TRACE_ENV}",
     )
+    parser.add_argument(
+        "--http1",
+        action="store_true",
+        help="issue the call over HTTP/1.1 on both transports, changing "
+             "nothing else",
+    )
+    parser.add_argument(
+        "--record",
+        metavar="FILE",
+        help="write the call's responses to FILE as a fixture that "
+             "tests/_replay.py mounts as respx routes",
+    )
 
 
 def resolve_tool(name: str, catalog: Catalog) -> tuple[str, Callable[..., Any]]:
@@ -109,7 +122,12 @@ def run_call(args: argparse.Namespace, *, catalog: Catalog, profile: str) -> int
     display = TOOL_NAMES.get(key, {}).get(profile, key)
     result: str | None = None
     stopped: _trace.DryRunStop | None = None
-    with _trace.collect() as exchanges, _trace.dry_run(args.dry_run):
+    with (
+        _trace.collect() as exchanges,
+        _trace.dry_run(args.dry_run),
+        _trace.capture() if args.record else contextlib.nullcontext(),
+        force_http1() if args.http1 else contextlib.nullcontext(),
+    ):
         try:
             result = asyncio.run(func(**kwargs))
         except _trace.DryRunStop as stop:
@@ -119,6 +137,9 @@ def run_call(args: argparse.Namespace, *, catalog: Catalog, profile: str) -> int
         _out(result)
     if stopped is not None and not args.as_curl:
         _err(f"# {stopped}")
+    if args.record:
+        written = _trace.write_fixture(exchanges, args.record)
+        _err(f"# recorded {written} exchange(s) to {args.record}")
 
     if args.as_curl:
         if result is not None:
