@@ -1693,3 +1693,140 @@ class TestRendererReusePolicy:
         assert not (_RENDERERS_STATIC_ONLY & _RENDERERS_JS_ONLY)
         assert not (_RENDERERS_STATIC_ONLY & _RENDERERS_MODE_AGNOSTIC)
         assert not (_RENDERERS_JS_ONLY & _RENDERERS_MODE_AGNOSTIC)
+
+
+# ---------------------------------------------------------------------------
+# arXiv /abs/ and /pdf/ targeted requests are served from /html/
+# ---------------------------------------------------------------------------
+
+ARXIV_HTML_PAGE = """<html><head><title>Superposition Yields Robust Neural Scaling</title></head>
+<body>
+<h1>Superposition Yields Robust Neural Scaling</h1>
+<p>We study how representation superposition shapes scaling laws.</p>
+<h2>Introduction</h2>
+<p>Under strong superposition the loss is inversely proportional to model width.</p>
+<h2>Weak superposition</h2>
+<p>Under weak superposition the exponent tracks the Zipf frequency exponent.</p>
+<h2>Conclusion</h2>
+<p>Superposition explains the observed robustness of neural scaling.</p>
+</body></html>"""
+
+_ARXIV_ABS = "https://arxiv.org/abs/2505.10465"
+_ARXIV_PDF = "https://arxiv.org/pdf/2505.10465"
+_ARXIV_HTML = "https://arxiv.org/html/2505.10465"
+
+
+def _mock_arxiv_html(status: int = 200):
+    html_route = respx.get(_ARXIV_HTML).mock(
+        return_value=httpx.Response(
+            status, text=ARXIV_HTML_PAGE if status == 200 else "",
+            headers={"content-type": "text/html"},
+        )
+    )
+    api_route = respx.get(url__startswith="https://export.arxiv.org/")
+    return html_route, api_route
+
+
+class TestArxivFullTextRewrite:
+    """A search, slices, or section request on /abs/ or /pdf/ means the paper body.
+
+    Those URLs carry only the abstract and metadata, so the fetch is rewritten
+    to /html/ ahead of the cache lookup, ``source`` reports where the content
+    came from, and a ``note`` names the rewrite.  The arXiv Atom API is never
+    consulted on this path.
+    """
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_abs_with_search_is_served_from_html(self):
+        html_route, api_route = _mock_arxiv_html()
+        result = await web_fetch_direct(_ARXIV_ABS, search="superposition width")
+        assert f"source: {_ARXIV_HTML}" in result
+        assert "note:" in result
+        assert _ARXIV_ABS in result and _ARXIV_HTML in result
+        assert "inversely proportional to model width" in result
+        assert html_route.called
+        assert not api_route.called
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_pdf_with_slices_is_served_from_html(self):
+        _, api_route = _mock_arxiv_html()
+        result = await web_fetch_direct(_ARXIV_PDF, slices=[0])
+        assert f"source: {_ARXIV_HTML}" in result
+        assert _ARXIV_PDF in result
+        assert "Superposition Yields Robust Neural Scaling" in result
+        assert not api_route.called
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_abs_with_section_is_served_from_html(self):
+        _, api_route = _mock_arxiv_html()
+        result = await web_fetch_direct(_ARXIV_ABS, section="Weak superposition")
+        assert f"source: {_ARXIV_HTML}" in result
+        assert "Zipf frequency exponent" in result
+        assert "inversely proportional" not in result
+        assert not api_route.called
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_abs_fragment_resolves_as_section_of_html(self):
+        _, api_route = _mock_arxiv_html()
+        result = await web_fetch_direct(f"{_ARXIV_ABS}#conclusion")
+        assert f"source: {_ARXIV_HTML}#conclusion" in result
+        assert "observed robustness" in result
+        assert not api_route.called
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_plain_abs_fetch_still_takes_the_api_fast_path(self):
+        """Without a targeted parameter the metadata endpoint is the right answer."""
+        html_route, _ = _mock_arxiv_html()
+        api_route = respx.get(url__startswith="https://export.arxiv.org/").mock(
+            return_value=httpx.Response(500)
+        )
+        await web_fetch_direct(_ARXIV_ABS)
+        assert api_route.called
+        assert not html_route.called
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_missing_html_rendering_points_back_to_abs(self):
+        _mock_arxiv_html(status=404)
+        result = await web_fetch_direct(_ARXIV_ABS, search="anything")
+        assert result.startswith("Error:")
+        assert "no HTML rendering" in result
+        assert _ARXIV_HTML in result
+        assert _ARXIV_ABS in result
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_search_follow_up_on_abs_hits_the_html_cache(self):
+        html_route, _ = _mock_arxiv_html()
+        await web_fetch_direct(_ARXIV_ABS, search="superposition")
+        await web_fetch_direct(_ARXIV_ABS, search="Zipf")
+        assert html_route.call_count == 1
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_sections_lists_the_html_headings(self):
+        html_route, api_route = _mock_arxiv_html()
+        result = await web_fetch_sections(_ARXIV_ABS)
+        assert f"source: {_ARXIV_HTML}" in result
+        assert "note:" in result and _ARXIV_ABS in result
+        assert "Weak superposition" in result
+        assert "total_sections:" in result
+        assert not api_route.called
+        # The listing populates the cache under the /html/ key, so a
+        # targeted follow-up on the /abs/ URL needs no second fetch.
+        await web_fetch_direct(_ARXIV_ABS, search="Zipf")
+        assert html_route.call_count == 1
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_sections_on_missing_html_rendering_points_back_to_abs(self):
+        _mock_arxiv_html(status=404)
+        result = await web_fetch_sections(_ARXIV_PDF)
+        assert result.startswith("Error:")
+        assert "no HTML rendering" in result
+        assert _ARXIV_PDF in result

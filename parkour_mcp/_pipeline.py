@@ -1985,6 +1985,7 @@ def _dispatch_slicing(
     max_tokens: int,
     source_url: str,
     warning=None,
+    note=None,
     fallback: str | None = None,
 ) -> str:
     """Dispatch to search or slice retrieval after cache has been populated.
@@ -2005,6 +2006,7 @@ def _dispatch_slicing(
     # _fence_content to avoid a duplicated title heading.
     title = None if cached.renderer in ("reddit", "discourse") else cached.title
     fm_base = FMEntries({"source": source_url, "warning": warning})
+    fm_base.append("note", note)
     if search is not None:
         return _search_slices(url, search, max_tokens, fm_base, title=title) or \
             "Error: Page cache unavailable."

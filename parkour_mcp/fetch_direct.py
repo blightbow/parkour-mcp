@@ -128,6 +128,34 @@ _RENDERERS_JS_ONLY: frozenset[str] = frozenset({"js"})
 _RENDERERS_MODE_AGNOSTIC: frozenset[str] = frozenset({"wiki", "github", "huggingface"})
 
 
+def _arxiv_full_text_rewrite(url: str) -> tuple[str, str | None]:
+    """Point an arXiv /abs/ or /pdf/ URL at the paper's /html/ full text.
+
+    Those two paths serve only the abstract and metadata, so a request for
+    search, slices, or a section on them can only mean the body of the
+    paper, which arXiv renders at /html/.  Returns the /html/ URL with a
+    frontmatter note naming the rewrite, or the URL unchanged with ``None``.
+    """
+    arxiv_id = _detect_arxiv_url(url)
+    if not arxiv_id:
+        return url, None
+    html_url = f"https://arxiv.org/html/{arxiv_id}"
+    return html_url, (
+        f"{url} carries only the abstract and metadata; fetched {html_url} "
+        "for the full text this request needs"
+    )
+
+
+def _arxiv_no_html_error(requested_url: str, html_url: str) -> str:
+    """Error for a rewritten arXiv fetch whose /html/ rendering does not exist."""
+    return (
+        f"Error: arXiv has no HTML rendering for this paper (HTTP 404 for "
+        f"{html_url}), so search, slices, and section cannot be served. "
+        f"Fetch {requested_url} without those parameters for the abstract "
+        "and metadata."
+    )
+
+
 async def web_fetch_direct(
     url: str,
     *,
@@ -226,11 +254,22 @@ async def web_fetch_direct(
     if want_slicing and section_names:
         return "Error: 'search'/'slices' and 'section' are mutually exclusive."
 
+    # A targeted request on an arXiv /abs/ or /pdf/ URL means the full text.
+    # Rewritten ahead of the cache lookup so a follow-up call on the /abs/
+    # URL lands on the /html/ entry the first call populated.
+    requested_url = url
+    arxiv_rewrite_note = None
+    if want_slicing or section_names:
+        url, arxiv_rewrite_note = _arxiv_full_text_rewrite(url)
+        if arxiv_rewrite_note:
+            source_url, fragment_warning = _resolve_fragment_source(url, fragment, section)
+
     # --- Search/slices cache-first path ---
     # Reuse policy is declared with the _RENDERERS_* sets above.
     js_mode = requires_js or bool(actions)
     if want_slicing:
         fm_base = FMEntries({"source": source_url, "warning": fragment_warning})
+        fm_base.append("note", arxiv_rewrite_note)
         cached = _page_cache.get(url)
         eligible = (
             _RENDERERS_JS_ONLY | _RENDERERS_MODE_AGNOSTIC if js_mode
@@ -248,11 +287,6 @@ async def web_fetch_direct(
     # --- arXiv fast path (before S2 — arXiv URLs get arXiv-native metadata) ---
     try:
         if _detect_arxiv_url(url):
-            if want_slicing:
-                return (
-                    "Error: search/slices not supported for arXiv abstract/PDF URLs. "
-                    "Use the /html/ URL for full text with search/slices support."
-                )
             result = await _arxiv_fast_path(url)
             if result is not None:
                 return result
@@ -488,6 +522,8 @@ async def web_fetch_direct(
     except FetchTimeout:
         return f"Error: Request timed out for {url}"
     except FetchStatusError as e:
+        if arxiv_rewrite_note and e.response.status_code == 404:
+            return _arxiv_no_html_error(requested_url, url)
         return http_error_with_body(
             url, e.response.status_code, e.response.text,
             is_html="html" in e.response.headers.get("content-type", "").lower(),
@@ -574,6 +610,7 @@ async def web_fetch_direct(
         return f"Error: No content extracted from {url}"
 
     fm_entries = FMEntries({"source": source_url, "warning": fragment_warning})
+    fm_entries.append("note", arxiv_rewrite_note)
 
     # A proxy performs the resolution that actually reaches the network, so
     # the address check cannot be bound to the connection.  Say so rather
@@ -614,6 +651,7 @@ async def web_fetch_direct(
         return _dispatch_slicing(url, search, slices, slices_list if slices is not None else [],
                                  max_tokens=max_tokens, source_url=source_url,
                                  warning=fragment_warning,
+                                 note=arxiv_rewrite_note,
                                  fallback=output)
 
     return output
@@ -852,17 +890,13 @@ async def web_fetch_sections(url: str, slice: int = 0) -> str:
     if ssrf_error:
         return ssrf_error
 
-    # --- arXiv fast path (sections not applicable for API data) ---
-    arxiv_id = _detect_arxiv_url(url)
-    if arxiv_id:
-        return _build_frontmatter({
-            "title": "arXiv paper",
-            "source": original_url,
-            "api": "arXiv",
-            "note": "Section listing is not applicable for API-sourced paper data. "
-                    f"Use {tool_name('web_fetch_direct')} with https://arxiv.org/html/{arxiv_id} "
-                    "for full paper text with section-aware browsing.",
-        })
+    # An arXiv /abs/ or /pdf/ URL has no sections of its own; the listing
+    # comes from the /html/ full text.  ``original_url`` follows the rewrite
+    # so the cache entry is keyed where web_fetch_direct will look for it.
+    requested_url = url
+    url, arxiv_rewrite_note = _arxiv_full_text_rewrite(url)
+    if arxiv_rewrite_note:
+        original_url = f"{url}#{fragment}" if fragment else url
 
     # --- Semantic Scholar fast path (sections not applicable for API data) ---
     if s2_enabled() and _detect_s2_url(url):
@@ -963,6 +997,8 @@ async def web_fetch_sections(url: str, slice: int = 0) -> str:
     except FetchTimeout:
         return f"Error: Request timed out for {url}"
     except FetchStatusError as e:
+        if arxiv_rewrite_note and e.response.status_code == 404:
+            return _arxiv_no_html_error(requested_url, url)
         return http_error_with_body(
             url, e.response.status_code, e.response.text,
             is_html="html" in e.response.headers.get("content-type", "").lower(),
@@ -1032,6 +1068,7 @@ async def web_fetch_sections(url: str, slice: int = 0) -> str:
     return _sections_response(
         title, original_url, markdown_content, section_names,
         cache_url=original_url, renderer="direct", slice_index=slice,
+        note=arxiv_rewrite_note,
     )
 
 
@@ -1044,6 +1081,7 @@ def _sections_response(
     cache_url: str | None = None,
     renderer: str | None = None,
     slice_index: int = 0,
+    note: str | None = None,
 ) -> str:
     """Build a sections-only response from markdown content.
 
@@ -1057,6 +1095,9 @@ def _sections_response(
     *slice_index* paginates the section list in windows of
     ``_TOC_SLICE_SIZE`` entries.  See ``_resolve_toc_slice`` for the
     clamping/negative-index semantics.
+
+    *note* is an optional frontmatter annotation from the caller, such as
+    the arXiv /abs/ to /html/ rewrite.
     """
     if cache_url and markdown_content:
         _page_cache.store(
@@ -1069,6 +1110,7 @@ def _sections_response(
         fm = _build_frontmatter({
             "source": url,
             "trust": _TRUST_ADVISORY,
+            "note": note,
         })
         return fm + "\n\n" + _fence_content("No sections found.", title=title)
 
@@ -1083,6 +1125,7 @@ def _sections_response(
         "trust": _TRUST_ADVISORY,
         "total_sections": len(all_sections),
     }
+    _append_frontmatter_entry(entries, "note", note)
 
     # Pagination metadata only when the document spans more than one slice
     if slice_meta["total_slices"] > 1:
