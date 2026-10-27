@@ -1,6 +1,96 @@
 version = 1
 
 [[bindings]]
+doc = ".claude/TECH_DEBT.md"
+target = "parkour_mcp/detection.py#_detect_reddit_url"
+sig = "980079052ea418e4"
+
+[[bindings]]
+doc = ".claude/TECH_DEBT.md"
+target = "parkour_mcp/reddit.py#_authenticate"
+sig = "f982a91efc2c0bb4"
+
+[[bindings]]
+doc = ".claude/TECH_DEBT.md"
+target = "parkour_mcp/reddit.py#_fetch_reddit_json"
+sig = "bc97e184cff6a6a9"
+
+[[bindings]]
+doc = ".claude/TECH_DEBT.md"
+target = "parkour_mcp/reddit.py#_fetch_thread_json"
+sig = "8f30baef7693b592"
+
+[[bindings]]
+doc = ".claude/TECH_DEBT.md"
+target = "parkour_mcp/reddit.py#_gql_comment_listing"
+sig = "2fe1903cc5d72295"
+
+[[bindings]]
+doc = ".claude/TECH_DEBT.md"
+target = "parkour_mcp/reddit.py#_mint_mobile_token"
+sig = "a0f06304efdd3aff"
+
+[[bindings]]
+doc = ".claude/TECH_DEBT.md"
+target = "parkour_mcp/reddit.py#_reddit_api_call"
+sig = "b3159c9d5fb53a40"
+
+[[bindings]]
+doc = ".claude/TECH_DEBT.md"
+target = "parkour_mcp/reddit.py#_resolve_redd_it"
+sig = "f7eea3a96319277b"
+
+[[bindings]]
+doc = "CLAUDE.md"
+target = "parkour_mcp/detection.py#_detect_reddit_url"
+sig = "980079052ea418e4"
+
+[[bindings]]
+doc = "CLAUDE.md"
+target = "parkour_mcp/reddit.py#_api_label"
+sig = "f5baaca5becd84b0"
+
+[[bindings]]
+doc = "CLAUDE.md"
+target = "parkour_mcp/reddit.py#_authenticate"
+sig = "f982a91efc2c0bb4"
+
+[[bindings]]
+doc = "CLAUDE.md"
+target = "parkour_mcp/reddit.py#_check_reddit_json_error"
+sig = "1ad4851e323856b5"
+
+[[bindings]]
+doc = "CLAUDE.md"
+target = "parkour_mcp/reddit.py#_fetch_thread_json"
+sig = "8f30baef7693b592"
+
+[[bindings]]
+doc = "CLAUDE.md"
+target = "parkour_mcp/reddit.py#_force_refresh_token"
+sig = "12c4e71e8604615d"
+
+[[bindings]]
+doc = "CLAUDE.md"
+target = "parkour_mcp/reddit.py#_gql_comment_listing"
+sig = "2fe1903cc5d72295"
+
+[[bindings]]
+doc = "CLAUDE.md"
+target = "parkour_mcp/reddit.py#_reddit_api_call"
+sig = "b3159c9d5fb53a40"
+
+[[bindings]]
+doc = "CLAUDE.md"
+target = "parkour_mcp/reddit.py#_token_daemon"
+sig = "bc425f56af26c3d6"
+
+[[bindings]]
+doc = "README.md"
+target = "parkour_mcp/reddit.py#_api_label"
+sig = "f5baaca5becd84b0"
+
+[[bindings]]
 doc = "docs/frontmatter-standard.md"
 target = "parkour_mcp/markdown.py#FMEntries"
 sig = "da712235e9cedc39"
@@ -19,3 +109,23 @@ sig = "9994f6a5c7d60e00"
 doc = "docs/frontmatter-standard.md"
 target = "parkour_mcp/markdown.py#_fence_content"
 sig = "38850cf37525c084"
+
+[[bindings]]
+doc = "docs/guide.md"
+target = "parkour_mcp/detection.py#_detect_reddit_url"
+sig = "980079052ea418e4"
+
+[[bindings]]
+doc = "docs/guide.md"
+target = "parkour_mcp/reddit.py#_api_label"
+sig = "f5baaca5becd84b0"
+
+[[bindings]]
+doc = "docs/guide.md"
+target = "parkour_mcp/reddit.py#_authenticate"
+sig = "f982a91efc2c0bb4"
+
+[[bindings]]
+doc = "docs/guide.md"
+target = "parkour_mcp/reddit.py#_fetch_thread_json"
+sig = "8f30baef7693b592"

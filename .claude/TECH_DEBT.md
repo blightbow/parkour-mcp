@@ -14,7 +14,7 @@ The Reddit fast path was rebuilt on `oauth.reddit.com` userless tokens after Red
 
 ### No proactive `x-ratelimit-remaining` tracking
 
-- **Location**: `parkour_mcp/reddit.py#_reddit_api_get` (and the absence of redlib client.rs `OAUTH_RATELIMIT_REMAINING` accounting).
+- **Location**: `parkour_mcp/reddit.py#_reddit_api_call` (and the absence of redlib client.rs `OAUTH_RATELIMIT_REMAINING` accounting).
 - **Deviation**: redlib reads the `x-ratelimit-remaining` header on every response and spawns a token rollover when it drops below 10, to dodge per-IP limits across many concurrent users. We do not track it.
 - **Why**: parkour is a single-user sidecar gated by a 2s limiter (~30 req/min), comfortably under Reddit's userless ceiling (~100 req/min). The proactive accounting would add module state and complexity for a limit a single user does not approach. The daemon (proactive, time-based) plus 401-reactive refresh cover token freshness. Revisit if parkour ever fans out concurrent Reddit fetches.
 
@@ -30,6 +30,66 @@ The Reddit fast path was rebuilt on `oauth.reddit.com` userless tokens after Red
 - **Deviation**: redlib sends a `_options` cookie opting into quarantined/gated content. We do not, so quarantined subreddits map to a `_check_reddit_json_error` error string rather than rendering.
 - **Why**: rendering quarantined content silently is a surprising default for a research sidecar; surfacing the quarantine status as an explicit error is the more PoLA-aligned behavior. Add the opt-in cookie behind a flag if a real use case needs quarantined threads.
 - **NSFW is treated oppositely, on purpose**: quarantine is Reddit's explicit *warning* state for rule-breaking communities, so gating it behind an error is the unsurprising default. Ordinary 18+ (NSFW) content is not that — it is everywhere on Reddit, and the rest of the toolkit (Kagi, the generic fetch) never filters adult content. So NSFW is *included* by default; search defaults to `include_over_18=1` (`detection.py#_detect_reddit_url`) and direct subreddit/thread fetches already surface it untouched. The astonishing thing would be Reddit search silently returning a SFW subset when a Kagi search beside it does not. A caller can still pass `include_over_18=0` for SFW search.
+
+## Reddit comment threads ride the Android GraphQL gateway
+
+`oauth.reddit.com` refuses every comment-thread route to a logged-out token
+with an HTML 403 ("blocked by network security"): `/r/SUB/comments/…`,
+`/comments/…`, `/api/morechildren`, and the percent-encoded-slash variant
+redlib briefly used. Listings, search, user pages, `/by_id`, and `/api/info`
+still answer. `reddit.py#_fetch_thread_json` therefore takes the post from
+`/by_id` and the comments from `gql-fed.reddit.com`, the GraphQL gateway
+behind Reddit's Android app, and `reddit.py#_gql_comment_listing` rebuilds
+the JSON API's Listing shape.
+
+### The persisted-operation hash is pinned to an app build
+
+- **Location**: `_POST_COMMENTS_HASH` in `parkour_mcp/reddit.py`, consumed by
+  `reddit.py#_fetch_thread_json`. A module constant, which drift cannot
+  anchor, so this entry deliberately does not quote the value.
+- **Issue**: the gateway executes persisted operations only. Raw query text
+  draws a misleading `NOT_AUTHENTICATED` (the likely source of the
+  "GraphQL needs login" report in `redlib-org/redlib#599`), and an unknown
+  hash draws
+  `persisted query not found`, which `_gql_comment_listing` reports as the
+  hash needing an update. Reddit can retire a hash with any app release.
+- **How to refresh**: `Amqx/reddit-gql` tracks current hashes in
+  `src/operations.ts`, and its README documents reading them out of the
+  Android APK's Apollo classes with jadx. That repository is GPL-3.0 and
+  redlib is AGPL-3.0: take protocol facts (endpoint, operation name,
+  variables, response shape) and the hash value only, never code.
+
+### Thread coverage
+
+- **Location**: `reddit.py#_fetch_thread_json`.
+- **Limit**: one request of up to 200 comments, nested to
+  `_MAX_COMMENT_DEPTH`. The forest's cursor placeholders (`more` entries) are
+  dropped, as the JSON API's `more` stubs always were. `PostComments` takes
+  an `after` cursor for further pages per `Amqx/reddit-gql`; untested here,
+  and nothing requests it.
+
+### Public Data API closes in March 2027
+
+- **Source**: r/redditdev "Moving Data API Apps to the Developer Platform:
+  migration dates and next steps" (2026-09-30). New access requests stop
+  2026-10-31; access starts closing for unregistered apps and users on
+  2027-01-12; remaining public access ends in March 2027.
+- **Unknown**: the announcements frame the shutdown around third-party apps
+  migrating to Devvit, and neither they nor roughly 380 comments across the
+  two announcement threads address logged-out access under Reddit's own
+  client ids, which is the lane this module uses.
+- **Exposure**: every `oauth.reddit.com` path, which is listings, search,
+  user pages, and the `/by_id` half of a thread. Treat it as at risk from
+  2027-01-12. The GraphQL gateway has persisted operations covering the same
+  ground (`SubredditFeedElements`, `SearchPosts`, `UserSubmittedPosts`,
+  `PostsByIds`), which is the migration path if it closes.
+- **Shared risk**: both hosts depend on the logged-out mobile grant
+  (`reddit.py#_mint_mobile_token`). A comment on `redlib-org/redlib#599`
+  reports that the Android app now requires login; unverified. If Reddit
+  retires the grant, neither host answers and no transport change helps.
+- **How to evaluate**: on 2027-01-12 and again in March, fetch a subreddit
+  listing and a thread through `parkour-mcp call`. An HTML 403 on the listing
+  means the migration is due.
 
 ## Static-analysis findings (opted not to fix)
 
