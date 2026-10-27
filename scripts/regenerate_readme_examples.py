@@ -25,6 +25,7 @@ import asyncio
 import contextlib
 import logging
 import time
+from datetime import UTC, datetime
 
 import parkour_mcp.reddit as _reddit_mod
 from parkour_mcp.arxiv import arxiv
@@ -45,37 +46,67 @@ init_tool_names("code")
 _reddit_mod._reddit_limiter.min_interval = 0.0
 
 
+class _FixtureStatus:
+    def as_int(self):
+        return 200
+
+
 class _FixtureResponse:
-    """Minimal stand-in for a curl_cffi response, for fixture replay."""
+    """Minimal stand-in for a wreq response, for fixture replay."""
 
     def __init__(self, json_data):
-        self.status_code = 200
+        self.status = _FixtureStatus()
         self.headers = {}
         self.url = ""
         self._json = json_data
 
-    def json(self):
+    async def json(self):
         return self._json
 
-    def raise_for_status(self):
-        return None
+
+def _gql_forest(children: list[dict], depth: int = 0) -> list[dict]:
+    """Flatten JSON-API ``t1`` children into a PostComments forest.
+
+    Reddit's GraphQL gateway sends the forest flat and depth-first, each
+    entry carrying its depth, which is the shape this reproduces.
+    """
+    trees: list[dict] = []
+    for child in children:
+        data = child["data"]
+        trees.append({"depth": depth, "parentId": None, "more": None, "node": {
+            "__typename": "Comment",
+            "id": f"t1_{data['id']}",
+            "authorInfo": {"name": data["author"]},
+            "content": {"markdown": data["body"]},
+            "score": data["score"],
+            "createdAt": datetime.fromtimestamp(data["created_utc"], UTC).isoformat(),
+        }})
+        replies = data.get("replies")
+        if isinstance(replies, dict):
+            trees.extend(_gql_forest(replies["data"]["children"], depth + 1))
+    return trees
 
 
 class _FixtureSession:
-    """Replay one JSON fixture for every GET, standing in for AsyncSession.
+    """Replay a thread fixture, standing in for wreq's ``Client``.
 
-    The Reddit fast path speaks to ``oauth.reddit.com`` over ``curl_cffi``
-    with a Safari TLS profile, so ``respx`` cannot intercept it: respx patches
-    httpx.  Substituting the session class is the seam that works for both.
+    The Reddit fast path speaks wreq with a Safari TLS profile, so ``respx``
+    cannot intercept it: respx patches httpx.  Substituting the client class
+    is the seam that works for both.
 
-    Deliberately narrower than ``tests/conftest.py#_FakeAsyncSession``, which
-    models per-URL response queues so tests can drive 401-then-200 refresh
-    sequences.  Regeneration replays a single fixture, so URL routing here
-    would be indirection with one destination.
+    A thread takes two requests, so the fixture is served in two halves: the
+    post listing answers the ``/by_id`` GET, and the comment listing, as a
+    GraphQL forest, answers the gateway POST.  Deliberately narrower than
+    ``tests/conftest.py#_FakeAsyncSession``, which models per-URL response
+    queues so tests can drive 401-then-200 refresh sequences.
     """
 
     def __init__(self, payload):
-        self._payload = payload
+        post_listing, comment_listing = payload
+        self._post_listing = post_listing
+        self._gql = {"data": {"postInfoById": {"commentForest": {
+            "trees": _gql_forest(comment_listing["data"]["children"]),
+        }}}}
 
     async def __aenter__(self):
         return self
@@ -84,19 +115,22 @@ class _FixtureSession:
         return None
 
     async def get(self, _url, **_kwargs):
-        return _FixtureResponse(self._payload)
+        return _FixtureResponse(self._post_listing)
+
+    async def post(self, _url, **_kwargs):
+        return _FixtureResponse(self._gql)
 
 
 @contextlib.contextmanager
 def reddit_fixture(payload):
-    """Serve *payload* to the Reddit fast path, with OAuth pre-seeded.
+    """Serve the thread *payload* to the Reddit fast path, with OAuth pre-seeded.
 
     Seeding the token skips the mint round trip, which would otherwise need
     its own fixture and would couple these examples to the grant flow.
     """
     saved = {
         name: getattr(_reddit_mod, name)
-        for name in ("AsyncSession", "_oauth_token", "_oauth_token_headers",
+        for name in ("Client", "_oauth_token", "_oauth_token_headers",
                      "_oauth_expires_at", "_oauth_backend")
     }
     # Substituting a double for the real client class is the whole mechanism;
