@@ -45,3 +45,6 @@ jobs:
 
       - name: manifest.json tools match registration
         run: uv run python3 scripts/check_manifest_tools.py
+
+      - name: ADRs are append-only after acceptance
+        run: uv run python3 scripts/check_adr_records.py

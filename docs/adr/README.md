@@ -16,7 +16,8 @@ match the code.
 1. **Above `## Implementation Notes`, the text is frozen once `status` is
    `accepted` or `rejected`.** Do not reword it, correct it against the
    code, or bring it up to date. Fixing a typo or a broken link is the one
-   exception.
+   exception, and the commit that makes the fix must carry a line
+   `ADR-Amend: ADR-NNNN` in its message.
 2. **Record a divergence by appending an entry** to `## Implementation Notes`.
    Entries are never edited after they are written, and new entries go last.
 3. **Reverse a decision by writing a new ADR.** Then set the old ADR's
@@ -31,6 +32,14 @@ match the code.
    invite exactly the rewrite these rules forbid.
 
 While `status` is `proposed`, the whole document may still be revised.
+
+`scripts/check_adr_records.py` enforces these rules against each ADR's git
+history, from the first version whose status left `proposed`. It runs in
+`just docs-drift`, in the docs-drift workflow, and in the test suite, and
+needs full history: a shallow clone fails the check. Claude Code also asks
+before editing anything under `docs/adr/` (`.claude/settings.json`), which
+covers its file tools and recognized shell writes but not every script, so
+the check is the authoritative guard.
 
 An ADR is accepted when the commit that sets `status: accepted` lands on
 `main`, and `accepted` is that date. Until then the ADR lives on a branch, and

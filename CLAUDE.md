@@ -225,7 +225,7 @@ Cite code by `path#Symbol` (Drift-style anchor), not `path:line`. Symbol anchors
 
 ## Architecture Decision Records
 
-`docs/adr/` holds dated decision records. They are the exception to describing the software as it is: each records intent and methodology at a point in time, and is expected to disagree with the code later. Once an ADR's `status` is `accepted`, do not edit any text above `## Implementation Notes`, including to correct it against the code. Record a divergence or a release by appending a dated, typed entry (Deviation, Clarification, Abandoned, or Shipped) under `## Implementation Notes`, and reverse a decision by writing a new ADR that supersedes it. Never `drift link` a file in `docs/adr/`. Format and lifecycle: `docs/adr/README.md`.
+`docs/adr/` holds dated decision records. They are the exception to describing the software as it is: each records intent and methodology at a point in time, and is expected to disagree with the code later. Once an ADR's `status` is `accepted`, do not edit any text above `## Implementation Notes`, including to correct it against the code. Record a divergence or a release by appending a dated, typed entry (Deviation, Clarification, Abandoned, or Shipped) under `## Implementation Notes`, and reverse a decision by writing a new ADR that supersedes it. Never `drift link` a file in `docs/adr/`. `scripts/check_adr_records.py` enforces this against git history; a typo fix to frozen text needs an `ADR-Amend: ADR-NNNN` line in its commit message. Format and lifecycle: `docs/adr/README.md`.
 
 ## Technical Debt
 
