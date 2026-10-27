@@ -1,29 +1,32 @@
-"""Reddit fast path — fetches Reddit pages via the oauth.reddit.com API.
+"""Reddit fast path — fetches Reddit pages through Reddit's own APIs.
 
-Reddit retired its unauthenticated `.json` endpoints on 2026-05-29
-(r/modnews, "Protecting communities from scrapers and platform abuse"): both
-www and old.reddit `.json` now return a 403 "network security" block on every
-TLS profile. All structured access now flows through oauth.reddit.com with a
-bearer token.
+Reddit serves no structured data to anonymous clients: the www and
+old.reddit `.json` endpoints answer with a 403 "network security" block on
+every TLS profile. Access goes through a *userless* OAuth token instead,
+mirroring redlib (redlib-org/redlib, src/oauth.rs + src/client.rs): mint a
+logged-out token via Reddit's own mobile-app grant, fall back to the
+generic-web grant, and refresh it shortly before expiry. There is no user
+account, no API key, and no app registration: the token is anonymous and
+carries only a logged-out id (`loid`).
 
-We restore the fast path with a *userless* OAuth token, mirroring redlib
-(redlib-org/redlib, src/oauth.rs + src/client.rs): mint a logged-out token
-via Reddit's own mobile-app grant, fall back to the generic-web grant, and
-refresh it shortly before expiry. There is no user account, no API key, and
-no app registration: the token is anonymous and carries only a logged-out id
-(`loid`). The same JSON shape the old `.json` endpoint returned comes back
-from oauth.reddit.com, so the formatters below are unchanged.
+Two hosts serve that token. Listings, search, and user pages come from
+oauth.reddit.com in the JSON API's Listing shape. Comment threads are refused
+there, so the post comes from oauth.reddit.com's `/by_id` and the comments
+from the GraphQL gateway behind Reddit's Android app; `_fetch_thread_json`
+reassembles them into the Listing shape, so every formatter below reads one
+shape whichever host answered.
 
 The client IDs are Reddit's OWN first-party app credentials, not a third
 party's, so we borrow Reddit's identity (a browser-equivalent reader) rather
 than impersonating an indie app whose developer would become collateral when
 Reddit revokes a scraper-associated id.
 
-Supports comment threads, subreddit listings, and user pages.
+Supports comment threads, subreddit listings, search, and user pages.
 """
 
 import asyncio
 import base64
+import contextlib
 import logging
 import re
 import secrets
@@ -414,6 +417,9 @@ async def _fetch_reddit_json(url: str) -> list | dict | str:
             "logged-out token flow."
         )
 
+    if _classify_reddit_url(url) == RedditPageType.COMMENT_THREAD:
+        return await _fetch_thread_json(url)
+
     parsed = urlparse(url)
     path = parsed.path.rstrip("/") + "/.json"
     qs = parse_qs(parsed.query)
@@ -422,13 +428,17 @@ async def _fetch_reddit_json(url: str) -> list | dict | str:
         "https", _OAUTH_API_HOST, path, "", urlencode(qs, doseq=True), "",
     ))
 
-    return await _reddit_api_get(json_url, retry_on_401=True)
+    return await _reddit_api_call(json_url, retry_on_401=True)
 
 
-async def _reddit_api_get(
-    json_url: str, *, retry_on_401: bool,
+async def _reddit_api_call(
+    json_url: str, *, json_body: dict | None = None, retry_on_401: bool,
 ) -> list | dict | str:
-    """GET an oauth.reddit.com JSON URL with the current bearer token."""
+    """Call a Reddit JSON endpoint with the current bearer token.
+
+    GETs ``json_url``, or POSTs ``json_body`` to it when one is given (the
+    GraphQL gateway).  Returns parsed JSON or an error string.
+    """
     headers = {
         "Authorization": f"Bearer {_oauth_token}",
         "Accept": "application/json",
@@ -439,17 +449,38 @@ async def _reddit_api_get(
         async with Client(
             emulation=_EMULATION, redirect=Policy.limited(10),
         ) as client:
-            resp = await client.get(
-                json_url, headers=headers, timeout=timedelta(seconds=30),
-            )
+            if json_body is None:
+                resp = await client.get(
+                    json_url, headers=headers, timeout=timedelta(seconds=30),
+                )
+            else:
+                resp = await client.post(
+                    json_url, headers=headers, json=json_body,
+                    timeout=timedelta(seconds=30),
+                )
             status = resp.status.as_int()
             if status == 401 and retry_on_401:
                 await _force_refresh_token()
                 if not _oauth_token:
                     return "Error: Reddit OAuth token expired and refresh failed."
-                return await _reddit_api_get(json_url, retry_on_401=False)
+                return await _reddit_api_call(
+                    json_url, json_body=json_body, retry_on_401=False,
+                )
             if status == 429:
                 return "Error: Reddit rate limit exceeded. Try again later."
+            if status == 403:
+                # A private or quarantined subreddit answers 403 with a JSON
+                # envelope that names the reason; Reddit's edge block answers
+                # 403 with an HTML "blocked by network security" page.
+                ctype = _header_str(resp.headers.get("content-type"))
+                if "json" in ctype:
+                    mapped = _check_reddit_json_error(await resp.json())
+                    if isinstance(mapped, str):
+                        return mapped
+                return (
+                    f"Error: HTTP 403 for {json_url} — Reddit refused this "
+                    "endpoint to a logged-out client."
+                )
             # Status is read directly rather than via raise_for_status: wreq's
             # StatusError carries no ``response``, so the code would have to be
             # recovered from the message string to report it.
@@ -464,6 +495,176 @@ async def _reddit_api_get(
         return f"Error: Invalid JSON response from {json_url}"
 
     return _check_reddit_json_error(data)
+
+
+# ---------------------------------------------------------------------------
+# Comment threads — post from /by_id, comments from GraphQL
+# ---------------------------------------------------------------------------
+#
+# oauth.reddit.com refuses every comment-thread route to a logged-out token
+# (/r/SUB/comments/..., /comments/..., /api/morechildren) with an HTML 403
+# "blocked by network security" page, whatever the headers or TLS profile.
+# Listings, /by_id and /api/info still answer.  The GraphQL gateway behind
+# Reddit's Android app serves the comment forest to the same token, so a
+# thread takes two requests, reassembled into the two-Listing shape
+# ``[post_listing, comment_listing]`` the formatters below consume.
+
+_GQL_URL = "https://gql-fed.reddit.com/"
+# Persisted-operation hash of the Android app's PostComments query.  The
+# gateway accepts only persisted operations (ad-hoc query text draws a
+# misleading NOT_AUTHENTICATED), so this is pinned to an app build; an unknown
+# hash draws "persisted query not found".  The hash is read from the Android
+# app's Apollo classes; Amqx/reddit-gql (src/operations.ts) tracks current ones.
+_POST_COMMENTS_HASH = "314f29c2494fd78c7844ef2c6b09acb4bef5b37ab50b4ddc01691d6d5c8433f8"
+# Comments per request.  Further top-level pages and deep reply chains come
+# back as cursor placeholders, which the formatters skip as they skipped the
+# JSON API's "more" stubs.
+_GQL_COMMENT_COUNT = 200
+
+_THREAD_POST_ID_RE = re.compile(r"/comments/(\w+)", re.IGNORECASE)
+
+# The JSON API's ``sort=`` values, mapped to PostComments' sortType enum.
+_GQL_SORT_TYPES = {
+    "confidence": "CONFIDENCE",
+    "best": "CONFIDENCE",
+    "top": "TOP",
+    "new": "NEW",
+    "controversial": "CONTROVERSIAL",
+    "old": "OLD",
+    "qa": "QA",
+}
+
+
+def _api_label(url: str) -> str:
+    """Frontmatter ``api`` value naming the hosts that serve ``url``.
+
+    A redd.it short link always names a post, so it counts as a thread.
+    """
+    if _classify_reddit_url(url) in (RedditPageType.COMMENT_THREAD, RedditPageType.SHORT_LINK):
+        return f"Reddit ({_OAUTH_API_HOST} + {urlparse(_GQL_URL).hostname})"
+    return f"Reddit ({_OAUTH_API_HOST})"
+
+
+async def _fetch_thread_json(url: str) -> list | str:
+    """Fetch a comment thread as ``[post_listing, comment_listing]``.
+
+    A comment permalink yields its whole thread; callers narrow it to the
+    comment with a section filter.  Returns an error string on failure.
+    """
+    match = _THREAD_POST_ID_RE.search(urlparse(url).path)
+    if not match:
+        return f"Error: No post id in Reddit URL {url}"
+    post_id = match.group(1)
+
+    post = await _reddit_api_call(
+        f"https://{_OAUTH_API_HOST}/by_id/t3_{post_id}/.json?raw_json=1",
+        retry_on_401=True,
+    )
+    if isinstance(post, str):
+        return post
+    if not isinstance(post, dict) or not post.get("data", {}).get("children"):
+        return f"Error: Reddit post {post_id} not found."
+
+    sort = parse_qs(urlparse(url).query).get("sort", ["confidence"])[0].lower()
+    body = {
+        "operationName": "PostComments",
+        "variables": {
+            "id": f"t3_{post_id}",
+            "sortType": _GQL_SORT_TYPES.get(sort, "CONFIDENCE"),
+            "count": _GQL_COMMENT_COUNT,
+            "maxDepth": _MAX_COMMENT_DEPTH,
+            "includeConsistencyToken": False,
+            "includePremiumAvatarTreatment": False,
+        },
+        "extensions": {
+            "persistedQuery": {"version": 1, "sha256Hash": _POST_COMMENTS_HASH},
+        },
+    }
+    response = await _reddit_api_call(_GQL_URL, json_body=body, retry_on_401=True)
+    if isinstance(response, str):
+        return response
+    comments = _gql_comment_listing(response)
+    if isinstance(comments, str):
+        return comments
+    return [post, comments]
+
+
+def _gql_comment_listing(response: list | dict) -> dict | str:
+    """Convert a PostComments response to the JSON API's comment Listing.
+
+    The forest arrives flat, in depth-first order, each entry carrying its
+    ``depth``; nesting is rebuilt from depth rather than ``parentId`` because
+    a deleted comment's node carries no id to hang its replies on.
+    """
+    if not isinstance(response, dict):
+        return "Error: Reddit returned an unexpected comments response."
+    errors = response.get("errors")
+    if errors:
+        message = "; ".join(str(e.get("message", e)) for e in errors if e)
+        if "persisted query not found" in message.lower():
+            return (
+                "Error: Reddit retired the comments query this tool relies on "
+                "(persisted query not found); the PostComments hash in "
+                "reddit.py needs updating."
+            )
+        return f"Error: Reddit comments API error: {message}"
+    post_info = (response.get("data") or {}).get("postInfoById")
+    if not post_info:
+        return "Error: Reddit returned no comments for this post."
+    trees = (post_info.get("commentForest") or {}).get("trees") or []
+
+    top: list[dict] = []
+    # Open ancestors as (depth, comment, its replies); a comment closes when
+    # the next entry is at its depth or shallower.
+    stack: list[tuple[int, dict, list[dict]]] = []
+    for tree in trees:
+        node = tree.get("node")
+        if not node:
+            continue  # cursor placeholder for more comments
+        depth = tree.get("depth", 0)
+        comment = _gql_comment(node)
+        while stack and stack[-1][0] >= depth:
+            stack.pop()
+        if stack:
+            _, parent, replies = stack[-1]
+            if not replies:
+                parent["data"]["replies"] = {"kind": "Listing", "data": {"children": replies}}
+            replies.append(comment)
+        else:
+            top.append(comment)
+        stack.append((depth, comment, []))
+
+    return {"kind": "Listing", "data": {"children": top}}
+
+
+def _gql_comment(node: dict) -> dict:
+    """Map one GraphQL comment node to a JSON API ``t1`` child."""
+    author = (node.get("authorInfo") or {}).get("name") or "[deleted]"
+    body = (node.get("content") or {}).get("markdown") or ""
+    if node.get("__typename") == "DeletedComment":
+        author, body = "[deleted]", "[deleted]"
+    elif node.get("isAdminTakedown"):
+        body = "[ Removed by Reddit ]"
+    elif node.get("isRemoved"):
+        author, body = "[deleted]", "[removed]"
+
+    created_utc = 0.0
+    if created := node.get("createdAt"):
+        with contextlib.suppress(ValueError):
+            created_utc = datetime.fromisoformat(created).timestamp()
+
+    fullname = node.get("id") or ""
+    return {
+        "kind": "t1",
+        "data": {
+            "id": fullname.removeprefix("t1_"),
+            "author": author,
+            "body": body,
+            "score": node.get("score") or 0,
+            "created_utc": created_utc,
+            "replies": "",
+        },
+    }
 
 
 async def _fetch_reddit_content(url: str) -> tuple[str, str]:

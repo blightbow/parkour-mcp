@@ -99,6 +99,7 @@ from .markdown import (
 from .mediawiki import _mediawiki_html_to_markdown
 from .pdf import PdfDecodeError
 from .reddit import (
+    _api_label,
     _build_comment_section_tree,
     _fetch_reddit_json,
     _format_comment_thread,
@@ -426,7 +427,7 @@ async def web_fetch_direct(
                             cached.markdown, section_names, max_tokens, auto_expand=auto_expand,
                             frontmatter_entries=FMEntries({
                                 "source": source_url,
-                                "api": "Reddit (oauth.reddit.com)",
+                                "api": _api_label(url),
                                 "warning": fragment_warning,
                                 "note": permalink_note,
                             }),
@@ -977,7 +978,7 @@ async def web_fetch_sections(url: str, slice: int = 0) -> str:
                     _, section_body = _build_comment_section_tree(data)
                     fm = _build_frontmatter({
                         "source": original_url,
-                        "api": "Reddit (oauth.reddit.com)",
+                        "api": _api_label(reddit_url),
                         "trust": _TRUST_ADVISORY,
                         "hint": f"Use {tool_name('web_fetch_direct')} with section=#comment_id to "
                                 "extract a specific comment and its replies, "
@@ -991,7 +992,7 @@ async def web_fetch_sections(url: str, slice: int = 0) -> str:
             # Non-thread Reddit pages: no meaningful section tree
             return _build_frontmatter({
                 "source": original_url,
-                "api": "Reddit (oauth.reddit.com)",
+                "api": _api_label(reddit_url),
                 "note": "Section listing is only available for comment threads. "
                         f"Use {tool_name('web_fetch_direct')} with search= for keyword search.",
             })

@@ -73,7 +73,7 @@ from .mediawiki import (
     _mediawiki_html_to_markdown,
 )
 from .pdf import PdfDecodeError, pdf_to_markdown
-from .reddit import _fetch_reddit_content, _split_by_comments
+from .reddit import _api_label, _fetch_reddit_content, _split_by_comments
 
 logger = logging.getLogger(__name__)
 
@@ -1041,7 +1041,7 @@ async def _doi_fast_path(url: str) -> str | None:
 # ---------------------------------------------------------------------------
 
 async def _reddit_fast_path(url: str, max_tokens: int = 5000) -> str | None:
-    """Attempt to fetch a Reddit page via the old.reddit.com .json endpoint.
+    """Attempt to fetch a Reddit page through the Reddit API fast path.
 
     Returns formatted content on success, or None if not a Reddit URL.
     Once matched, always returns a string (even errors) to prevent
@@ -1066,7 +1066,7 @@ async def _reddit_fast_path(url: str, max_tokens: int = 5000) -> str | None:
 
     fm_entries = FMEntries({
         "source": url,
-        "api": "Reddit (oauth.reddit.com)",
+        "api": _api_label(reddit_url),
         "trust": _TRUST_ADVISORY,
     })
     if trunc_hint:

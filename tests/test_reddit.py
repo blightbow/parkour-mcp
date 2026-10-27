@@ -1,6 +1,7 @@
 """Tests for the Reddit fast path."""
 
 import time
+from datetime import UTC, datetime
 
 import pytest
 from wreq import exceptions as wreq_exc
@@ -127,6 +128,55 @@ def _make_search_json(posts: list[dict] | None = None, after: str | None = None)
 THREAD_JSON = _make_thread_json()
 
 LISTING_JSON = _make_listing_json()
+
+BY_ID_URL = "https://oauth.reddit.com/by_id/t3_abc123/.json?raw_json=1"
+
+
+def _gql_forest(children: list[dict], depth: int = 0) -> list[dict]:
+    """Flatten JSON-API ``t1`` children into a PostComments forest.
+
+    Reddit sends the forest flat and depth-first, each entry carrying its
+    depth, which is the shape this reproduces.
+    """
+    trees: list[dict] = []
+    for child in children:
+        data = child["data"]
+        trees.append({
+            "depth": depth,
+            "parentId": None,
+            "more": None,
+            "node": {
+                "__typename": "Comment",
+                "id": f"t1_{data['id']}",
+                "authorInfo": {"name": data["author"]},
+                "content": {"markdown": data["body"]},
+                "score": data["score"],
+                "createdAt": datetime.fromtimestamp(data["created_utc"], UTC).isoformat(),
+            },
+        })
+        replies = data.get("replies")
+        if isinstance(replies, dict):
+            trees.extend(_gql_forest(replies["data"]["children"], depth + 1))
+    return trees
+
+
+def _gql_response(trees: list[dict]) -> dict:
+    return {"data": {"postInfoById": {"commentForest": {"trees": trees}}}}
+
+
+def _mock_thread(fake, thread_json: list) -> None:
+    """Serve a ``_make_thread_json`` fixture the way Reddit now does.
+
+    The post comes from ``/by_id`` and the comments from the GraphQL
+    gateway; the comment-thread ``.json`` routes are refused to a
+    logged-out token.
+    """
+    post_listing, comment_listing = thread_json
+    fake.mock_get(BY_ID_URL, json_data=post_listing)
+    fake.mock_post(
+        reddit_mod._GQL_URL,
+        json_data=_gql_response(_gql_forest(comment_listing["data"]["children"])),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -649,10 +699,7 @@ class TestFetchRedditContent:
     @pytest.mark.asyncio
     async def test_fetches_comment_thread(self, fake_async_session):
         url = "https://old.reddit.com/r/Python/comments/abc123/test/"
-        fake_async_session.mock_get(
-            "https://oauth.reddit.com/r/Python/comments/abc123/test/.json?raw_json=1",
-            json_data=THREAD_JSON,
-        )
+        _mock_thread(fake_async_session, THREAD_JSON)
 
         title, md = await _fetch_reddit_content(url)
         assert title == "Test Post Title"
@@ -674,7 +721,7 @@ class TestFetchRedditContent:
     async def test_http_error_returns_error_string(self, fake_async_session):
         url = "https://old.reddit.com/r/Python/comments/abc123/test/"
         fake_async_session.mock_get(
-            "https://oauth.reddit.com/r/Python/comments/abc123/test/.json?raw_json=1",
+            BY_ID_URL,
             status=404,
         )
 
@@ -713,10 +760,7 @@ class TestFetchRedditContent:
             "https://redd.it/abc123",
             final_url="https://www.reddit.com/r/Python/comments/abc123/test/",
         )
-        fake_async_session.mock_get(
-            "https://oauth.reddit.com/r/Python/comments/abc123/test/.json?raw_json=1",
-            json_data=THREAD_JSON,
-        )
+        _mock_thread(fake_async_session, THREAD_JSON)
 
         title, _ = await _fetch_reddit_content("https://redd.it/abc123")
         assert title == "Test Post Title"
@@ -730,15 +774,12 @@ class TestRedditFastPath:
     @pytest.mark.asyncio
     async def test_reddit_url_intercepted(self, fake_async_session):
         url = "https://www.reddit.com/r/Python/comments/abc123/test/"
-        fake_async_session.mock_get(
-            "https://oauth.reddit.com/r/Python/comments/abc123/test/.json?raw_json=1",
-            json_data=THREAD_JSON,
-        )
+        _mock_thread(fake_async_session, THREAD_JSON)
 
         result = await _reddit_fast_path(url)
         assert result is not None
         assert "Test Post Title" in result
-        assert "api: Reddit (oauth.reddit.com)" in result
+        assert "api: Reddit (oauth.reddit.com + gql-fed.reddit.com)\n" in result
 
     @pytest.mark.asyncio
     async def test_non_reddit_url_returns_none(self):
@@ -760,13 +801,13 @@ class TestRedditFastPath:
         assert "Search: skiprika" in result
         assert "r/WutheringWaves" in result
         assert "/comments/1swswbn/thats_why_sigrika_is_skiprika/" in result
-        assert "api: Reddit (oauth.reddit.com)" in result
+        assert "api: Reddit (oauth.reddit.com)\n" in result
 
     @pytest.mark.asyncio
     async def test_error_returns_string_not_none(self, fake_async_session):
         url = "https://www.reddit.com/r/Python/comments/abc123/test/"
         fake_async_session.mock_get(
-            "https://oauth.reddit.com/r/Python/comments/abc123/test/.json?raw_json=1",
+            BY_ID_URL,
             status=500,
         )
 
@@ -777,10 +818,7 @@ class TestRedditFastPath:
     @pytest.mark.asyncio
     async def test_cache_populated(self, fake_async_session):
         url = "https://www.reddit.com/r/Python/comments/abc123/test/"
-        fake_async_session.mock_get(
-            "https://oauth.reddit.com/r/Python/comments/abc123/test/.json?raw_json=1",
-            json_data=THREAD_JSON,
-        )
+        _mock_thread(fake_async_session, THREAD_JSON)
 
         await _reddit_fast_path(url)
         cached = _page_cache.get(url)
@@ -792,10 +830,7 @@ class TestRedditFastPath:
     async def test_slicing_search(self, fake_async_session):
         """BM25 search over cached Reddit content works."""
         url = "https://www.reddit.com/r/Python/comments/abc123/test/"
-        fake_async_session.mock_get(
-            "https://oauth.reddit.com/r/Python/comments/abc123/test/.json?raw_json=1",
-            json_data=THREAD_JSON,
-        )
+        _mock_thread(fake_async_session, THREAD_JSON)
 
         await _reddit_fast_path(url)
         cached = _page_cache.get(url)
@@ -807,10 +842,7 @@ class TestRedditFastPath:
     async def test_fenced_content(self, fake_async_session):
         """Output should have content fencing for untrusted content."""
         url = "https://www.reddit.com/r/Python/comments/abc123/test/"
-        fake_async_session.mock_get(
-            "https://oauth.reddit.com/r/Python/comments/abc123/test/.json?raw_json=1",
-            json_data=THREAD_JSON,
-        )
+        _mock_thread(fake_async_session, THREAD_JSON)
 
         result = await _reddit_fast_path(url)
         assert result is not None
@@ -829,10 +861,7 @@ class TestRedditFastPath:
         c2 = _make_comment(id="comment_2", author="user_b", body="Second comment")
         data = _make_thread_json(comments=[c1, c2])
         url = "https://www.reddit.com/r/Python/comments/abc123/test/"
-        fake_async_session.mock_get(
-            "https://oauth.reddit.com/r/Python/comments/abc123/test/.json?raw_json=1",
-            json_data=data,
-        )
+        _mock_thread(fake_async_session, data)
 
         await _reddit_fast_path(url)
         cached = _page_cache.get(url)
@@ -869,10 +898,7 @@ class TestRedditCommentPermalinkIntegration:
         data = _make_thread_json(comments=[target, other])
 
         # Mock the WHOLE-POST .json — the normalizer strips COMMENTID before fetching
-        fake_async_session.mock_get(
-            "https://oauth.reddit.com/r/Python/comments/abc123/title/.json?raw_json=1",
-            json_data=data,
-        )
+        _mock_thread(fake_async_session, data)
 
         permalink = "https://www.reddit.com/r/Python/comments/abc123/title/target_c/"
         result = await web_fetch_direct(permalink, max_tokens=3000)
@@ -894,10 +920,7 @@ class TestRedditCommentPermalinkIntegration:
         other = _make_comment(id="other_c", author="u2", body="OTHER BODY", score=3)
         data = _make_thread_json(comments=[target, other])
 
-        fake_async_session.mock_get(
-            "https://oauth.reddit.com/r/Python/comments/abc123/title/.json?raw_json=1",
-            json_data=data,
-        )
+        _mock_thread(fake_async_session, data)
 
         permalink = "https://www.reddit.com/r/Python/comments/abc123/title/target_c/"
         result = await web_fetch_direct(permalink, max_tokens=3000, section="other_c")
@@ -916,10 +939,7 @@ class TestRedditCommentPermalinkIntegration:
         other = _make_comment(id="other_c", author="u2", body="other discussion", score=3)
         data = _make_thread_json(comments=[target, other])
 
-        fake_async_session.mock_get(
-            "https://oauth.reddit.com/r/Python/comments/abc123/title/.json?raw_json=1",
-            json_data=data,
-        )
+        _mock_thread(fake_async_session, data)
 
         permalink = "https://www.reddit.com/r/Python/comments/abc123/title/target_c/"
         result = await web_fetch_direct(permalink, max_tokens=3000, search="discussion")
@@ -932,10 +952,7 @@ class TestRedditCommentPermalinkIntegration:
     async def test_whole_post_url_unchanged(self, fake_async_session):
         from parkour_mcp.fetch_direct import web_fetch_direct
 
-        fake_async_session.mock_get(
-            "https://oauth.reddit.com/r/Python/comments/abc123/title/.json?raw_json=1",
-            json_data=THREAD_JSON,
-        )
+        _mock_thread(fake_async_session, THREAD_JSON)
 
         url = "https://www.reddit.com/r/Python/comments/abc123/title/"
         result = await web_fetch_direct(url, max_tokens=3000)
@@ -1100,3 +1117,242 @@ class TestRedditOAuth:
     def test_check_json_error_passes_through_listing(self):
         assert _check_reddit_json_error(LISTING_JSON) is LISTING_JSON
         assert _check_reddit_json_error(THREAD_JSON) is THREAD_JSON
+
+
+# ---------------------------------------------------------------------------
+# Comment threads via /by_id + GraphQL
+# ---------------------------------------------------------------------------
+
+def _gql_node(id: str, *, typename: str = "Comment", **fields) -> dict:
+    node = {
+        "__typename": typename,
+        "id": f"t1_{id}",
+        "authorInfo": {"name": f"author_{id}"},
+        "content": {"markdown": f"body {id}"},
+        "score": 1,
+        "createdAt": "2026-10-26T08:22:27.951000+0000",
+    }
+    node.update(fields)
+    return node
+
+
+def _tree(depth: int, node: dict | None, more: dict | None = None) -> dict:
+    return {"depth": depth, "parentId": None, "node": node, "more": more}
+
+
+def _ids(children: list[dict]) -> list[str]:
+    return [c["data"]["id"] for c in children]
+
+
+def _replies(comment: dict) -> list[dict]:
+    replies = comment["data"]["replies"]
+    return replies["data"]["children"] if replies else []
+
+
+class TestGqlCommentListing:
+    def test_rebuilds_nesting_from_depth(self):
+        # a
+        # ├─ b
+        # │  └─ c
+        # └─ d
+        # e
+        response = _gql_response([
+            _tree(0, _gql_node("a")),
+            _tree(1, _gql_node("b")),
+            _tree(2, _gql_node("c")),
+            _tree(1, _gql_node("d")),
+            _tree(0, _gql_node("e")),
+        ])
+        listing = reddit_mod._gql_comment_listing(response)
+        assert isinstance(listing, dict)
+        top = listing["data"]["children"]
+        assert _ids(top) == ["a", "e"]
+        assert _ids(_replies(top[0])) == ["b", "d"]
+        assert _ids(_replies(_replies(top[0])[0])) == ["c"]
+        assert _replies(top[1]) == []
+
+    def test_maps_node_fields_to_t1(self):
+        listing = reddit_mod._gql_comment_listing(_gql_response([_tree(0, _gql_node("a", score=81))]))
+        assert isinstance(listing, dict)
+        data = listing["data"]["children"][0]["data"]
+        assert listing["data"]["children"][0]["kind"] == "t1"
+        assert data["id"] == "a"
+        assert data["author"] == "author_a"
+        assert data["body"] == "body a"
+        assert data["score"] == 81
+        assert data["created_utc"] == datetime(2026, 10, 26, 8, 22, 27, 951000, tzinfo=UTC).timestamp()
+
+    def test_more_placeholders_are_skipped(self):
+        response = _gql_response([
+            _tree(0, _gql_node("a")),
+            _tree(1, None, more={"cursor": "opaque", "count": 7}),
+            _tree(0, None, more={"cursor": "next-page", "count": 30}),
+        ])
+        listing = reddit_mod._gql_comment_listing(response)
+        assert isinstance(listing, dict)
+        top = listing["data"]["children"]
+        assert _ids(top) == ["a"]
+        assert _replies(top[0]) == []
+
+    def test_deleted_and_removed_comments(self):
+        response = _gql_response([
+            _tree(0, _gql_node("del", typename="DeletedComment", authorInfo=None, content=None)),
+            _tree(0, _gql_node("rem", isRemoved=True)),
+            _tree(0, _gql_node("adm", isAdminTakedown=True)),
+        ])
+        listing = reddit_mod._gql_comment_listing(response)
+        assert isinstance(listing, dict)
+        deleted, removed, taken_down = (c["data"] for c in listing["data"]["children"])
+        assert (deleted["author"], deleted["body"]) == ("[deleted]", "[deleted]")
+        assert (removed["author"], removed["body"]) == ("[deleted]", "[removed]")
+        assert (taken_down["author"], taken_down["body"]) == ("author_adm", "[ Removed by Reddit ]")
+
+    def test_retired_persisted_query_names_the_cause(self):
+        # Shape captured from gql-fed.reddit.com for an unknown hash.
+        response = {
+            "errors": [{"message": "persisted query not found", "extensions": {"code": "NOT_FOUND"}}],
+            "data": None,
+        }
+        result = reddit_mod._gql_comment_listing(response)
+        assert isinstance(result, str)
+        assert "persisted query not found" in result
+        assert "hash" in result
+
+    def test_other_graphql_errors_surface_message(self):
+        result = reddit_mod._gql_comment_listing({"errors": [{"message": "DEPENDENCY_FAILURE"}]})
+        assert isinstance(result, str) and "DEPENDENCY_FAILURE" in result
+
+    def test_missing_post_info_is_an_error(self):
+        result = reddit_mod._gql_comment_listing({"data": {"postInfoById": None}})
+        assert isinstance(result, str) and result.startswith("Error")
+
+
+class TestFetchThreadJson:
+    @pytest.mark.asyncio
+    async def test_returns_two_listing_shape(self, fake_async_session):
+        _mock_thread(fake_async_session, THREAD_JSON)
+        data = await reddit_mod._fetch_reddit_json(
+            "https://www.reddit.com/r/Python/comments/abc123/test/"
+        )
+        assert isinstance(data, list) and len(data) == 2
+        assert data[0] == THREAD_JSON[0]
+        assert _ids(data[1]["data"]["children"]) == ["abc1234"]
+
+    @pytest.mark.asyncio
+    async def test_subredditless_thread_url(self, fake_async_session):
+        # redd.it links resolve to /comments/{id} with no /r/SUB/ prefix.
+        _mock_thread(fake_async_session, THREAD_JSON)
+        data = await reddit_mod._fetch_reddit_json("https://www.reddit.com/comments/abc123/")
+        assert isinstance(data, list)
+
+    @pytest.mark.asyncio
+    async def test_never_requests_comment_thread_route(self, fake_async_session):
+        # The fake raises on any unmocked URL, so mocking only /by_id and the
+        # gateway proves the refused .json route is not touched.
+        _mock_thread(fake_async_session, THREAD_JSON)
+        await reddit_mod._fetch_reddit_json("https://www.reddit.com/r/Python/comments/abc123/test/")
+        assert [url for url, _ in fake_async_session.posted] == [reddit_mod._GQL_URL]
+
+    @pytest.mark.asyncio
+    async def test_sort_maps_to_graphql_sort_type(self, fake_async_session):
+        _mock_thread(fake_async_session, THREAD_JSON)
+        await reddit_mod._fetch_reddit_json(
+            "https://www.reddit.com/r/Python/comments/abc123/test/?sort=top"
+        )
+        _, body = fake_async_session.posted[-1]
+        assert isinstance(body, dict)
+        assert body["variables"]["sortType"] == "TOP"
+        assert body["variables"]["id"] == "t3_abc123"
+        assert body["extensions"]["persistedQuery"]["sha256Hash"] == reddit_mod._POST_COMMENTS_HASH
+
+    @pytest.mark.asyncio
+    async def test_default_sort_is_confidence(self, fake_async_session):
+        _mock_thread(fake_async_session, THREAD_JSON)
+        await reddit_mod._fetch_reddit_json("https://www.reddit.com/r/Python/comments/abc123/test/")
+        _, body = fake_async_session.posted[-1]
+        assert isinstance(body, dict)
+        assert body["variables"]["sortType"] == "CONFIDENCE"
+
+    @pytest.mark.asyncio
+    async def test_post_not_found(self, fake_async_session):
+        fake_async_session.mock_get(BY_ID_URL, json_data={"kind": "Listing", "data": {"children": []}})
+        result = await reddit_mod._fetch_reddit_json(
+            "https://www.reddit.com/r/Python/comments/abc123/test/"
+        )
+        assert result == "Error: Reddit post abc123 not found."
+        # No comments request is spent on a post that does not exist.
+        assert fake_async_session.posted == []
+
+    @pytest.mark.asyncio
+    async def test_graphql_http_error_is_reported(self, fake_async_session):
+        fake_async_session.mock_get(BY_ID_URL, json_data=THREAD_JSON[0])
+        fake_async_session.mock_post(reddit_mod._GQL_URL, status=500)
+        result = await reddit_mod._fetch_reddit_json(
+            "https://www.reddit.com/r/Python/comments/abc123/test/"
+        )
+        assert isinstance(result, str)
+        assert "HTTP 500" in result and reddit_mod._GQL_URL in result
+
+
+class TestForbiddenResponses:
+    @pytest.mark.asyncio
+    async def test_html_403_reports_logged_out_refusal(self, fake_async_session):
+        fake_async_session.mock_get(
+            "https://oauth.reddit.com/r/Python/.json?raw_json=1",
+            status=403, headers={"content-type": "text/html"},
+        )
+        result = await reddit_mod._fetch_reddit_json("https://www.reddit.com/r/Python/")
+        assert isinstance(result, str)
+        assert "HTTP 403" in result
+        assert "logged-out" in result
+
+    @pytest.mark.asyncio
+    async def test_json_403_maps_in_band_reason(self, fake_async_session):
+        fake_async_session.mock_get(
+            "https://oauth.reddit.com/r/Python/.json?raw_json=1",
+            status=403,
+            headers={"content-type": "application/json; charset=UTF-8"},
+            json_data={"error": 403, "reason": "private", "message": "Forbidden"},
+        )
+        result = await reddit_mod._fetch_reddit_json("https://www.reddit.com/r/Python/")
+        assert result == "Error: This subreddit is private."
+
+
+class TestApiLabel:
+    """The ``api`` frontmatter names every host that served the page."""
+
+    @pytest.mark.parametrize("url", [
+        "https://www.reddit.com/r/Python/comments/abc123/test/",
+        "https://www.reddit.com/comments/abc123/",
+        "https://old.reddit.com/r/Python/comments/abc123/title/def456/",
+        # A short link always names a post, so it is served as a thread.
+        "https://redd.it/abc123",
+    ])
+    def test_threads_name_both_hosts(self, url):
+        assert reddit_mod._api_label(url) == "Reddit (oauth.reddit.com + gql-fed.reddit.com)"
+
+    @pytest.mark.parametrize("url", [
+        "https://www.reddit.com/r/Python/",
+        "https://www.reddit.com/user/spez/",
+        "https://www.reddit.com/search/?q=python",
+    ])
+    def test_other_pages_name_oauth_host(self, url):
+        assert reddit_mod._api_label(url) == "Reddit (oauth.reddit.com)"
+
+    @pytest.mark.asyncio
+    async def test_sections_frontmatter_on_thread(self, fake_async_session):
+        from parkour_mcp.fetch_direct import web_fetch_sections
+
+        _mock_thread(fake_async_session, THREAD_JSON)
+        result = await web_fetch_sections("https://www.reddit.com/r/Python/comments/abc123/test/")
+        assert "api: Reddit (oauth.reddit.com + gql-fed.reddit.com)\n" in result
+
+    @pytest.mark.asyncio
+    async def test_section_filter_frontmatter_on_thread(self, fake_async_session):
+        from parkour_mcp.fetch_direct import web_fetch_direct
+
+        _mock_thread(fake_async_session, THREAD_JSON)
+        result = await web_fetch_direct(
+            "https://www.reddit.com/r/Python/comments/abc123/test/", section="abc1234",
+        )
+        assert "api: Reddit (oauth.reddit.com + gql-fed.reddit.com)\n" in result

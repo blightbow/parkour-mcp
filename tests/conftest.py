@@ -204,6 +204,8 @@ class _FakeAsyncSession:
         self._get: dict[str, list] = {}
         self._head: dict[str, list] = {}
         self._post: dict[str, list] = {}
+        # (url, json body) of every POST, for asserting on what was sent.
+        self.posted: list[tuple[str, object]] = []
 
     async def __aenter__(self):
         return self
@@ -218,7 +220,8 @@ class _FakeAsyncSession:
         # HEAD defaults to 200 with url-as-final to support redirect-follow tests
         return self._dispatch("HEAD", self._head, url, default=FakeResponse(200, url=url))
 
-    async def post(self, url, **_):
+    async def post(self, url, **kwargs):
+        self.posted.append((url, kwargs.get("json")))
         return self._dispatch("POST", self._post, url)
 
     @staticmethod
