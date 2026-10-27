@@ -24,13 +24,15 @@ source of release-note prose; commits without them fall back to the
 bare subject which produces weaker changelog entries.
 
 CAVEAT: git's `%(trailers)` only recognizes trailers in the final
-contiguous block of the message. The house style puts a blank line
-between `Why:` and `Co-Authored-By:`, which splits them, so this command
-reports `Why:` as missing on commits that actually have one. git-cliff
-uses its own footer parser and extracts them correctly. Do not act on a
-"missing" result here alone — confirm against the Step 2 git-cliff
-preview (if the bullet renders as the `Why:` prose, the trailer is fine;
-if it renders as the bare subject, it is genuinely absent).
+contiguous block of the message. Commits written under the earlier house
+style put a blank line between `Why:` and `Co-Authored-By:`, which splits
+them, so this command reports `Why:` as missing on those commits even when
+they have one; the current convention (CLAUDE.md, "Why: commit trailers")
+keeps them in one block. git-cliff uses its own footer parser and reads
+both layouts. Do not act on a "missing" result here alone — confirm against
+the Step 2 git-cliff preview (if the bullet renders as the `Why:` prose,
+the trailer is fine; if it renders as the bare subject, it is genuinely
+absent).
 
 ## Step 2: Preview
 

@@ -40,7 +40,8 @@ redlib briefly used. Listings, search, user pages, `/by_id`, and `/api/info`
 still answer. `reddit.py#_fetch_thread_json` therefore takes the post from
 `/by_id` and the comments from `gql-fed.reddit.com`, the GraphQL gateway
 behind Reddit's Android app, and `reddit.py#_gql_comment_listing` rebuilds
-the JSON API's Listing shape.
+the JSON API's Listing shape. Which upstream each remaining route uses, and
+when it moves, is decided in `docs/adr/0001-reddit-per-route-upstream.md`.
 
 ### The persisted-operation hash is pinned to an app build
 

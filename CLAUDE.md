@@ -150,6 +150,15 @@ Why: queries with unsupported operators now report the parse error in the respon
 
 Write `Why:` as a single logical line (wrap in your editor, but no hard newlines in the value). git-cliff preserves multi-line trailers verbatim and the Tera template flattens them, but single-line is the path of least resistance.
 
+`Why:` belongs in the message's final paragraph, together with every other trailer, with no blank line between them. Put `Why:` first and `Co-Authored-By:` after it:
+
+```
+Why: queries with unsupported operators now report the parse error in the response frontmatter instead of returning empty.
+Co-Authored-By: ...
+```
+
+git treats only the last contiguous block of a message as trailers, so a `Why:` separated from `Co-Authored-By:` by a blank line is invisible to `git log --format='%(trailers:key=Why)'`. git-cliff reads either layout. Commits before the convention changed use the split layout, and nothing in this repo queries their trailers through git.
+
 **Posture depends on which section the bullet lands in.** The trailer is read as a bullet under a heading, alongside its siblings, and the heading does not supply a missing subject:
 
 - `feat:` → **Added**. Lead with what now exists, and name it. Someone scanning this section wants to learn the capability; they have no prior expectation to correct.
@@ -213,6 +222,10 @@ Cite code by `path#Symbol` (Drift-style anchor), not `path:line`. Symbol anchors
 - `docs/frontmatter-standard.md#multi-contributor-keys-protected` (markdown heading slug)
 
 `path:line` is correct only when the target has no symbol name (a comment, blank line, log line) or when emitting a permalink to a pinned SHA where the line is frozen by the URL. The convention applies independently of whether Drift is gating the specific reference.
+
+## Architecture Decision Records
+
+`docs/adr/` holds dated decision records. They are the exception to describing the software as it is: each records intent and methodology at a point in time, and is expected to disagree with the code later. Once an ADR's `status` is `accepted`, do not edit any text above `## Implementation Notes`, including to correct it against the code. Record a divergence or a release by appending a dated, typed entry (Deviation, Clarification, Abandoned, or Shipped) under `## Implementation Notes`, and reverse a decision by writing a new ADR that supersedes it. Never `drift link` a file in `docs/adr/`. Format and lifecycle: `docs/adr/README.md`.
 
 ## Technical Debt
 
