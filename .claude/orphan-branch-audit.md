@@ -89,7 +89,11 @@ Read the full intent with `git show <sha>`. The commit bodies are detailed.
    the mocked gate. That is the exact problem the commit fixed, so the intent stands
    unless the user has changed their mind. The four conflicting files have changed since,
    so this needs reimplementing rather than picking.
-2. **Node 24 actions** — `open`, **time-sensitive**. `main` is still on
+2. **Node 24 actions** — `superseded` by `chore/pin-actions-and-dependabot`: every action
+   SHA-pinned at its November 2026 release, plus `.github/dependabot.yml` for the
+   github-actions ecosystem. Do not land `f2aed7a`; its majors were stale. Verified only by
+   the next tag push (an RC). Not actually time-sensitive: runners force node20 actions
+   onto node24 with a warning rather than failing. Original state, for reference: `main` is still on
    `actions/checkout@v4`, `actions/setup-node@v4`, `astral-sh/setup-uv@v6`. The last
    successful release run (v2.4.0, 2026-08-20) predates GitHub's 2026-09-16 Node 20
    removal, so the next release is the first to run without it. Before picking, check
