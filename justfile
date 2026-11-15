@@ -5,10 +5,12 @@ pack:
     mkdir -p dist
     npx @anthropic-ai/mcpb pack . dist/parkour-mcp.mcpb
 
-# Locally test mcpb (assumes Claude Desktop+MacOS). If manifest.dev.json
-# exists (gitignored), its keys are deep-merged over manifest.json in a
-# separate dist/parkour-mcp-dev.mcpb, e.g. {"version": "2.5.0-dev.1"}.
-uat: pack
+# If manifest.dev.json exists (gitignored), its keys are deep-merged over
+# manifest.json in a separate dist/parkour-mcp-dev.mcpb, e.g.
+# {"version": "2.5.0-dev.1"}. An overlay older than manifest.json is refused
+# before packing (see _uat-overlay-fresh). Assumes Claude Desktop on macOS.
+# Pack the bundle and open it in Claude Desktop for local UAT
+uat: _uat-overlay-fresh pack
     #!/usr/bin/env bash
     set -euo pipefail
     if [[ ! -f manifest.dev.json ]]; then
@@ -103,6 +105,25 @@ lint-workflows:
     fi
     actionlint
     echo "lint-workflows: .github/workflows/ clean"
+
+# manifest.dev.json pins a version for the UAT bundle, and manifest.json moves
+# under it with every release bump. An overlay written before the last bump
+# still carries the version it was written for, so the UAT bundle installs as
+# a downgrade of the release it is meant to test. Its being older than
+# manifest.json is the sign: edit it for the current version, or touch it to
+# confirm it is still right, and rerun.
+[private]
+_uat-overlay-fresh:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    [[ -f manifest.dev.json ]] || exit 0
+    if [[ manifest.dev.json -ot manifest.json ]]; then
+        echo "uat: manifest.dev.json is older than manifest.json, so its overlay may predate the last version bump." >&2
+        echo "uat:   manifest.json      version $(jq -r .version manifest.json)" >&2
+        echo "uat:   manifest.dev.json  version $(jq -r '.version // "(not set)"' manifest.dev.json)" >&2
+        echo "uat: Update manifest.dev.json for the current version, or touch it if it is still correct, then rerun." >&2
+        exit 1
+    fi
 
 # Install repo git hooks (one-time setup after cloning)
 install-hooks:

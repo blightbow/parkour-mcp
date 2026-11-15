@@ -82,6 +82,18 @@ gracefully if optional credentials (`GITHUB_TOKEN`, etc.) aren't available.
 with `open` so Claude Desktop picks it up for local install. Useful for
 manual UAT against a candidate build before tagging.
 
+To install a UAT build beside a released one, put a gitignored
+`manifest.dev.json` at the repo root with the keys to override, typically
+`{"version": "2.5.0-dev.1"}`. `just uat` then also writes
+`dist/parkour-mcp-dev.mcpb` with those keys merged over `manifest.json`.
+
+The overlay's version has to stay ahead of the release it is testing, and
+every release bump rewrites `manifest.json` underneath it. So `just uat`
+refuses to run when `manifest.dev.json` is older than `manifest.json`: an
+overlay written before the last bump would install as a downgrade (a
+`2.5.0-dev.1` overlay sorts below `2.5.0-rc.1`). Update the overlay for the
+current version, or `touch` it if it is still correct, and rerun.
+
 ## Debugging live behavior
 
 `parkour-mcp call` invokes one registered tool from the shell through the
