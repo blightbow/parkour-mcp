@@ -132,7 +132,7 @@ cog.outl(f"- **`packages.py`** — deps.dev (Google Open Source Insights) integr
 
 Releases use **git-cliff** for CHANGELOG assembly and **commitizen** for version bumping from Conventional Commits. Local flow is driven by the `/release` slash command in `.claude/commands/release.md`; CI (`.github/workflows/release.yml`) handles build + publish on tag push.
 
-Install git-cliff locally via `brew install git-cliff`. CI installs it via `taiki-e/install-action@git-cliff` (it's a Rust binary, not pip-installable).
+Install git-cliff locally via `brew install git-cliff`. CI installs it via `taiki-e/install-action` with `tool: git-cliff` (it's a Rust binary, not pip-installable).
 
 ### Why: commit trailers
 

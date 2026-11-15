@@ -1,0 +1,24 @@
+# Version updates for the actions used in .github/workflows/.
+#
+# Every action is pinned to a commit SHA with its release as a trailing
+# comment (`uses: owner/repo@<sha> # vX.Y.Z`). Dependabot rewrites both
+# together, so the pin stays immutable and the comment stays truthful.
+#
+# Python dependency PRs come from Dependabot security updates, enabled in the
+# repository settings, not from this file.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    # Let a release age before it is proposed, so a compromised or withdrawn
+    # tag has time to be caught upstream first.
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: ci
+      include: scope
