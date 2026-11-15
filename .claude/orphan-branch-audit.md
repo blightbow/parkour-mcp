@@ -82,7 +82,9 @@ Read the full intent with `git show <sha>`. The commit bodies are detailed.
 
 ### Per-item state (status: `open` until the user decides)
 
-1. **Live tests advisory** — `open`. `main` still runs `pytest -m live` in `just tag`
+1. **Live tests advisory** — `superseded` by `5e77175` on `chore/live-host-waiver`:
+   a host-scoped `PARKOUR_LIVE_ALLOW_DOWN` waiver in the liveness gate. Live tests stay in
+   `just tag`. Do not land `b6aedcc`. Original state, for reference: `main` still runs `pytest -m live` in `just tag`
    and in `pre-push`, and its only escape is `git push --no-verify`, which also skips
    the mocked gate. That is the exact problem the commit fixed, so the intent stands
    unless the user has changed their mind. The four conflicting files have changed since,
