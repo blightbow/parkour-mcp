@@ -137,6 +137,13 @@ at the cost of failing a tag push after the tag already exists.
 - **Issue**: `_matched_meta` is destructured from the return of `_filter_markdown_by_sections()` but never used. No checker currently reports it — ruff's unused-variable rules permit the underscore prefix, and ty treats it as an intentional discard — so this entry exists to keep the observation from being rediscovered as if it were new.
 - **Why deferred**: The variable captures section match metadata (ancestry paths, fragment matches) that may be useful in frontmatter enrichment later. Removing it would discard structured data we'll likely want when section responses gain richer diagnostics. Low-risk dead code in a display-only path.
 
+## actionlint: release gate on an upstream with no recent release
+
+- **Location**: `just lint-workflows`, run by `just tag` and `scripts/git-hooks/pre-push`; `.github/actionlint.yaml`.
+- **Issue**: actionlint gates every version tag, and its latest release is 1.7.12 (2026-03-30). It does not know the `ubuntu-26.04` runner label, GA on GitHub, which three open PRs add (rhysd/actionlint#683, #723, #743) without a release. `rhysd/actionlint#719` asks whether the author is still active. The label is declared in `.github/actionlint.yaml` under `self-hosted-runner`, which costs only the label-conflict check (no job here combines labels).
+- **Why deferred**: the rule data is stale, not wrong: actionlint still catches expression, step-reference, and script-injection errors, and those are why it gates. Replacing it is not justified by one missing label.
+- **How to evaluate**: each new GitHub runner image or action input actionlint does not know becomes another entry in `.github/actionlint.yaml`. If entries accumulate, or a GitHub feature the workflows need is rejected outright, move to a maintained fork or drop the gate. Delete the `ubuntu-26.04` entry when an actionlint release recognizes the label.
+
 ## Performance bottlenecks to investigate
 
 ### `html_to_markdown` on megapages — RESOLVED, do not re-optimize

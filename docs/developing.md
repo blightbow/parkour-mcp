@@ -220,6 +220,14 @@ created or pushed, so a missing binary blocks a release. `release.yml` runs
 only once a tag is pushed, which is otherwise the first moment a workflow
 defect would surface.
 
+`.github/actionlint.yaml` lists runner labels actionlint does not know yet.
+An entry there is an exception with a removal condition, not configuration:
+each one says which actionlint release would make it unnecessary.
+
+Workflows name an exact runner image (`ubuntu-26.04`), not `ubuntu-latest`,
+so moving to a new image is a deliberate edit rather than something GitHub
+does mid-release. Dependabot does not update runner labels.
+
 Actions are pinned to a commit SHA with the release as a trailing comment
 (`uses: owner/repo@<sha> # vX.Y.Z`), and `.github/dependabot.yml` proposes
 updates weekly. Keep that shape when adding an action: a tag or branch ref

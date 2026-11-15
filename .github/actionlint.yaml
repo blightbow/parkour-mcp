@@ -1,0 +1,16 @@
+# actionlint configuration, read automatically by `just lint-workflows`.
+
+self-hosted-runner:
+  labels:
+    # GitHub-hosted, not self-hosted. Ubuntu 26.04 is a generally available
+    # GitHub runner image, but actionlint 1.7.12, the latest release, predates
+    # it and rejects the label as unknown. Listing it here is actionlint's own
+    # escape for a label it does not know; the only check it gives up is the
+    # label-conflict check for jobs that combine labels, which no job here
+    # does. The pattern is matched with Go's path.Match, so this literal
+    # admits exactly one label.
+    #
+    # Remove this entry once an actionlint release recognizes ubuntu-26.04
+    # (open upstream as rhysd/actionlint#683, #723, and #743): with it gone,
+    # `just lint-workflows` failing on the label means the release did not.
+    - ubuntu-26.04

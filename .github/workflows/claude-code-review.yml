@@ -23,7 +23,7 @@ jobs:
     # CLAUDE_CODE_OAUTH_TOKEN, so allowing the bot would fail one step later.
     if: github.event.pull_request.user.type != 'Bot'
 
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
       pull-requests: read
