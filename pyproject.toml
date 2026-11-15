@@ -20,7 +20,16 @@ dependencies = [
     "mcp[cli]>=2.3,<3",
     "kagiapi",
     "beautifulsoup4",
-    "httpx[http2]",
+    # API and metadata transport, and the SSRF guard's vehicle: common.py
+    # subclasses httpcore.AsyncNetworkBackend to pin each connection to the
+    # validated address and inspects httpcore pool types. httpx 1.0 drops
+    # httpcore (its pre-releases depend on neither it nor h2), so the ceiling
+    # is load-bearing: without it a fresh PyPI resolve fails at import once
+    # 1.0 is final, and lockfiles do not travel to PyPI consumers. httpcore is
+    # declared directly because common.py imports it; it must not depend on
+    # httpx bringing it along.
+    "httpx[http2]>=0.28,<1",
+    "httpcore>=1.0,<2",
     # Generic-fetch transport.  Floor is the first release under the `wreq`
     # name (the project was `rnet` through 3.0.0-rc22; the reset to 0.10.0 is
     # a rename, not a rewrite).  0.12.1 is where `timeout=` became
