@@ -1115,7 +1115,7 @@ requires-dist = [
     { name = "tree-sitter-rust", marker = "extra == 'grammars'", specifier = ">=0.23" },
     { name = "tree-sitter-scala", marker = "extra == 'grammars'", specifier = ">=0.23" },
     { name = "tree-sitter-typescript", marker = "extra == 'grammars'", specifier = ">=0.23" },
-    { name = "wreq", specifier = ">=0.12.1" },
+    { name = "wreq", specifier = ">=0.12.1,<0.14" },
     { name = "youtube-transcript-api", specifier = ">=1.2.4" },
     { name = "yt-dlp", specifier = ">=2026.3.17" },
 ]

@@ -25,7 +25,13 @@ dependencies = [
     # name (the project was `rnet` through 3.0.0-rc22; the reset to 0.10.0 is
     # a rename, not a rewrite).  0.12.1 is where `timeout=` became
     # datetime.timedelta, so anything older takes different argument types.
-    "wreq>=0.12.1",
+    # The ceiling is load-bearing: wreq is pre-1.0 and breaks its API in
+    # minor releases (0.13 returned header names and values as memoryview
+    # where 0.12 returned bytes, and every generic fetch failed until
+    # _transport.py#_header_text decoded both). It admits only minors the
+    # transport has been verified against, and lockfiles do not travel to
+    # PyPI consumers, so it has to live here.
+    "wreq>=0.12.1,<0.14",
     "playwright",
     "markdownify",
     "semantic-text-splitter>=0.29.0",
