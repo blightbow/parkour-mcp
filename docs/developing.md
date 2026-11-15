@@ -191,6 +191,29 @@ uv run vulture parkour_mcp/ --make-whitelist
 Then copy **only** the false positives over, with a comment explaining why
 each one is unreachable to vulture.
 
+## Workflow linting
+
+Changes under `.github/workflows/` are linted with
+[actionlint](https://github.com/rhysd/actionlint), which also runs
+[shellcheck](https://www.shellcheck.net/) over every `run:` script:
+
+```bash
+brew install actionlint shellcheck
+just lint-workflows
+```
+
+It catches what a YAML parser cannot: expression type errors, references to
+steps or outputs that do not exist, and untrusted event fields such as a PR
+title interpolated straight into a shell script. The recipe requires both
+binaries, because actionlint skips the shellcheck pass silently when
+shellcheck is not on PATH.
+
+Actions are pinned to a commit SHA with the release as a trailing comment
+(`uses: owner/repo@<sha> # vX.Y.Z`), and `.github/dependabot.yml` proposes
+updates weekly. Keep that shape when adding an action: a tag or branch ref
+can be moved by whoever controls the upstream repository, and the release
+job holds the OIDC rights to publish to PyPI and the MCP Registry.
+
 ## Cutting a release
 
 Live tests don't run in CI — they need real API endpoints and credentials

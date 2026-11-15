@@ -70,6 +70,25 @@ docs-drift-fix:
 lint-deep:
     uv run vulture parkour_mcp/ .vulture_whitelist.py
 
+# Lint .github/workflows/ with actionlint: expression and type errors, unknown
+# step references, untrusted input interpolated into run: scripts, and the
+# scripts themselves via shellcheck. actionlint drops the shellcheck pass
+# without a word when shellcheck is not on PATH, so both are required here
+# rather than letting the scan quietly cover less.
+lint-workflows:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    missing=()
+    for tool in actionlint shellcheck; do
+        command -v "$tool" >/dev/null || missing+=("$tool")
+    done
+    if (( ${#missing[@]} )); then
+        echo "lint-workflows: missing ${missing[*]}; install with: brew install ${missing[*]}" >&2
+        exit 1
+    fi
+    actionlint
+    echo "lint-workflows: .github/workflows/ clean"
+
 # Install repo git hooks (one-time setup after cloning)
 install-hooks:
     git config core.hooksPath scripts/git-hooks
