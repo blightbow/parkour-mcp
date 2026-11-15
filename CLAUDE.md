@@ -99,19 +99,25 @@ cog.outl(f"- **`huggingface.py`** — HuggingFace Hub integration. {action_list(
 <!-- [[[end]]] -->
 <!-- [[[cog
 import sys; sys.path.insert(0, "scripts")
-from cog_helpers import rate_limit
-cog.outl(f"- **`ietf.py`** — IETF RFC and Internet-Draft integration. 4 tool actions (rfc, search, draft, subseries). RFC Editor per-document JSON for metadata and relationship chains (obsoletes/updates). IETF Datatracker REST API for search with status/WG filtering. BibXML service for subseries (STD/BCP/FYI) resolution. Native DOI tracking (`10.17487/RFC{{N}}`). {rate_limit('parkour_mcp.ietf._datatracker_limiter')+' Datatracker rate limit'}.")
+from cog_helpers import action_list, rate_limit
+cog.outl(f"- **`ietf.py`** — IETF RFC and Internet-Draft integration. {action_list('parkour_mcp.ietf._VALID_ACTIONS')}. RFC Editor per-document JSON for metadata and relationship chains (obsoletes/updates). IETF Datatracker REST API for search with status/WG filtering. BibXML service for subseries (STD/BCP/FYI) resolution. Native DOI tracking (`10.17487/RFC{{N}}`). {rate_limit('parkour_mcp.ietf._datatracker_limiter')+' Datatracker rate limit'}.")
 ]]] -->
-- **`ietf.py`** — IETF RFC and Internet-Draft integration. 4 tool actions (rfc, search, draft, subseries). RFC Editor per-document JSON for metadata and relationship chains (obsoletes/updates). IETF Datatracker REST API for search with status/WG filtering. BibXML service for subseries (STD/BCP/FYI) resolution. Native DOI tracking (`10.17487/RFC{N}`). 1s Datatracker rate limit.
+- **`ietf.py`** — IETF RFC and Internet-Draft integration. 4 actions: rfc, search, draft, subseries. RFC Editor per-document JSON for metadata and relationship chains (obsoletes/updates). IETF Datatracker REST API for search with status/WG filtering. BibXML service for subseries (STD/BCP/FYI) resolution. Native DOI tracking (`10.17487/RFC{N}`). 1s Datatracker rate limit.
 <!-- [[[end]]] -->
 <!-- [[[cog
 import sys; sys.path.insert(0, "scripts")
-from cog_helpers import ecosystem_list
-cog.outl(f"- **`packages.py`** — deps.dev (Google Open Source Insights) integration. 5 tool actions (package, version, dependencies, project, advisory). Covers {ecosystem_list()}. Version history, license detection, security advisories (GHSA/CVE with CVSS), resolved dependency graphs with native constraints, OpenSSF Scorecard, OSS-Fuzz coverage, and SLSA provenance. Shares the deps.dev HTTP client (`_depsdev_get`) and 1s limiter with `scorecard.py` via `common.py`. No auth required. Body content fenced (contributor-supplied fields are injection vectors).")
+from cog_helpers import action_list, ecosystem_list
+cog.outl(f"- **`packages.py`** — deps.dev (Google Open Source Insights) integration. {action_list('parkour_mcp.packages._VALID_ACTIONS')}. Covers {ecosystem_list()}. Version history, license detection, security advisories (GHSA/CVE with CVSS), resolved dependency graphs with native constraints, OpenSSF Scorecard, OSS-Fuzz coverage, and SLSA provenance. Shares the deps.dev HTTP client (`_depsdev_get`) and 1s limiter with `scorecard.py` via `common.py`. No auth required. Body content fenced (contributor-supplied fields are injection vectors).")
 ]]] -->
-- **`packages.py`** — deps.dev (Google Open Source Insights) integration. 5 tool actions (package, version, dependencies, project, advisory). Covers 7 ecosystems: pypi, npm, cargo, go, maven, nuget, rubygems. Version history, license detection, security advisories (GHSA/CVE with CVSS), resolved dependency graphs with native constraints, OpenSSF Scorecard, OSS-Fuzz coverage, and SLSA provenance. Shares the deps.dev HTTP client (`_depsdev_get`) and 1s limiter with `scorecard.py` via `common.py`. No auth required. Body content fenced (contributor-supplied fields are injection vectors).
+- **`packages.py`** — deps.dev (Google Open Source Insights) integration. 5 actions: package, version, dependencies, project, advisory. Covers 7 ecosystems: pypi, npm, cargo, go, maven, nuget, rubygems. Version history, license detection, security advisories (GHSA/CVE with CVSS), resolved dependency graphs with native constraints, OpenSSF Scorecard, OSS-Fuzz coverage, and SLSA provenance. Shares the deps.dev HTTP client (`_depsdev_get`) and 1s limiter with `scorecard.py` via `common.py`. No auth required. Body content fenced (contributor-supplied fields are injection vectors).
 <!-- [[[end]]] -->
-- **`discourse.py`** — Discourse forum integration. 3 tool actions (topic, search, latest). Detects Discourse instances via `x-discourse-route` response header (post-fetch, not URL-based). Two-request topic assembly: first page inline + batch remaining via `post_ids[]`. Raw author markdown via `include_raw=true`. Per-host rate limiting via lazy-initialized dict. Quote BBCode → blockquote conversion, `upload://` ref cleanup. Post-aware BM25 splitting and reply-threaded section trees. No auth required.
+<!-- [[[cog
+import sys; sys.path.insert(0, "scripts")
+from cog_helpers import action_list
+cog.outl(f"- **`discourse.py`** — Discourse forum integration. {action_list('parkour_mcp.discourse._VALID_ACTIONS')}. Detects Discourse instances via `x-discourse-route` response header (post-fetch, not URL-based). Two-request topic assembly: first page inline + batch remaining via `post_ids[]`. Raw author markdown via `include_raw=true`. Per-host rate limiting via lazy-initialized dict. Quote BBCode → blockquote conversion, `upload://` ref cleanup. Post-aware BM25 splitting and reply-threaded section trees. No auth required.")
+]]] -->
+- **`discourse.py`** — Discourse forum integration. 3 actions: topic, search, latest. Detects Discourse instances via `x-discourse-route` response header (post-fetch, not URL-based). Two-request topic assembly: first page inline + batch remaining via `post_ids[]`. Raw author markdown via `include_raw=true`. Per-host rate limiting via lazy-initialized dict. Quote BBCode → blockquote conversion, `upload://` ref cleanup. Post-aware BM25 splitting and reply-threaded section trees. No auth required.
+<!-- [[[end]]] -->
 <!-- [[[cog
 import sys; sys.path.insert(0, "scripts")
 from cog_helpers import action_list

@@ -651,7 +651,7 @@ IETF RFC URLs are intercepted by the fetch tools and served via the RFC Editor's
 
 Use the bare URL or `.json` suffix when you want the structured metadata (authors, obsoletes/updates chains, subseries, DOI). Use the `.html` URL when you want to walk the body by section. Datatracker URLs (`datatracker.ietf.org`) are unaffected by this scoping change.
 
-The standalone IETF tool provides 4 actions: `rfc` (single lookup), `search` (Datatracker keyword search with status/WG filtering), `draft` (Internet-Draft lookup), and `subseries` (resolve STD/BCP/FYI bundles to their constituent RFCs via the IETF BibXML service). Both APIs are unauthenticated and free.
+The standalone IETF tool provides these actions: `rfc` (single lookup), `search` (Datatracker keyword search with status/WG filtering), `draft` (Internet-Draft lookup), and `subseries` (resolve STD/BCP/FYI bundles to their constituent RFCs via the IETF BibXML service). Both APIs are unauthenticated and free.
 
 RFCs have native DOIs (`10.17487/RFC{N}`) and are automatically tracked on the research shelf when inspected. RFC DOIs passed to the fetch tools via `doi.org` URLs are delegated to the IETF handler, so the full metadata experience (relationship chains, subseries) is preserved even when the DOI form is used.
 
@@ -903,7 +903,7 @@ hint: Use slices= to retrieve adjacent context by index
 
 GitHub URLs are intercepted by the fetch tools and served via the GitHub REST API, bypassing GitHub's JavaScript-heavy SPA (which produces poor HTML-to-markdown conversion). Once a GitHub URL is matched, it is always handled by the fast path — it never falls through to generic HTTP fetch. Authentication is optional: unauthenticated requests get 60 req/hr; setting a `GITHUB_TOKEN` bumps that to 5,000/hr.
 
-A standalone GitHub tool provides structured access to 9 actions: `search_issues`, `search_repos`, `search_code`, `repo`, `tree`, `issue`, `pull_request`, `file`, and `issue_templates`. The fast path in the fetch tools handles the same URL types automatically, so agents can use whichever approach is more natural.
+A standalone GitHub tool provides structured access to these actions: `search_issues`, `search_repos`, `search_code`, `repo`, `tree`, `issue`, `pull_request`, `file`, and `issue_templates`. The fast path in the fetch tools handles the same URL types automatically, so agents can use whichever approach is more natural.
 
 `search_repos` is backed by `/search/repositories` and accepts repository-level qualifiers (`topic:`, `stars:`, `forks:`, `language:`, `license:`) that the issue search endpoint silently ignores. Use it for repository discovery; use `search_issues` for issue/PR triage.
 

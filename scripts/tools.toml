@@ -6,8 +6,9 @@
 # dispatched inline — see .claude/docs-drift-enhancements.md).
 #
 # When a module gains a `_VALID_ACTIONS` constant, swap `actions = [...]`
-# for `actions_attr = "module:attr"` and the count flips from hand-pinned
-# to source-derived without touching the prose.
+# for `actions_attr = "package.module._VALID_ACTIONS"` (a dotted path) and
+# the count flips from hand-pinned to source-derived without touching the
+# prose.
 
 [[tool]]
 name = "kagi_search"
@@ -44,23 +45,23 @@ actions_attr = "parkour_mcp.github._VALID_ACTIONS"
 name = "ietf"
 pascal = "IETF"
 description = "Search and retrieve IETF RFCs and Internet-Drafts ({actions})"
-actions = ["rfc", "search", "draft", "subseries"]
+actions_attr = "parkour_mcp.ietf._VALID_ACTIONS"
 
 [[tool]]
 name = "packages"
 pascal = "Packages"
 description = "Inspect software packages across {ecosystems_count} language ecosystems via deps.dev ({actions})"
 ecosystems_attr = "parkour_mcp.packages._VALID_ECOSYSTEMS"
-actions = ["package", "version", "dependencies", "project", "advisory"]
+actions_attr = "parkour_mcp.packages._VALID_ACTIONS"
 
 [[tool]]
 name = "discourse"
 pascal = "Discourse"
 description = "Search and browse Discourse forum topics ({actions}) — auto-detected via response headers"
-actions = ["topic", "search", "latest"]
+actions_attr = "parkour_mcp.discourse._VALID_ACTIONS"
 
 [[tool]]
 name = "mediawiki"
 pascal = "MediaWiki"
 description = "Search and retrieve Wikipedia / MediaWiki articles, with native footnote and inline-citation resolution ({actions}). First tool to use the split `title=` / `query=` parameter convention"
-actions = ["page", "search", "references"]
+actions_attr = "parkour_mcp.mediawiki._VALID_ACTIONS"

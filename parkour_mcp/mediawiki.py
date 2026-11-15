@@ -1138,6 +1138,9 @@ async def _handle_references(
     return fm + "\n\n" + _fence_content(body, title=page_title)
 
 
+_VALID_ACTIONS = ("page", "search", "references")
+
+
 async def mediawiki(
     action: Annotated[str, Field(
         description=(
@@ -1291,5 +1294,5 @@ async def mediawiki(
 
     return (
         f"Error: Unknown action {action!r}. "
-        "Valid actions: page, search, references."
+        f"Valid actions: {', '.join(_VALID_ACTIONS)}."
     )

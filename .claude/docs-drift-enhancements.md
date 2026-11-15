@@ -26,18 +26,17 @@ Cog generates it.  If no, Drift gates whether the claim is still factual.
 
 ## Cog: source shapes that resist clean introspection
 
-### `packages.py`, `discourse.py`, `ietf.py` — actions dispatched inline
+### Action sets dispatched inline ✓ resolved
 
-- **Source today**: handlers do `if action == "x": ... elif action == "y": ...`.
-  No module-level `_VALID_ACTIONS` tuple to import.
-- **Why it matters**: `scripts/cog_helpers.action_list()` can pull
-  `_VALID_ACTIONS` from `github.py` directly. The other three modules need
-  their action list either hardcoded in the cog block (defeats the point)
-  or AST-parsed from the dispatch chain (fragile). Result: the action
-  counts in CLAUDE.md/README.md for these three modules stay manual.
-- **Fix**: introduce `_VALID_ACTIONS = (...)` at module scope mirroring
-  `github.py`'s pattern, and consume from the dispatch and the tool-arg
-  description.
+`packages.py`, `discourse.py`, `ietf.py`, `mediawiki.py`, and `youtube.py`
+dispatched their actions with `if action == "x"` chains and no tuple to
+import, so their action counts in CLAUDE.md and `scripts/tools.toml` were
+typed by hand. Each now declares `_VALID_ACTIONS` at module scope, as
+`github.py` and `huggingface.py` already did, and renders its
+unknown-action error from it; every CLAUDE.md bullet and README row that
+lists actions goes through `cog_helpers.action_list` or `actions_attr`.
+`docs/guide.md` describes each action in prose, so it names them without
+a count rather than carrying one cog cannot regenerate.
 
 ### `__init__.py` — `tools` list is local to `main()` ✓ resolved
 
