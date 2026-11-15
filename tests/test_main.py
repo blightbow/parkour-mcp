@@ -61,7 +61,8 @@ def test_main_reaches_run_without_error(monkeypatch):
     assert called["yes"] is True
 
 
-def test_no_tool_emits_an_output_schema(monkeypatch):
+@pytest.mark.asyncio
+async def test_no_tool_emits_an_output_schema(monkeypatch):
     """Every tool must register with structured output suppressed.
 
     The MCP SDK auto-wraps a ``-> str`` return into an ``outputSchema``
@@ -74,7 +75,7 @@ def test_no_tool_emits_an_output_schema(monkeypatch):
     monkeypatch.setattr(parkour_mcp.mcp, "run", lambda *_a, **_k: None)
     parkour_mcp.main()
 
-    registered = parkour_mcp.mcp._tool_manager.list_tools()
+    registered = await parkour_mcp.mcp.list_tools()
     assert registered, "main() registered no tools"
     offenders = [t.name for t in registered if t.output_schema is not None]
     assert not offenders, f"tools emit an outputSchema: {offenders}"
