@@ -146,6 +146,14 @@ tool list), `sync_versions.py --check`, the mocked test suite (with ruff
 lint), and the live test suite before creating the annotated tag. Expect
 ~1-2 minutes for live tests.
 
+A live test that reports ERROR with `liveness gate: <url> unreachable`
+did not run because a third-party host is down. Report the host, its
+probe key, and the reason to the user, and stop. Whether an outage is
+real is the user's decision, not yours: never set `PARKOUR_LIVE_ALLOW_DOWN`
+yourself. If the user confirms it, they rerun with
+`PARKOUR_LIVE_ALLOW_DOWN=<key> just tag <version>` and push with the same
+prefix. A FAILED live test is a regression and is not waivable.
+
 A `docs-drift` failure means a doc describes code that has since moved.
 Read the doc section and the code side by side, fix the prose if it is
 wrong, then restamp with `drift link <doc-path> --doc-is-still-accurate`.

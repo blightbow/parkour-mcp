@@ -231,13 +231,30 @@ Requires `just install-hooks` to have been run in this clone.
 
 ### Upstream outages
 
-If the **live** suite fails because an external endpoint is genuinely
-down (not a format regression in our code), `git push --no-verify`
-bypasses the `pre-push` hook. Verify the failure is actually upstream
-before using that escape hatch — the whole point of the gate is to force
-a deliberate override for a broken release.
+Live tests declare the third-party hosts they need with
+`@pytest.mark.requires_live("<key>")`. Each host is probed once per run,
+and a test whose host is not serving reports **ERROR** with
+`liveness gate: <url> unreachable (<reason>)` rather than running. An
+ERROR means "did not run"; a **FAILED** test ran and its assertions
+failed, which is a regression.
 
-Do **not** use `--no-verify` to skip a **mocked** suite failure. Those
-are the same tests CI runs; bypassing the hook just produces a dead tag
-on origin with no PyPI artifact and no GitHub Release. Fix the
-underlying issue locally instead.
+If a host outage is confirmed, waive that host for one command by naming
+its key:
+
+```bash
+PARKOUR_LIVE_ALLOW_DOWN=ultimacodex just tag v1.2.3
+PARKOUR_LIVE_ALLOW_DOWN=ultimacodex git push origin v1.2.3
+```
+
+The waiver turns a failed probe for the named hosts into a skip, and the
+run ends with a `liveness waiver` section stating how many tests each
+waived host cost. It does nothing for a host that is serving, never
+waives an assertion failure, and rejects an unknown key rather than
+ignoring it. Separate several keys with commas; the known keys are in
+`tests/conftest.py#_LIVE_PROBES`. Because it is an environment variable,
+it applies only to the command it is set on.
+
+Do **not** use `git push --no-verify`. It skips the whole hook: the
+docs-drift check, the dead-code scan, and the mocked suite as well as the
+live one. A mocked-suite failure pushed that way produces a dead tag on
+origin with no PyPI artifact and no GitHub Release.

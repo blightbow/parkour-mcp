@@ -1,5 +1,6 @@
 """Shared fixtures for parkour-mcp tests."""
 
+import os
 import pathlib
 import sys
 import time
@@ -913,6 +914,41 @@ def _probe_host(key: str) -> str | None:
     return reason
 
 
+# Hosts the caller has declared down for this one run.  A test gated on a
+# waived host that fails its probe is skipped instead of failed; one whose
+# probe succeeds runs as normal, so a waiver for a recovered host does nothing.
+# Assertion failures are never waived: the waiver only answers "did this host
+# answer", which is the question the probe asks.
+LIVE_ALLOW_DOWN_ENV = "PARKOUR_LIVE_ALLOW_DOWN"
+
+_ALLOW_DOWN_KEY = pytest.StashKey[frozenset[str]]()
+
+# key -> number of tests skipped under the waiver, for the terminal summary.
+_waived_skips: dict[str, int] = {}
+
+
+def _allowed_down() -> frozenset[str]:
+    """Parse the waiver variable into probe keys; reject keys that do not exist.
+
+    An unknown key is a usage error rather than an ignored one, because a typo
+    would otherwise leave the waiver silently inert and the gate failing for a
+    reason the caller believes they have already addressed.
+    """
+    raw = os.environ.get(LIVE_ALLOW_DOWN_ENV, "")
+    keys = frozenset(k.strip() for k in raw.split(",") if k.strip())
+    if unknown := keys - _LIVE_PROBES.keys():
+        raise pytest.UsageError(
+            f"{LIVE_ALLOW_DOWN_ENV} names no host in _LIVE_PROBES: "
+            f"{sorted(unknown)}; known keys: {sorted(_LIVE_PROBES)}"
+        )
+    return keys
+
+
+def pytest_configure(config):
+    """Validate the waiver up front, so a typo stops the run before any probe."""
+    config.stash[_ALLOW_DOWN_KEY] = _allowed_down()
+
+
 def pytest_runtest_setup(item):
     """Short-circuit a test whose third-party host is not serving.
 
@@ -941,7 +977,15 @@ def pytest_runtest_setup(item):
     fire four network requests on every mocked run.  The marker only ever
     attaches to live tests, so setup is the earliest point that costs nothing
     when the live suite is deselected.
+
+    **A named host can be waived for one run.**  Setting
+    ``PARKOUR_LIVE_ALLOW_DOWN=<key>[,<key>...]`` turns a failed probe for those
+    hosts into a skip, and the terminal summary lists every waived host with
+    its skip count, so the shed coverage is stated rather than silent.  This is
+    the release gate's escape for a confirmed third-party outage.  It replaces
+    ``git push --no-verify``, which also skips every other gate in the hook.
     """
+    allowed = item.config.stash[_ALLOW_DOWN_KEY]
     for marker in item.iter_markers(name="requires_live"):
         for key in marker.args:
             if key not in _LIVE_PROBES:
@@ -951,12 +995,38 @@ def pytest_runtest_setup(item):
                     pytrace=False,
                 )
             if reason := _probe_host(key):
+                if key in allowed:
+                    _waived_skips[key] = _waived_skips.get(key, 0) + 1
+                    pytest.skip(
+                        f"liveness gate: {_LIVE_PROBES[key]} unreachable "
+                        f"({reason}); waived by {LIVE_ALLOW_DOWN_ENV}"
+                    )
                 pytest.fail(
                     f"liveness gate: {_LIVE_PROBES[key]} unreachable ({reason}). "
                     f"Third-party host is not serving, so this test was not run "
-                    f"and its result says nothing about this repo.",
+                    f"and its result says nothing about this repo. If the outage "
+                    f"is confirmed, rerun with {LIVE_ALLOW_DOWN_ENV}={key} to "
+                    f"skip the tests that need this host.",
                     pytrace=False,
                 )
+
+
+def pytest_terminal_summary(terminalreporter):
+    """State what the waiver cost, or that it was unused."""
+    allowed = terminalreporter.config.stash[_ALLOW_DOWN_KEY]
+    if not allowed:
+        return
+    terminalreporter.section("liveness waiver")
+    for key in sorted(allowed):
+        if count := _waived_skips.get(key):
+            terminalreporter.write_line(
+                f"{key}: DOWN, {count} test(s) skipped under {LIVE_ALLOW_DOWN_ENV}; "
+                f"this run did not verify them"
+            )
+        elif key in _probe_results:
+            terminalreporter.write_line(f"{key}: serving, waiver unused")
+        else:
+            terminalreporter.write_line(f"{key}: not probed in this run, waiver unused")
 
 
 # ---------------------------------------------------------------------------
