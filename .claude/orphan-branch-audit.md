@@ -36,7 +36,10 @@ for b in $(git for-each-ref --format='%(refname:short)' refs/heads refs/remotes/
   n=$(git cherry main "$b" | grep -c '^+')
   [ "$n" -eq 0 ] && echo "PATCH-EQ   $b" || echo "ORPHAN($n) $b"
 done
-# For each ORPHAN, compare subjects against main to catch reimplementations
+# For each ORPHAN, look for a rescue: a reworked cherry-pick no longer matches
+# by patch-id, but `git cherry-pick -x` leaves a trailer naming the original
+git log --format=%h main..<branch> | while read c; do printf '%s => ' "$c"; git log --oneline -F --grep="cherry picked from commit $c" main next | head -1; echo; done
+# and compare subjects against main to catch reimplementations
 git log --format=%s main..<branch> | while IFS= read -r s; do printf '%s => ' "$s"; git log --oneline -F --grep="$s" main | head -1; echo; done
 # Stashes are orphans too
 git stash list
@@ -99,7 +102,9 @@ Read the full intent with `git show <sha>`. The commit bodies are detailed.
    successful release run (v2.4.0, 2026-08-20) predates GitHub's 2026-09-16 Node 20
    removal, so the next release is the first to run without it. Before picking, check
    the current node24 majors; the commit's version choices date from June.
-3. **Ungrouped OR warning** — `open`. Absent from `main`; `kagi.py` has had only lint
+3. **Ungrouped OR warning** — `landed` on `feature/rescue-kagi-and-config` as `08761d9`.
+   Kagi v1 precedence verified live first: ungrouped `cpython "event loop" OR tokio` ranks a
+   tokio-only page first, grouped does not. Original state, for reference: Absent from `main`; `kagi.py` has had only lint
    commits since rc3. Before landing, confirm that Kagi v1 search still gives OR
    that precedence.
 4. **Doc drift corrections** — `open`, partly superseded. Already fixed on `main` by
@@ -109,7 +114,9 @@ Read the full intent with `git show <sha>`. The commit bodies are detailed.
    naming python-semantic-release; no mention of `hermes_plugin.py` or the hermes profile in
    CLAUDE.md; the YouTube bullet in CLAUDE.md still says "Two tool actions". Rework these
    claim by claim against current code instead of picking.
-5. **XDG-first config dir** — `rework`, in-tree. Absent from `main`;
+5. **XDG-first config dir** — `landed` on `feature/rescue-kagi-and-config` as `5a5838d`,
+   parkour-specific (no app-slug parameter), HF token path included. Original state, for
+   reference: Absent from `main`;
    `common.py#_CONFIG_DIR`, `github.py#GITHUB_CONFIG_PATH`, and `kagi.py#CONFIG_PATH`
    still hardcode `~/.config/parkour`. The HuggingFace token path (`hf_token`) was added
    after this commit and must move onto the resolver as well.
@@ -120,7 +127,8 @@ Read the full intent with `git show <sha>`. The commit bodies are detailed.
    - Still to confirm with the user before landing: XDG-first on macOS (keeping
      `~/.config` as the default), `%APPDATA%` on Windows, and the `PARKOUR_CONFIG_DIR`
      override. Nothing on `main` contradicts them.
-6. **Kagi query presets** — `open`, depends on #5 (config dir, `--init` seeding at
+6. **Kagi query presets** — `landed` on `feature/rescue-kagi-and-config` as `0816475`, with
+   `--init` reworked into an `init` subcommand beside `call`. Original state, for reference: depends on #5 (config dir, `--init` seeding at
    0700) and builds on #3 (OR grouping). Ships `docs/kagi-query-presets.md` and a
    `kagi://presets` resource. Decide after #3 and #5.
 
