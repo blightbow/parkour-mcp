@@ -202,11 +202,24 @@ than diverging from it.
 - **Config**: `renovate.json` at repo root, scoped via
   `enabledManagers: ["custom.regex"]` so the bot only watches our
   skill annotations and ignores everything else.
-- **Validator drift caveat**: the field name `managerFilePatterns`
-  is Renovate v38+. Older `npx renovate@<38` will reject the config
-  with "disallowed fields"; pin to `npx renovate@latest` when
-  validating locally. The GitHub App always runs the latest, so
-  production validation is fine.
+- **`git-refs` needs a full URL**: the datasource runs `git ls-remote`
+  on `packageName`, which must be a fully qualified URL. The
+  annotation's `depName` is the short `owner/repo`, so the manager's
+  `packageNameTemplate` expands it to `https://github.com/<owner>/<repo>`.
+  Without that template every lookup fails.
+- **Failures surface on the Dependency Dashboard issue.**
+  `dependencyDashboard` is enabled because nothing else reports a
+  failed lookup: without it the only record is the job log on
+  developer.mend.io, and the manager can fail on every run while the
+  repo shows no activity at all. A silent bot looks the same as a bot
+  with nothing to update; check the dashboard issue, not the absence of
+  PRs.
+- **Validating locally**: the field name `managerFilePatterns` is
+  Renovate v38+, and older versions reject the config with "disallowed
+  fields". `npx renovate@<version> --platform=local --dry-run=lookup`
+  runs the real lookup against the working tree and reports the digest
+  the bot would propose, which schema validation alone does not
+  exercise.
 - **Why not the other shapes**: `simonw/skills/cogapp-markdown` was
   considered and dropped — repo has no LICENSE file, so vendoring is
   legally murky regardless of the skill's quality. The cog

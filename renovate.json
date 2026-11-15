@@ -1,13 +1,19 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "enabledManagers": ["custom.regex"],
+  "enabledManagers": [
+    "custom.regex"
+  ],
+  "dependencyDashboard": true,
   "customManagers": [
     {
       "customType": "regex",
-      "managerFilePatterns": ["/\\.claude/skills/.+/SKILL\\.md$/"],
+      "managerFilePatterns": [
+        "/\\.claude/skills/.+/SKILL\\.md$/"
+      ],
       "matchStrings": [
         "renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+) currentValue=(?<currentValue>\\S+) currentDigest=(?<currentDigest>[a-f0-9]+)"
-      ]
+      ],
+      "packageNameTemplate": "https://github.com/{{{depName}}}"
     }
   ]
 }
