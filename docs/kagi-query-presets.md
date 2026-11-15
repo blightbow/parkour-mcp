@@ -22,10 +22,11 @@ are in play.
 ## The registry file
 
 A single YAML file maps preset slugs to definitions. Its location follows the
-config-dir resolver (`parkour_mcp/common.py#app_config_dir`):
+config-dir resolver (`parkour_mcp/common.py#parkour_config_dir`):
 
-- Linux / macOS: `~/.config/kagi_presets.yaml` under the parkour config dir
-  (`~/.config/parkour/kagi_presets.yaml`), honoring `XDG_CONFIG_HOME`.
+- Linux / macOS: `~/.config/parkour/kagi_presets.yaml`, or
+  `$XDG_CONFIG_HOME/parkour/kagi_presets.yaml` when `XDG_CONFIG_HOME` is an
+  absolute path.
 - Windows: `%APPDATA%\parkour\kagi_presets.yaml`.
 - Override the whole config dir with `PARKOUR_CONFIG_DIR`.
 

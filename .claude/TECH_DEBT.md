@@ -126,7 +126,7 @@ at the cost of failing a tag push after the tag already exists.
 
 ### `youtube.py` — two dead `except ImportError` guards
 
-- **Location**: `youtube.py#_map_transcript_error` and the transcript fallback branch in `youtube.py#_youtube_transcript` (the two remaining `# noqa: PLC0415` sites in that file).
+- **Location**: `youtube.py#_map_transcript_error` and the transcript fallback branch in `youtube.py#_transcript` (the two remaining `# noqa: PLC0415` sites in that file).
 - **Issue**: each is `try: from youtube_transcript_api import (...) / except ImportError: <degrade>`. The handler cannot fire: `youtube-transcript-api` is a required dependency, and since the PLC0415 sweep the package is imported at module top anyway, so a missing install fails at `import parkour_mcp` long before either branch runs. The imports stay function-scope only because they are the sole statement of the `try`, so removing the `noqa` means removing the guard.
 - **Why deferred**: deleting a `try/except` changes behavior in the broken-install case (hard `ImportError` at startup instead of a readable message at call time). That is defensible — PLC0415's own docs cite catching invalid imports regardless of whether a function runs as a benefit — but it is an error-handling decision, not the mechanical import cleanup the sweep was scoped to, and no test exercises either branch.
 - **How to evaluate**: decide whether a missing required dependency should fail loudly at startup. If yes, delete both guards, hoist the imports, and the last two `noqa: PLC0415` in the file disappear with them.

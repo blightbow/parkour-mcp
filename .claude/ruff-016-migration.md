@@ -1,9 +1,10 @@
 # ruff 0.16 migration plan
 
-Working document for the `chore/ruff-0.16-migration` branch. Supersedes the
-triage in `TECH_DEBT.md#ruff-016-migration--184-findings-deliberately-deferred`,
-which was directionally right on volume and wrong on two classifications. Fold
-this back into `TECH_DEBT.md` (or delete that entry) when the branch lands.
+Working document for the `chore/ruff-0.16-migration` branch. It superseded the
+triage in the TECH_DEBT.md entry "ruff 0.16 migration — 184 findings
+deliberately deferred", which was directionally right on volume and wrong on
+two classifications. That entry was retired in `a42a508` when the branch
+landed.
 
 ## What actually changed upstream
 
