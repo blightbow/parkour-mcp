@@ -52,6 +52,23 @@ profile-mapped names against `manifest.json`.
 
 ## Drift: upstream limitations affecting our coverage
 
+### Inline `@./` references are not implemented
+
+- **What the docs say**: drift's README describes writing
+  `@./src/file.ts#Symbol` in a doc body and having `drift link` stamp it.
+  The vendored skill pinned at `b96d58f` says the same.
+- **What the binary does**: nothing. PR #18 (`a3cfbbb`, 2026-04-10)
+  removed the inline scanner along with frontmatter anchors, and v0.8.0
+  onward contains no `@./` handling. Upstream corrected its skill in #32
+  but not the README. A doc whose only anchors are inline reports `ok`.
+- **Consequence here**: a backticked `path#Symbol` citation is plain text
+  to drift, so `scripts/check_doc_citations.py` resolves those instead
+  (existence only, not staleness). Bind prose that should go stale when
+  code changes with `drift link <doc> <target>`.
+- **Do not write `@./` in CLAUDE.md** even inside a code span for drift's
+  sake: outside a code span it is a Claude Code import and loads the whole
+  file into context, and inside one it does nothing for drift.
+
 ### Python decorator changes are silent
 
 - **Drift fingerprint scope**: `src/queries/python.scm` matches
@@ -70,16 +87,6 @@ profile-mapped names against `manifest.json`.
   the decorated form, over Drift.
 
 ## Project hygiene that supports drift gating
-
-### `CLAUDE.md` references `claude/` but the dir is `.claude/`
-
-- **Where**: `CLAUDE.md` line 174 points to `@./claude/TECH_DEBT.md`.
-- **Reality**: the file is at `.claude/TECH_DEBT.md`. The `@./` path does
-  not resolve, so Claude does not auto-load the tech-debt doc.
-- **Fix**: one-character edit (`claude/` → `.claude/`). Tracked here
-  because exactly this kind of broken-path drift is what `lychee` would
-  catch in CI; adding lychee to the docs-drift gate would prevent
-  recurrence.
 
 ### `manifest.json` tool list synced via check script
 

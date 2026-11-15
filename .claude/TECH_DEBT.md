@@ -63,7 +63,7 @@ than it does:
   Keep suppressed imports short enough not to wrap; see the four sites in
   `doi.py` and `mediawiki.py`, whose reasons live in a block comment above.
 - **drift** and **cog** (`just docs-drift`, which also runs
-  `check_manifest_tools.py`) gate tag creation from the `tag` recipe in
+  `check_manifest_tools.py` and `check_doc_citations.py`) gate tag creation from the `tag` recipe in
   the justfile, and again from `scripts/git-hooks/pre-push` for anyone
   who tags by hand instead. Both are pre-tag on purpose: CI only ever
   sees a tag that already exists, and a stale doc is not worth deleting
