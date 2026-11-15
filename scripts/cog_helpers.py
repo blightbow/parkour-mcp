@@ -211,3 +211,44 @@ def tool_count(*, with_optional: bool = False) -> str:
         plural = "tool" if n_opt == 1 else "tools"
         return f"{base} always-on tools, plus {n_opt} optional (SemanticScholar, gated by S2_ACCEPT_TOS)" if n_opt == 1 else f"{base} always-on tools, plus {n_opt} optional {plural}"
     return f"{base} tools"
+
+
+def _import_attr(module_attr: str):
+    import importlib
+    mod_name, attr = module_attr.rsplit(".", 1)
+    return getattr(importlib.import_module(mod_name), attr)
+
+
+def rate_limit(module_attr: str) -> str:
+    """Render a ``RateLimiter``'s local interval, e.g. ``3s`` or ``5 req/s``.
+
+    This is the client-side spacing parkour enforces, which no API key or
+    contact address changes; those raise the upstream's own quota.
+    """
+    interval = _import_attr(module_attr).min_interval
+    if interval >= 1:
+        return f"{interval:g}s"
+    return f"{round(1 / interval)} req/s"
+
+
+def cli_profiles() -> list[str]:
+    """The ``--profile`` choices the server's CLI accepts."""
+    from parkour_mcp import _build_parser
+    for action in _build_parser()._actions:
+        if action.dest == "profile":
+            return list(action.choices or ())
+    raise LookupError("no --profile argument")
+
+
+def plugin_only_profiles() -> list[str]:
+    """Profiles in ``PROFILE_VARS`` that ``--profile`` does not offer."""
+    from parkour_mcp import PROFILE_VARS
+    cli = set(cli_profiles())
+    return [p for p in PROFILE_VARS if p not in cli]
+
+
+def tool_name_in(internal_name: str, profile: str) -> str:
+    """A tool's registered name under *profile*, e.g. ``WebFetchIncisive``."""
+    from parkour_mcp.common import TOOL_NAMES, init_tool_names
+    init_tool_names("desktop")
+    return TOOL_NAMES[internal_name][profile]

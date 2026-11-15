@@ -586,6 +586,9 @@ async def _fetch_draft(name: str) -> str:
 # Standalone MCP tool
 # ---------------------------------------------------------------------------
 
+_VALID_ACTIONS = ("rfc", "search", "draft", "subseries")
+
+
 async def ietf(
     action: Annotated[str, Field(
         description=(
@@ -673,5 +676,5 @@ async def ietf(
 
     return (
         f"Error: Unknown action '{action}'. "
-        "Valid actions: rfc, search, draft, subseries"
+        f"Valid actions: {', '.join(_VALID_ACTIONS)}"
     )

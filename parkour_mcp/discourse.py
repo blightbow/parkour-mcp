@@ -582,6 +582,9 @@ def _format_latest(data: dict, base_url: str, limit: int = 10) -> str:
 # Standalone MCP tool
 # ---------------------------------------------------------------------------
 
+_VALID_ACTIONS = ("topic", "search", "latest")
+
+
 async def discourse(
     action: Annotated[str, Field(
         description=(
@@ -702,5 +705,5 @@ async def discourse(
 
     return (
         f"Error: Unknown action '{action}'. "
-        "Valid actions: topic, search, latest"
+        f"Valid actions: {', '.join(_VALID_ACTIONS)}"
     )

@@ -701,6 +701,9 @@ async def _action_advisory(query: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+_VALID_ACTIONS = ("package", "version", "dependencies", "project", "advisory")
+
+
 async def packages(
     action: Annotated[str, Field(
         description=(
@@ -768,5 +771,5 @@ async def packages(
 
     return (
         f"Error: Unknown action '{action}'. "
-        "Valid actions: package, version, dependencies, project, advisory"
+        f"Valid actions: {', '.join(_VALID_ACTIONS)}"
     )

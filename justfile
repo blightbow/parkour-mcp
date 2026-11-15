@@ -48,11 +48,14 @@ icons:
 
 # Check that prose-derived facts in CLAUDE.md / docs/ still match source.
 # Cog --check exits 1 if regenerated content would differ; drift check exits
-# 1 if any anchored symbol has drifted past its sig: in drift.lock.
+# 1 if any anchored symbol has drifted past its sig: in drift.lock. The last
+# two steps check what neither covers: manifest.json's tool names, and
+# backticked `path#Symbol` citations, which drift reads as plain text.
 docs-drift:
     uv run cog --check --check-fail-msg='Run `just docs-drift-fix` to regenerate.' CLAUDE.md README.md docs/frontmatter-standard.md
     drift check
     uv run python3 scripts/check_manifest_tools.py
+    uv run python3 scripts/check_doc_citations.py
 
 # Regenerate cog blocks; still need to manually drift link --doc-is-still-accurate
 # any drifted anchors (see .claude/skills/drift/SKILL.md for the relink workflow).

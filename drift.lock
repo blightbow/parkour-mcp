@@ -1,6 +1,16 @@
 version = 1
 
 [[bindings]]
+doc = "CLAUDE.md"
+target = "parkour_mcp/hermes_plugin.py#_run"
+sig = "7a8117f31c56ac0e"
+
+[[bindings]]
+doc = "CLAUDE.md"
+target = "parkour_mcp/hermes_plugin.py#register"
+sig = "b3cdd67b4e951006"
+
+[[bindings]]
 doc = "docs/frontmatter-standard.md"
 target = "parkour_mcp/markdown.py#FMEntries"
 sig = "24d32a0efe3be7ee"
