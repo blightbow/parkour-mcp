@@ -480,6 +480,11 @@ including a Claude Desktop extension that has no shell to run commands in:
 uvx --from playwright==<version> playwright install webkit
 ```
 
+The same version keying means an upgrade can need a reinstall: when a new
+parkour release moves to a newer Playwright, the browsers installed for the
+old one no longer count. The first `requires_js` render after the upgrade
+reports the missing revision and the install command for the new version.
+
 To let the server fetch a missing browser itself on the first `requires_js`
 call, set:
 
