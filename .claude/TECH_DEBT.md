@@ -86,6 +86,13 @@ than it does:
   `release.yml` only runs on a tag that already exists. It does not run in
   CI. The recipe refuses to run without shellcheck, because actionlint
   otherwise drops its shell pass without a word.
+- **deptry** gates via `tests/test_dependencies.py` in the same `pytest`
+  run, so it runs in CI, `just tag`, and the pre-push hook alike. It fails
+  when `parkour_mcp/` imports a package `pyproject.toml` does not declare,
+  most importantly one present only as another dependency's requirement
+  (DEP003: httpcore and pydantic were both in that state until 2.5.0).
+  Exceptions live in `[tool.deptry]`, each with its reason; a grammar added
+  to the `grammars` extra needs a matching DEP002 entry there.
 - **semgrep** gates too, via `tests/test_semgrep_rules.py` in the same
   `pytest` run, against the project ruleset in `.semgrep/` (FMEntries
   construction, SSRF precedence, content fencing). Suppressions are

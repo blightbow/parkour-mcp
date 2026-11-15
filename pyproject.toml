@@ -136,6 +136,30 @@ addopts = "-m 'not live and not perf' --ruff --ty"
 # time; vulture only parses the file, never imports it.
 exclude = [".vulture_whitelist.py"]
 
+[tool.deptry]
+# scripts/ is dev tooling, not shipped in the wheel, so it may import dev
+# dependencies. tests/ is excluded by deptry's defaults.
+extend_exclude = ["scripts"]
+
+[tool.deptry.per_rule_ignores]
+# Supplied by the Hermes host at runtime; never a parkour dependency.
+DEP001 = ["hermes_cli"]
+# The `grammars` extra. github.py#_EXT_TO_GRAMMAR imports each grammar by
+# module name, which a static scan cannot see. A grammar added to the extra
+# must be added here too, or deptry reports it as unused.
+DEP002 = [
+    "tree-sitter-python",
+    "tree-sitter-javascript",
+    "tree-sitter-typescript",
+    "tree-sitter-go",
+    "tree-sitter-rust",
+    "tree-sitter-java",
+    "tree-sitter-c",
+    "tree-sitter-cpp",
+    "tree-sitter-kotlin",
+    "tree-sitter-scala",
+]
+
 [tool.ruff.lint]
 # Lint selection targets anti-patterns worth a second look when pytest-ruff
 # rejects a change. Cosmetic groups (C4, RET, SIM, UP) are meant to be
@@ -293,6 +317,10 @@ banned-module-level-imports = [
 dev = [
     "cogapp>=3.6.0",
     "commitizen>=4.10",
+    # Gates the suite through tests/test_dependencies.py. Capped below the next
+    # minor for the same reason as ruff: its rules decide what fails, and a
+    # pre-1.0 minor may change them.
+    "deptry>=0.25.1,<0.26",
     "fonttools>=4.62",
     "pytest>=9.0.2",
     "pytest-asyncio>=1.3.0",
