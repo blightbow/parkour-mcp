@@ -142,7 +142,8 @@ only — `CHANGELOG.md`. An RC does not modify `CHANGELOG.md`, so omit it.
 Confirm the staged set with `git status` before committing.
 
 `just tag` runs `just docs-drift` (cog blocks, drift anchors, manifest
-tool list), `sync_versions.py --check`, the mocked test suite (with ruff
+tool list), `just lint-workflows` (actionlint + shellcheck),
+`sync_versions.py --check`, the mocked test suite (with ruff
 lint), and the live test suite before creating the annotated tag. Expect
 ~1-2 minutes for live tests.
 

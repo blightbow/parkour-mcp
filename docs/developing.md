@@ -16,6 +16,13 @@ the repo instead of living in the untracked `.git/hooks/` directory. The
 only hook currently installed is a `pre-push` guard for version tags —
 see [Cutting a release](#cutting-a-release) below.
 
+Releasing also needs actionlint and shellcheck, which gate every version
+tag (see [Workflow linting](#workflow-linting)):
+
+```bash
+brew install actionlint shellcheck
+```
+
 Then install semgrep, which `uv sync` does *not* provide:
 
 ```bash
@@ -208,6 +215,11 @@ title interpolated straight into a shell script. The recipe requires both
 binaries, because actionlint skips the shellcheck pass silently when
 shellcheck is not on PATH.
 
+`just tag` and the `pre-push` hook both run it before a version tag is
+created or pushed, so a missing binary blocks a release. `release.yml` runs
+only once a tag is pushed, which is otherwise the first moment a workflow
+defect would surface.
+
 Actions are pinned to a commit SHA with the release as a trailing comment
 (`uses: owner/repo@<sha> # vX.Y.Z`), and `.github/dependabot.yml` proposes
 updates weekly. Keep that shape when adding an action: a tag or branch ref
@@ -230,9 +242,11 @@ just tag v1.2.3
 git push origin v1.2.3   # still manual, respects the Yubikey workflow
 ```
 
-The recipe runs the mocked suite *first* (fast, ~15 s, includes
-`pytest-ruff` lint across `parkour_mcp/`, `tests/`, and `scripts/`) and
-then the live suite. If either fails, no tag is created and nothing
+The recipe first runs the no-network checks: `just docs-drift`,
+[`just lint-workflows`](#workflow-linting), and the version-file sync. It
+then runs the mocked suite (fast, ~15 s, includes `pytest-ruff` lint
+across `parkour_mcp/`, `tests/`, and `scripts/`) and finally the live
+suite. If either fails, no tag is created and nothing
 needs to be cleaned up. Push is deliberately left as a separate manual
 step.
 

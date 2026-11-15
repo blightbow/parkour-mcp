@@ -95,8 +95,9 @@ install-hooks:
     chmod +x scripts/git-hooks/*
     @echo "Git hooks installed. pre-push will run live tests on version tag pushes."
 
-# Usage: just tag v1.2.3 — runs doc + version drift checks, then the mocked
-# and live suites, then creates the annotated tag (no push). Mocked suite runs
+# Usage: just tag v1.2.3 — runs doc drift, workflow lint, and version drift
+# checks, then the mocked and live suites, then creates the annotated tag (no
+# push). Mocked suite runs
 # before live because it's fast and includes pytest-ruff, which catches
 # format/lint regressions that CI's `uv run pytest` would also fail on.
 # Skipping this step let a ruff E402 regression escape to the v1.1.1 release
@@ -109,9 +110,15 @@ install-hooks:
 # runs here rather than in CI because CI only sees a tag that already exists,
 # and a stale doc is not worth deleting and recutting a tag over — it is worth
 # never tagging in the first place.
+#
+# lint-workflows follows for the same reason: release.yml only runs when a tag
+# is pushed, so a workflow defect otherwise surfaces as a failed release run on
+# a tag that already exists. It needs actionlint and shellcheck installed.
 tag version:
     @echo "Checking docs against code (cog, drift anchors, manifest tools)..."
     just docs-drift
+    @echo "Linting .github/workflows/ (actionlint + shellcheck)..."
+    just lint-workflows
     @echo "Checking pyproject.toml / manifest.json / server.json sync..."
     uv run python3 scripts/sync_versions.py --check
     @echo "Running mocked test suite (incl. ruff lint) before creating tag {{version}}..."

@@ -80,6 +80,12 @@ than it does:
   step now requires, and nothing more. Findings are fixed at the
   source; `.vulture_whitelist.py` takes false positives only, each with a
   comment naming what vulture cannot see.
+- **actionlint** (`just lint-workflows`, with shellcheck required alongside
+  it) gates tag creation from `just tag` and tag pushes from
+  `scripts/git-hooks/pre-push`, beside docs-drift and for the same reason:
+  `release.yml` only runs on a tag that already exists. It does not run in
+  CI. The recipe refuses to run without shellcheck, because actionlint
+  otherwise drops its shell pass without a word.
 - **semgrep** gates too, via `tests/test_semgrep_rules.py` in the same
   `pytest` run, against the project ruleset in `.semgrep/` (FMEntries
   construction, SSRF precedence, content fencing). Suppressions are

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Pre-push hook: block version tag pushes unless the dead-code scan and both
-# the mocked and live test suites pass.
+# Pre-push hook: block version tag pushes unless the docs-drift check, the
+# workflow lint, the dead-code scan, and both the mocked and live test suites
+# pass.
 #
 # The mocked suite (default `pytest` run) covers pytest-ruff lint across
 # parkour_mcp/, tests/, and scripts/, plus the offline unit suite.  It's
@@ -17,6 +18,10 @@
 # sweep sat stale until someone ran the recipe by hand.  `just tag` now runs it
 # before creating a tag; this hook repeats it for the path that skips `just
 # tag` and tags by hand.  Also no network, ~1 s.
+#
+# The workflow lint repeats `just tag`'s for the same hand-tagging path.
+# release.yml only runs once a tag is pushed, so this is the last point at
+# which a workflow defect costs nothing.  No network, sub-second.
 #
 # Live tests hit real endpoints, so they can't run unattended in CI without
 # credentials.  Running them at tag-push time is our stand-in: format drift
@@ -70,6 +75,17 @@ if ! just --justfile "$repo_root/justfile" --working-directory "$repo_root" docs
 fi
 
 echo
+echo "pre-push: linting .github/workflows/ (actionlint + shellcheck)..."
+if ! just --justfile "$repo_root/justfile" --working-directory "$repo_root" lint-workflows; then
+    echo
+    echo "pre-push: WORKFLOW LINT FAILED — refusing to push version tag"
+    echo "pre-push:"
+    echo "pre-push: The tag would start release.yml.  Fix the finding (or"
+    echo "pre-push: install the missing tool) and push again."
+    exit 1
+fi
+
+echo
 # Dead-code scan runs next — sub-second, and the only place it runs at all.
 echo "pre-push: running vulture dead-code scan..."
 if ! uv run --directory "$repo_root" vulture parkour_mcp/ .vulture_whitelist.py; then
@@ -117,5 +133,6 @@ echo "pre-push:     PARKOUR_LIVE_ALLOW_DOWN=<key> git push origin ${tag_names[0]
 echo "pre-push: The waiver skips only tests gated on that host; every other"
 echo "pre-push: gate and every assertion failure still blocks.  A FAILED test"
 echo "pre-push: is a regression and is not waivable.  Do not use --no-verify:"
-echo "pre-push: it skips the docs-drift, dead-code, and mocked gates too."
+echo "pre-push: it skips the docs-drift, workflow-lint, dead-code, and mocked"
+echo "pre-push: gates too."
 exit 1
