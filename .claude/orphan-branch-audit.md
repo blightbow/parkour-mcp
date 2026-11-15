@@ -102,12 +102,17 @@ Read the full intent with `git show <sha>`. The commit bodies are detailed.
    naming python-semantic-release; no mention of `hermes_plugin.py` or the hermes profile in
    CLAUDE.md; the YouTube bullet in CLAUDE.md still says "Two tool actions". Rework these
    claim by claim against current code instead of picking.
-5. **XDG-first config dir** — `open`, design decision. Absent from `main`;
+5. **XDG-first config dir** — `rework`, in-tree. Absent from `main`;
    `common.py#_CONFIG_DIR`, `github.py#GITHUB_CONFIG_PATH`, and `kagi.py#CONFIG_PATH`
    still hardcode `~/.config/parkour`. The HuggingFace token path (`hf_token`) was added
-   after this commit and would need to move onto the resolver as well. Ask the user
-   whether XDG-first, `PARKOUR_CONFIG_DIR`, and the "etcnauseam" extraction idea are still
-   wanted.
+   after this commit and must move onto the resolver as well.
+   - Decided 2026-11-14: the resolver stays inside parkour. The user does not want it
+     extracted as the standalone "etcnauseam" package for now. When reworking, drop the
+     commit body's "can later be lifted out as etcnauseam" line, and don't add any
+     packaging or API-surface scaffolding just to make extraction possible.
+   - Still to confirm with the user before landing: XDG-first on macOS (keeping
+     `~/.config` as the default), `%APPDATA%` on Windows, and the `PARKOUR_CONFIG_DIR`
+     override. Nothing on `main` contradicts them.
 6. **Kagi query presets** — `open`, depends on #5 (config dir, `--init` seeding at
    0700) and builds on #3 (OR grouping). Ships `docs/kagi-query-presets.md` and a
    `kagi://presets` resource. Decide after #3 and #5.
