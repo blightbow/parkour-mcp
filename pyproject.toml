@@ -18,6 +18,11 @@ dependencies = [
     # do not travel to PyPI consumers. semgrep is a tool, not a dependency
     # (see the `dev` group), so its own mcp pin no longer reaches this resolve.
     "mcp[cli]>=2.3,<3",
+    # Every tool signature annotates its arguments with pydantic.Field, which
+    # the MCP SDK reads to build the tool's input schema, so pydantic is a
+    # direct dependency rather than one mcp happens to bring. The floor
+    # matches mcp's own; a pydantic major rewrites that API (1.x to 2.x did).
+    "pydantic>=2.12,<3",
     "kagiapi",
     "beautifulsoup4",
     # API and metadata transport, and the SSRF guard's vehicle: common.py
