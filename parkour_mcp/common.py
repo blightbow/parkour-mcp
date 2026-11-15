@@ -291,7 +291,9 @@ def load_credential(env_var: str, config_path: Path) -> str:
 # Wikimedia User-Agent policy.
 #
 # Format: product/version (comment) http-library/version renderer/version
-# Optional mailto: enables CrossRef "polite pool" (10 req/s vs 5 req/s).
+# Optional mailto: puts CrossRef requests in its "polite pool", a higher
+# server-side quota tier. The local doi.org and CrossRef limiters keep their
+# rate either way (doi.py#_doi_limiter, doi.py#_crossref_limiter).
 _CONTACT_EMAIL = clean_env("MCP_CONTACT_EMAIL")
 _CONTACT_PART = f" mailto:{_CONTACT_EMAIL};" if _CONTACT_EMAIL else ""
 _API_USER_AGENT = (

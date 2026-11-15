@@ -2271,6 +2271,9 @@ async def _search(query: str, limit: int) -> str:
 # MCP-facing dispatcher
 # ---------------------------------------------------------------------------
 
+_VALID_ACTIONS = ("video", "transcript", "channel", "playlist", "search")
+
+
 async def youtube(
     action: Annotated[str, Field(
         description=(
@@ -2467,7 +2470,7 @@ async def youtube(
         )
     return (
         f"Error: Unknown action '{action}'. "
-        "Valid actions: video, transcript, channel, playlist, search"
+        f"Valid actions: {', '.join(_VALID_ACTIONS)}"
     )
 
 

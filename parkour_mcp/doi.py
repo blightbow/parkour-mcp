@@ -36,8 +36,9 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Rate limiters
 # ---------------------------------------------------------------------------
-# doi.org: CrossRef polite pool 10 req/s with mailto, 5 req/s without.
-# DataCite via doi.org: 1,000/5min (~3.3/s). Conservative default: 5/sec.
+# doi.org: 5 req/s, CrossRef's allowance without a mailto. The polite pool a
+# mailto unlocks raises the server-side quota; this interval stays fixed.
+# DataCite via doi.org: 1,000/5min (~3.3/s).
 _doi_limiter = RateLimiter(
     0.2,
     name="doi.org",
@@ -171,7 +172,6 @@ async def fetch_datacite_metadata(
 # ---------------------------------------------------------------------------
 # CrossRef REST API (retraction + adjacent enrichment)
 # ---------------------------------------------------------------------------
-# CrossRef polite pool: 10 req/s with mailto, 5 req/s without.
 _crossref_limiter = RateLimiter(
     0.2,
     name="CrossRef REST",
