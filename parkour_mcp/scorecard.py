@@ -69,7 +69,7 @@ async def fetch_overall(owner: str, repo: str) -> tuple[float, str] | None:
         logger.debug("Scorecard fetch for %s/%s: %s", owner, repo, result)
         return None
 
-    scorecard = result.get("scorecard") if isinstance(result, dict) else None
+    scorecard = result.get("scorecard")
     if not isinstance(scorecard, dict):
         _cache[key] = None
         return None

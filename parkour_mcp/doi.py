@@ -239,7 +239,7 @@ def _classify_update_type(raw_type: str) -> str | None:
     return None
 
 
-def _extract_update_notice(updated_by: list) -> tuple[dict | None, dict | None]:
+def _extract_update_notice(updated_by: object) -> tuple[dict | None, dict | None]:
     """Scan CrossRef ``message.updated-by`` and return (retraction, other_update).
 
     Returns the highest-priority retraction entry as ``retraction``.  If no

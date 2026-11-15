@@ -569,7 +569,7 @@ class TestExtractUpdateNotice:
         assert _extract_update_notice([]) == (None, None)
 
     def test_non_list_input(self):
-        assert _extract_update_notice(None) == (None, None)  # ty: ignore[invalid-argument-type]
+        assert _extract_update_notice(None) == (None, None)
 
     def test_malicious_doi_filtered(self):
         """An entry with an unsafe DOI-ish value is sanitized (DOI dropped)."""

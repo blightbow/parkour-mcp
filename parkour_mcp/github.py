@@ -20,7 +20,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated, Any, Optional
+from typing import Annotated, Any, Optional, assert_never
 from urllib.parse import quote as _urlquote_raw
 
 import httpx
@@ -1191,7 +1191,7 @@ _ISSUE_TEMPLATE_DIR = ".github/ISSUE_TEMPLATE"
 
 async def _fetch_issue_template_listing(
     owner: str, repo: str,
-) -> list[dict] | None:
+) -> list[object] | None:
     """List entries in ``.github/ISSUE_TEMPLATE/`` on the default branch.
 
     Returns the contents-API list (one dict per file) if the directory
@@ -1200,7 +1200,7 @@ async def _fetch_issue_template_listing(
     """
     api_path = f"/repos/{owner}/{repo}/contents/{_ISSUE_TEMPLATE_DIR}"
 
-    async def _do_fetch() -> list[dict] | None:
+    async def _do_fetch() -> list[object] | None:
         result = await _github_request("GET", api_path)
         if isinstance(result, list):
             return result
@@ -2257,4 +2257,6 @@ async def github(
     if action == "issue_templates":
         return await _action_issue_templates(query)
 
-    return f"Error: Action '{action}' not implemented."
+    # Every _VALID_ACTIONS member is dispatched above, so ty narrows `action`
+    # to Never here; adding an action without a branch fails type checking.
+    assert_never(action)

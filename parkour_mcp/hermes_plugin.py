@@ -90,6 +90,9 @@ def _get_loop() -> asyncio.AbstractEventLoop:
     if _loop is not None:
         return _loop
     with _loop_lock:
+        # Double-checked locking: another thread may have set _loop between
+        # the unlocked check above and acquiring the lock. ty narrows across
+        # the lock and reports this as always true (redundant-condition-strict).
         if _loop is None:
             loop = asyncio.new_event_loop()
             threading.Thread(
