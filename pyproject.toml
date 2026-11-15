@@ -143,13 +143,15 @@ exclude = [".vulture_whitelist.py"]
 # Upstream stays the floor, and upstream improves. Ruff's curation is imperfect
 # (0.16.0 dropped F406 by its maintainer's own account as an oversight, tracked
 # in astral-sh/ruff#27213) but it is maintained against the whole ecosystem and
-# it self-corrects. Inheriting it means those corrections arrive on a version
-# bump instead of requiring someone here to notice.
+# it self-corrects: 0.17.0 restored F406. Inheriting it means those corrections
+# arrive on a version bump instead of requiring someone here to notice.
 #
 # Version drift is handled by the dependency, not by this list: the dev group
-# pins `ruff>=0.16.0,<0.17.0`, and upstream only changes defaults on a minor
+# pins `ruff>=0.17.5,<0.18.0`, and upstream only changes defaults on a minor
 # release. So the default set cannot move underneath this file without a
-# deliberate edit to the ceiling.
+# deliberate edit to the ceiling. Raising it is the moment to read the
+# release's default-set changes: a rule leaving the defaults stops running
+# here without a finding or an error, as DTZ did in 0.17.0.
 #
 # Some groups are deliberately not added on top of the default:
 #   TC001-TC003 move imports into `if TYPE_CHECKING:`. The MCP SDK resolves tool
@@ -281,7 +283,7 @@ dev = [
     # 0.1.0. `[tool.ruff.lint] select` pins which rules run, but only a version
     # bound decides *when* this repo absorbs the next such change. The ceiling
     # makes that a commit rather than a resolver outcome.
-    "ruff>=0.16.0,<0.17.0",
+    "ruff>=0.17.5,<0.18.0",
     "pytest-ruff>=0.5",
     "pytest-ty>=0.2.1",
     "respx>=0.22.0",
