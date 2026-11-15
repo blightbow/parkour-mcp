@@ -1,7 +1,7 @@
 """Hermes Agent plugin entrypoint for parkour.
 
 parkour ships as one package with two entrypoints. Invoked as the
-``parkour-mcp`` console script it runs the FastMCP stdio server; imported by
+``parkour-mcp`` console script it runs the MCP stdio server; imported by
 Hermes Agent through the ``hermes_agent.plugins`` entry point it is a native
 plugin. Hermes discovers this module, calls :func:`register` once at startup,
 and parkour's tools join the registry alongside Hermes' built-ins. The native
@@ -50,7 +50,7 @@ import threading
 from collections.abc import Callable, Coroutine
 from typing import Any
 
-from mcp.server.fastmcp.tools.base import Tool as _FastMCPTool
+from mcp.server.mcpserver.tools.base import Tool as _MCPServerTool
 
 from . import _apply_s2_enrichment, _build_description, _resolve_catalog
 from .common import TOOL_NAMES, init_tool_names, s2_enabled
@@ -146,11 +146,11 @@ def _make_handler(func: _ToolFunc, name: str) -> Callable[..., str]:
 def _schema_for(func: _ToolFunc, name: str, description: str) -> dict:
     """Build a Hermes tool schema from a parkour tool's type-hinted signature.
 
-    FastMCP's ``Tool.from_function`` derives the JSON Schema parkour already
+    The MCP SDK's ``Tool.from_function`` derives the JSON Schema parkour already
     relies on for the MCP server, keeping the type-hinted signatures the
     single source of truth for both entrypoints.
     """
-    tool = _FastMCPTool.from_function(func, name=name, description=description)
+    tool = _MCPServerTool.from_function(func, name=name, description=description)
     return {"name": name, "description": description, "parameters": tool.parameters}
 
 

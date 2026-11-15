@@ -7,12 +7,12 @@ import pathlib
 from collections.abc import Callable
 from typing import Any
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 from mcp.types import Annotations, Icon, ToolAnnotations
 
 from ._cli import add_call_parser, run_call
 from .arxiv import arxiv
-from .common import TOOL_NAMES, init_tool_names, s2_enabled
+from .common import _VERSION, TOOL_NAMES, init_tool_names, s2_enabled
 from .discourse import discourse
 from .fetch_direct import web_fetch_direct, web_fetch_sections
 from .github import github
@@ -92,7 +92,7 @@ def _load_icon(filename: str) -> Icon | None:
         return None
     svg_bytes = path.read_bytes()
     b64 = base64.b64encode(svg_bytes).decode("ascii")
-    return Icon(src=f"data:image/svg+xml;base64,{b64}", mimeType="image/svg+xml")
+    return Icon(src=f"data:image/svg+xml;base64,{b64}", mime_type="image/svg+xml")
 
 
 def _load_tool_icon(key: str) -> list[Icon] | None:
@@ -110,9 +110,10 @@ def _load_server_icons() -> list[Icon] | None:
     return [icon] if icon else None
 
 
-mcp = FastMCP(
+mcp = MCPServer(
     "parkour-mcp",
     icons=_load_server_icons(),
+    version=_VERSION,
 )
 
 # Shared operator reference for tools that expose a ``search=`` parameter
@@ -755,9 +756,9 @@ def main():
         desc = _build_description(internal_name, args.profile)
         icons = _load_tool_icon(internal_name)
         if internal_name == "research_shelf":
-            annotations = ToolAnnotations(destructiveHint=True)
+            annotations = ToolAnnotations(destructive_hint=True)
         else:
-            annotations = ToolAnnotations(readOnlyHint=True)
+            annotations = ToolAnnotations(read_only_hint=True)
         # structured_output=False suppresses the SDK's auto-wrap of `str`
         # returns into an outputSchema + structuredContent {"result": ...}.
         # Tools already return purpose-built frontmatter-first markdown; the
