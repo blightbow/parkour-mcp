@@ -8,7 +8,7 @@ import os
 import platform
 import socket
 import time
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextvars import ContextVar
 from importlib.metadata import version as _pkg_version
 from pathlib import Path
@@ -311,7 +311,7 @@ _force_http1: ContextVar[bool] = ContextVar("parkour_force_http1", default=False
 
 
 @contextlib.contextmanager
-def force_http1() -> Iterator[None]:
+def force_http1() -> Generator[None]:
     """Issue every fetch inside the block over HTTP/1.1, on both transports."""
     token = _force_http1.set(True)
     try:

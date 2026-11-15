@@ -29,7 +29,7 @@ import os
 import shlex
 import sys
 import time
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Generator, Iterable, Mapping
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -152,7 +152,7 @@ def note_limiter(limiter: RateLimiter, waited: float) -> None:
 
 
 @contextlib.contextmanager
-def dry_run(enabled: bool = True) -> Iterator[None]:
+def dry_run(enabled: bool = True) -> Generator[None]:
     """Record requests and stop before sending, for the duration of the block."""
     token = _dry_run.set(enabled)
     try:
@@ -162,7 +162,7 @@ def dry_run(enabled: bool = True) -> Iterator[None]:
 
 
 @contextlib.contextmanager
-def capture() -> Iterator[None]:
+def capture() -> Generator[None]:
     """Keep full response headers and bodies on the records in the block."""
     token = _capture.set(True)
     try:
@@ -172,7 +172,7 @@ def capture() -> Iterator[None]:
 
 
 @contextlib.contextmanager
-def collect() -> Iterator[list[Exchange]]:
+def collect() -> Generator[list[Exchange]]:
     """Gather every exchange recorded inside the block into a list."""
     exchanges: list[Exchange] = []
     token = _collector.set(exchanges)

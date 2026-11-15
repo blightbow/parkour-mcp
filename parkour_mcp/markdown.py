@@ -53,7 +53,7 @@ class TextOnlyConverter(MarkdownConverter):
         if stripped.startswith('[Image:') or not stripped:
             return stripped
         # Otherwise use default link conversion
-        return super().convert_a(el, text, parent_tags)  # ty: ignore[unresolved-attribute]
+        return super().convert_a(el, text, parent_tags)  # ty: ignore[missing-attribute]
 
 
 def md(html, **options):
@@ -276,7 +276,7 @@ def _build_htmd_options():
     # ``htmd`` is a compiled PyO3 module with no .pyi stubs, so ty can't see
     # its public symbols. The runtime call is correct; suppress the static
     # check on the bare attribute lookups.
-    opts = htmd.Options()  # ty: ignore[unresolved-attribute]
+    opts = htmd.Options()  # ty: ignore[missing-attribute]
     opts.heading_style = "atx"
     opts.skip_tags = list(_HTMD_SKIP_TAGS)
     opts.image_placeholder = "[Image: {alt}]"
@@ -509,7 +509,7 @@ def html_to_markdown(html: str) -> tuple[str, str]:
     a small head-only BS4 parse for pages with no h1, and finally
     ``"Untitled"``.
     """
-    markdown = htmd.convert_html(  # ty: ignore[unresolved-attribute]
+    markdown = htmd.convert_html(  # ty: ignore[missing-attribute]
         _flatten_heading_blocks(_unwrap_heading_anchors(_wrap_bare_pre_in_code(html))),
         _HTMD_OPTIONS,
     )
@@ -1359,7 +1359,7 @@ class FMEntries(_BetamatterFMEntries):
     # unexplained.  Safe today because no call site outside the ``super()``
     # delegation below passes ``scope=``; if one ever needs to, accept both
     # spellings here rather than silencing a second checker.
-    def set_tip(  # ty: ignore[invalid-method-override]
+    def set_tip(  # ty: ignore[incompatible-method-override]
         self, tip_id: str, *, url: str | None = None,
     ) -> None:
         """Emit a single educational tip on this frontmatter build.

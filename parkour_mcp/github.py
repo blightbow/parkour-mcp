@@ -661,7 +661,10 @@ def extract_code_definitions(
     module_name, func_name = grammar_info
     try:
         mod = importlib.import_module(module_name)
-        lang_fn = getattr(mod, func_name)
+        # Grammar packages return a PyCapsule; typing the lookup keeps the
+        # checker off Language's deprecated int-pointer overload, which an
+        # untyped getattr result would otherwise match first.
+        lang_fn: Callable[[], object] = getattr(mod, func_name)
         lang = tree_sitter.Language(lang_fn())
         parser = tree_sitter.Parser(lang)
     except (ImportError, AttributeError):
