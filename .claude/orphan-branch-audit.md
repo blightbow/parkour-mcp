@@ -107,7 +107,9 @@ Read the full intent with `git show <sha>`. The commit bodies are detailed.
    tokio-only page first, grouped does not. Original state, for reference: Absent from `main`; `kagi.py` has had only lint
    commits since rc3. Before landing, confirm that Kagi v1 search still gives OR
    that precedence.
-4. **Doc drift corrections** — `open`, partly superseded. Already fixed on `main` by
+4. **Doc drift corrections** — `landed` on `chore/docs-citation-check` (`529b82f`, `8fc1bae`),
+   reworked claim by claim and routed through cog and drift where the claim allowed. Do not land
+   `b6009cc`. Original state, for reference: Already fixed on `main` by
    other means: the htmd/markdownify split in CLAUDE.md and the TECH_DEBT htmd entry
    (rewritten as "RESOLVED"). Still drifted on `main` (confirmed by grep): the polite-pool
    claim in `common.py` and twice in `doi.py`; the `scripts/sync_versions.py` docstring
