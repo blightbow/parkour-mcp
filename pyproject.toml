@@ -99,6 +99,8 @@ package = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "strict"
+# No async fixture is wider than a test, so each one runs on its test's loop.
+asyncio_default_fixture_loop_scope = "function"
 # Opt-in collection: explicitly list the directories pytest should walk,
 # rather than excluding exploratory/build dirs one at a time. pytest-ruff
 # hooks `pytest_collect_file` and emits a ruff lint item for every `.py`
