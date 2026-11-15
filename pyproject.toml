@@ -18,9 +18,23 @@ dependencies = [
     # do not travel to PyPI consumers. semgrep is a tool, not a dependency
     # (see the `dev` group), so its own mcp pin no longer reaches this resolve.
     "mcp[cli]>=2.3,<3",
+    # Every tool signature annotates its arguments with pydantic.Field, which
+    # the MCP SDK reads to build the tool's input schema, so pydantic is a
+    # direct dependency rather than one mcp happens to bring. The floor
+    # matches mcp's own; a pydantic major rewrites that API (1.x to 2.x did).
+    "pydantic>=2.12,<3",
     "kagiapi",
     "beautifulsoup4",
-    "httpx[http2]",
+    # API and metadata transport, and the SSRF guard's vehicle: common.py
+    # subclasses httpcore.AsyncNetworkBackend to pin each connection to the
+    # validated address and inspects httpcore pool types. httpx 1.0 drops
+    # httpcore (its pre-releases depend on neither it nor h2), so the ceiling
+    # is load-bearing: without it a fresh PyPI resolve fails at import once
+    # 1.0 is final, and lockfiles do not travel to PyPI consumers. httpcore is
+    # declared directly because common.py imports it; it must not depend on
+    # httpx bringing it along.
+    "httpx[http2]>=0.28,<1",
+    "httpcore>=1.0,<2",
     # Generic-fetch transport.  Floor is the first release under the `wreq`
     # name (the project was `rnet` through 3.0.0-rc22; the reset to 0.10.0 is
     # a rename, not a rewrite).  0.12.1 is where `timeout=` became
@@ -121,6 +135,30 @@ addopts = "-m 'not live and not perf' --ruff --ty"
 # Vulture whitelist uses bare name references that don't resolve at parse
 # time; vulture only parses the file, never imports it.
 exclude = [".vulture_whitelist.py"]
+
+[tool.deptry]
+# scripts/ is dev tooling, not shipped in the wheel, so it may import dev
+# dependencies. tests/ is excluded by deptry's defaults.
+extend_exclude = ["scripts"]
+
+[tool.deptry.per_rule_ignores]
+# Supplied by the Hermes host at runtime; never a parkour dependency.
+DEP001 = ["hermes_cli"]
+# The `grammars` extra. github.py#_EXT_TO_GRAMMAR imports each grammar by
+# module name, which a static scan cannot see. A grammar added to the extra
+# must be added here too, or deptry reports it as unused.
+DEP002 = [
+    "tree-sitter-python",
+    "tree-sitter-javascript",
+    "tree-sitter-typescript",
+    "tree-sitter-go",
+    "tree-sitter-rust",
+    "tree-sitter-java",
+    "tree-sitter-c",
+    "tree-sitter-cpp",
+    "tree-sitter-kotlin",
+    "tree-sitter-scala",
+]
 
 [tool.ruff.lint]
 # Lint selection targets anti-patterns worth a second look when pytest-ruff
@@ -279,6 +317,10 @@ banned-module-level-imports = [
 dev = [
     "cogapp>=3.6.0",
     "commitizen>=4.10",
+    # Gates the suite through tests/test_dependencies.py. Capped below the next
+    # minor for the same reason as ruff: its rules decide what fails, and a
+    # pre-1.0 minor may change them.
+    "deptry>=0.25.1,<0.26",
     "fonttools>=4.62",
     "pytest>=9.0.2",
     "pytest-asyncio>=1.3.0",
