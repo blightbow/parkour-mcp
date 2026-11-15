@@ -230,3 +230,25 @@ def rate_limit(module_attr: str) -> str:
         return f"{interval:g}s"
     return f"{round(1 / interval)} req/s"
 
+
+def cli_profiles() -> list[str]:
+    """The ``--profile`` choices the server's CLI accepts."""
+    from parkour_mcp import _build_parser
+    for action in _build_parser()._actions:
+        if action.dest == "profile":
+            return list(action.choices or ())
+    raise LookupError("no --profile argument")
+
+
+def plugin_only_profiles() -> list[str]:
+    """Profiles in ``PROFILE_VARS`` that ``--profile`` does not offer."""
+    from parkour_mcp import PROFILE_VARS
+    cli = set(cli_profiles())
+    return [p for p in PROFILE_VARS if p not in cli]
+
+
+def tool_name_in(internal_name: str, profile: str) -> str:
+    """A tool's registered name under *profile*, e.g. ``WebFetchIncisive``."""
+    from parkour_mcp.common import TOOL_NAMES, init_tool_names
+    init_tool_names("desktop")
+    return TOOL_NAMES[internal_name][profile]
