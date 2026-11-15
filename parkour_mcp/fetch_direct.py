@@ -412,8 +412,7 @@ async def web_fetch_direct(
             if result is not None:
                 if want_slicing:
                     return _dispatch_slicing(
-                        url, search, slices,
-                        slices_list if slices is not None else [],
+                        url, search, slices_list if slices is not None else [],
                         max_tokens=max_tokens, source_url=source_url,
                         warning=fragment_warning,
                         fallback=result,
@@ -443,8 +442,7 @@ async def web_fetch_direct(
             if result is not None:
                 if want_slicing:
                     return _dispatch_slicing(
-                        url, search, slices,
-                        slices_list if slices is not None else [],
+                        url, search, slices_list if slices is not None else [],
                         max_tokens=max_tokens, source_url=source_url,
                         warning=fragment_warning,
                         fallback=result,
@@ -475,8 +473,7 @@ async def web_fetch_direct(
             if result is not None:
                 if want_slicing:
                     return _dispatch_slicing(
-                        url, search, slices,
-                        slices_list if slices is not None else [],
+                        url, search, slices_list if slices is not None else [],
                         max_tokens=max_tokens, source_url=source_url,
                         warning=fragment_warning,
                         fallback=result,
@@ -509,7 +506,7 @@ async def web_fetch_direct(
         )
         if result is not None:
             if want_slicing:
-                return _dispatch_slicing(url, search, slices, slices_list if slices is not None else [],
+                return _dispatch_slicing(url, search, slices_list if slices is not None else [],
                                          max_tokens=max_tokens, source_url=source_url,
                                          warning=fragment_warning,
                                          fallback=result)
@@ -581,8 +578,7 @@ async def web_fetch_direct(
             if result is not None:
                 if want_slicing:
                     return _dispatch_slicing(
-                        url, search, slices,
-                        slices_list if slices is not None else [],
+                        url, search, slices_list if slices is not None else [],
                         max_tokens=max_tokens, source_url=source_url,
                         warning=fragment_warning,
                         fallback=result,
@@ -679,7 +675,7 @@ async def web_fetch_direct(
 
     # If search/slices was requested, the cache is now populated — dispatch
     if want_slicing:
-        return _dispatch_slicing(url, search, slices, slices_list if slices is not None else [],
+        return _dispatch_slicing(url, search, slices_list if slices is not None else [],
                                  max_tokens=max_tokens, source_url=source_url,
                                  warning=fragment_warning,
                                  note=arxiv_rewrite_note,
@@ -688,9 +684,7 @@ async def web_fetch_direct(
     return output
 
 
-async def _github_sections(
-    match, original_url: str, section_names: list[str] | None,
-) -> str | None:
+async def _github_sections(match, original_url: str) -> str | None:
     """Build section listing for GitHub URLs.
 
     Returns a formatted section list, or None if the URL kind
@@ -999,7 +993,7 @@ async def web_fetch_sections(url: str, slice: int = 0) -> str:
     # --- GitHub fast path ---
     gh_match = _detect_github_url(url)
     if gh_match is not None:
-        result = await _github_sections(gh_match, original_url, section_names)
+        result = await _github_sections(gh_match, original_url)
         if result is not None:
             return result
 

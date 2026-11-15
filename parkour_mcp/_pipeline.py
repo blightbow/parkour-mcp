@@ -1984,7 +1984,6 @@ def _get_slices(
 def _dispatch_slicing(
     url: str,
     search: str | None,
-    slices,
     slices_list: list[int],
     *,
     max_tokens: int,
@@ -2116,7 +2115,7 @@ def _render_body(
         output = process(renderer="pdf") if content_kind == "pdf" else process(renderer="direct")
         if want_slicing:
             return _dispatch_slicing(
-                url, search, slices, slices_list,
+                url, search, slices_list,
                 max_tokens=max_tokens, source_url=source_url,
                 warning=warning, note=note, fallback=output,
             )

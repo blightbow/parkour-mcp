@@ -1574,8 +1574,6 @@ def _parse_citation_cff(cff: dict) -> tuple[str | None, str, list[str], int | No
 
 
 async def _track_repo_on_shelf(
-    owner: str,
-    repo: str,
     *,
     full_name: str,
     description: str,
@@ -1711,7 +1709,6 @@ async def _action_repo(query: str) -> str:
         )
 
     fm_entries["shelf"] = await _track_repo_on_shelf(
-        owner, repo,
         full_name=name, description=desc, repo_data=result,
         citation_cff=citation_cff,
     )

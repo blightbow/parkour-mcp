@@ -624,8 +624,7 @@ async def _render_js(
                     if result is not None:
                         if want_slicing:
                             return _dispatch_slicing(
-                                url, search, slices,
-                                slices_list if slices is not None else [],
+                                url, search, slices_list if slices is not None else [],
                                 max_tokens=max_tokens, source_url=source_url,
                                 warning=fragment_warning,
                                 fallback=result,
@@ -893,7 +892,7 @@ async def _render_js(
     # If search/slices was requested, cache is now populated — dispatch
     if want_slicing:
         return _dispatch_slicing(
-            url, search, slices, slices_list if slices is not None else [],
+            url, search, slices_list if slices is not None else [],
             max_tokens=max_tokens, source_url=source_url,
             warning=fragment_warning,
             fallback=output,
