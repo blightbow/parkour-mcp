@@ -139,7 +139,7 @@ The ty language server reports "Code is unreachable" and "`x` is unused" as hint
 - **"Code is unreachable"**: `redundant-condition-strict` reports the always-true/false condition that causes it, on the condition's line, usually just above the hinted line. A dead block after `return` or `raise` has no CLI equivalent.
 - **"`x` is unused"**: ruff `ARG` covers unused arguments. ty also counts a read inside unreachable code as no read, so an unused hint on a variable that *is* read points back at an unreachable block.
 
-A reproduced hint is real: fix it, or state why the code is deliberate. Both rules have known false positives, and ty's reachability analysis can itself be wrong (e.g. treating a `try` body as unable to raise before `finally`), so a finding is a question, not a verdict. The recipe gates nothing and stays out of `pytest-ty`. If it does not reproduce a hint, say so instead of guessing at a cause.
+A reproduced hint is real: fix it, or state why the code is deliberate. Both rules have known false positives, and ty's reachability analysis can itself be wrong (e.g. treating a `try` body as unable to raise before `finally`), so a finding is a question, not a verdict. The recipe gates nothing and stays out of `pytest-ty`. Document a false positive with a plain comment, never `# ty: ignore[redundant-condition-strict]`: the gate does not enable that rule, so the directive is reported as `unused-ignore-comment` and fails the suite. If it does not reproduce a hint, say so instead of guessing at a cause.
 
 ## Release process
 
