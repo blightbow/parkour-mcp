@@ -91,8 +91,9 @@ Read the full intent with `git show <sha>`. The commit bodies are detailed.
    so this needs reimplementing rather than picking.
 2. **Node 24 actions** — `superseded` by `chore/pin-actions-and-dependabot`: every action
    SHA-pinned at its November 2026 release, plus `.github/dependabot.yml` for the
-   github-actions ecosystem. Do not land `f2aed7a`; its majors were stale. Verified only by
-   the next tag push (an RC). Not actually time-sensitive: runners force node20 actions
+   github-actions ecosystem. Do not land `f2aed7a`; its majors were stale. Verified end to end
+   by the v2.5.0rc0 release run (Actions run 43667513559): every pinned SHA resolved, no
+   Node 20 warning. Not actually time-sensitive: runners force node20 actions
    onto node24 with a warning rather than failing. Original state, for reference: `main` is still on
    `actions/checkout@v4`, `actions/setup-node@v4`, `astral-sh/setup-uv@v6`. The last
    successful release run (v2.4.0, 2026-08-20) predates GitHub's 2026-09-16 Node 20
