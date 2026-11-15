@@ -2,7 +2,6 @@
 
 import asyncio
 import logging
-from pathlib import Path
 from typing import Annotated
 
 import httpx
@@ -10,7 +9,9 @@ from pydantic import Field
 
 from .common import (
     _API_HEADERS,
+    _CONFIG_DIR,
     RateLimiter,
+    display_path,
     guarded_fetch,
     load_credential,
     tool_name,
@@ -42,14 +43,14 @@ _s2_limiter = RateLimiter(
 )
 
 S2_BASE_URL = "https://api.semanticscholar.org/graph/v1"
-S2_CONFIG_PATH = Path.home() / ".config" / "parkour" / "s2_api_key"
+S2_CONFIG_PATH = _CONFIG_DIR / "s2_api_key"
 
 # URL detection (S2_URL_RE, _detect_s2_url) lives in detection.py.
 
 _NO_KEY_MSG = (
     "Rate limited (HTTP 429). Unauthenticated requests share a global pool.\n"
     "To get your own rate limit, set S2_API_KEY env var or create "
-    "~/.config/parkour/s2_api_key with a free key from:\n"
+    f"{display_path(S2_CONFIG_PATH)} with a free key from:\n"
     "https://www.semanticscholar.org/product/api#api-key-form"
 )
 

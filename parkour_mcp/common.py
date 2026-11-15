@@ -110,8 +110,82 @@ def clean_env(name: str) -> str:
     return val
 
 
-# Base directory for filesystem-config fallbacks (API keys, opt-in gates).
-_CONFIG_DIR = Path.home() / ".config" / "parkour"
+# ---------------------------------------------------------------------------
+# Config directory resolution
+# ---------------------------------------------------------------------------
+# Modeled on the `etcetera` Rust crate's `choose_app_strategy`
+# (github.com/lunacookies/etcetera): the Windows strategy on Windows, the XDG
+# strategy everywhere else. macOS therefore resolves config under the
+# command-line convention (~/.config), not Apple's GUI-oriented
+# ~/Library/Application Support, matching how git, gh, kubectl, and the
+# astral toolchain (uv/ruff/ty) place CLI config.
+
+CONFIG_DIR_ENV = "PARKOUR_CONFIG_DIR"
+
+
+def _xdg_config_home() -> Path:
+    """XDG base config directory for Linux and macOS.
+
+    ``$XDG_CONFIG_HOME`` is honored only when it holds an absolute path; per
+    the XDG Base Directory Specification a relative value is ignored, falling
+    back to ``~/.config``.
+    """
+    xdg = os.environ.get("XDG_CONFIG_HOME")
+    if xdg and os.path.isabs(xdg):
+        return Path(xdg)
+    return Path.home() / ".config"
+
+
+def _windows_config_home() -> Path:
+    """Windows roaming config base, ``%APPDATA%``.
+
+    Config maps to the roaming AppData folder so settings follow the user
+    across machines; the home-relative path is the fallback for the rare case
+    the variable is unset. ``XDG_CONFIG_HOME`` is not consulted on Windows.
+    """
+    appdata = os.environ.get("APPDATA")
+    return Path(appdata) if appdata else Path.home() / "AppData" / "Roaming"
+
+
+def config_home() -> Path:
+    """Native per-user config base for the current OS."""
+    if platform.system() == "Windows":
+        return _windows_config_home()
+    return _xdg_config_home()
+
+
+def parkour_config_dir() -> Path:
+    """parkour's config directory, e.g. ``~/.config/parkour``.
+
+    ``PARKOUR_CONFIG_DIR`` overrides it on every OS; a leading ``~`` in the
+    override is expanded.
+    """
+    override = os.environ.get(CONFIG_DIR_ENV, "").strip()
+    if override:
+        return Path(override).expanduser()
+    return config_home() / "parkour"
+
+
+_CONFIG_DIR = parkour_config_dir()
+
+
+def display_path(path: Path) -> str:
+    """Render *path* for a user-facing message, with the home directory as ``~``."""
+    try:
+        return "~/" + path.relative_to(Path.home()).as_posix()
+    except ValueError:
+        return str(path)
+
+
+def ensure_dir(path: Path, *, mode: int = 0o700) -> Path:
+    """Create *path* (and any missing parents) if absent; return it.
+
+    ``mode`` applies only to a newly-created leaf directory (default ``0o700``
+    because the config dir holds API keys); intermediate parents take the
+    process umask, and an existing directory is left untouched.
+    """
+    path.mkdir(mode=mode, parents=True, exist_ok=True)
+    return path
 
 
 def _parse_truthy_env(name: str) -> bool:
@@ -850,7 +924,8 @@ def s2_enabled() -> bool:
 
     Checks (in order):
     1. ``S2_ACCEPT_TOS`` environment variable (any truthy value: 1/true/yes)
-    2. Presence of ``~/.config/parkour/s2_accept_tos`` file
+    2. Presence of an ``s2_accept_tos`` file in the config directory
+       (see ``parkour_config_dir``)
 
     The gate is intentionally separate from ``S2_API_KEY``: having a key does
     not imply awareness of the license terms, and S2 functions without one

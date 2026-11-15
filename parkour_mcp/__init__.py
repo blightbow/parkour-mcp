@@ -12,13 +12,26 @@ from mcp.types import Annotations, Icon, ToolAnnotations
 
 from ._cli import add_call_parser, run_call
 from .arxiv import arxiv
-from .common import _VERSION, TOOL_NAMES, init_tool_names, s2_enabled
+from .common import (
+    _CONFIG_DIR,
+    _VERSION,
+    TOOL_NAMES,
+    display_path,
+    init_tool_names,
+    s2_enabled,
+)
 from .discourse import discourse
 from .fetch_direct import web_fetch_direct, web_fetch_sections
 from .github import github
 from .huggingface import huggingface
 from .ietf import ietf
-from .kagi import kagi_lenses_markdown, kagi_regions_markdown, search
+from .kagi import (
+    kagi_lenses_markdown,
+    kagi_presets_markdown,
+    kagi_regions_markdown,
+    search,
+    seed_presets_file,
+)
 from .mediawiki import mediawiki
 from .packages import packages
 from .shelf import _format_shelf_list, _get_shelf, research_shelf
@@ -167,7 +180,8 @@ PROFILE_VARS = {
         "kagi_resource_pointer": (
             "For per-lens purpose descriptions and activation status, see "
             "the kagi://lenses resource. For the full region code list, see "
-            "the kagi://regions resource."
+            "the kagi://regions resource. For locally defined query presets "
+            "(the preset= argument), see the kagi://presets resource."
         ),
     },
     "desktop": {
@@ -243,6 +257,9 @@ page=, filter by region= / after= / before=. The query string supports
 site: / filetype: / intitle: / inurl: filters, "exact phrases", +/- terms,
 boolean (A AND B) / (A OR B) grouping, and * wildcards — full operator
 syntax is on the query parameter.
+
+Apply a saved local bundle of operators and filters with preset=, an
+unbounded-site-list alternative to lens_id.
 
 {kagi_resource_pointer}""",
 
@@ -386,7 +403,7 @@ Query formats vary by action:
 - repo: "owner/repo" (e.g. "pallets/flask")
 - issue_templates: "owner/repo" (e.g. "pallets/flask") — call before filing an issue if the repo action's frontmatter hints at custom submission flow
 
-Authentication: Set GITHUB_TOKEN env var or create ~/.config/parkour/github_token
+Authentication: Set GITHUB_TOKEN env var or create {config_dir}/github_token
 for 5000 req/hr (vs 60/hr unauthenticated). No special scopes needed for public repos.""",
 
     "huggingface": """Inspect HuggingFace Hub models: metadata, files, and quantization quality.
@@ -420,7 +437,7 @@ misleading number. Set quant_audit=true to spend one extra request reading the
 base model's native weight format, which resolves several of those cases and
 yields a grid-preservation verdict.
 
-Authentication: optional. Set HF_TOKEN env var or create ~/.config/parkour/hf_token
+Authentication: optional. Set HF_TOKEN env var or create {config_dir}/hf_token
 to reach gated and private repos and raise the rate limit. Without a token the
 Hub returns an identical 401 for gated, private, and nonexistent repos, and this
 tool reports that ambiguity rather than guessing which one it hit.""",
@@ -678,6 +695,7 @@ def _build_description(
         _SEARCH_POSITIONING_OVERRIDE if override_web_search else _SEARCH_POSITIONING
     )
     fragments = {
+        "config_dir": display_path(_CONFIG_DIR),
         "search_grammar": SEARCH_GRAMMAR_DOC,
         "search_positioning": search_positioning.format(**profile_vars),
     }
@@ -727,6 +745,15 @@ def _build_parser() -> argparse.ArgumentParser:
     # manifest and client configs already use (`-m parkour_mcp --profile X`).
     subparsers = parser.add_subparsers(dest="command")
     add_call_parser(subparsers)
+    subparsers.add_parser(
+        "init",
+        help="create the config dir and seed a starter kagi_presets.yaml, then exit",
+        description=(
+            "Create parkour's config directory (mode 0700) and write a "
+            "commented starter kagi_presets.yaml into it.  An existing file is "
+            "never overwritten."
+        ),
+    )
     return parser
 
 
@@ -739,6 +766,11 @@ def main():
         raise SystemExit(run_call(
             args, catalog=_resolve_catalog(s2_on), profile=args.profile,
         ))
+    if args.command == "init":
+        # A one-shot subcommand that returns before the MCP stdio loop, so
+        # stdout is free for a user-facing status line.
+        print(seed_presets_file())  # noqa: T201
+        return
 
     init_tool_names(args.profile)
 
@@ -800,6 +832,17 @@ def main():
     async def kagi_lenses_resource() -> str:
         """Built-in Kagi lens catalog for the kagi_search lens_id parameter."""
         return kagi_lenses_markdown()
+
+    # MCP resource: the user's local query presets for kagi_search.preset.
+    # Dynamic — reads the kagi_presets.yaml registry at call time, unlike the
+    # static lens/region snapshots above.
+    @mcp.resource(
+        "kagi://presets",
+        annotations=Annotations(audience=["assistant"]),
+    )
+    async def kagi_presets_resource() -> str:
+        """User-defined Kagi query presets for the kagi_search preset parameter."""
+        return kagi_presets_markdown()
 
     mcp.run(transport="stdio")
 

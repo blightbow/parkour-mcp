@@ -30,10 +30,12 @@ from semantic_text_splitter import CodeSplitter
 
 from .common import (
     _API_USER_AGENT,
+    _CONFIG_DIR,
     _FETCH_HEADERS,
     _LANGUAGE_MAP,
     _MAX_SECTIONS_RESPONSE_BYTES,
     RateLimiter,
+    display_path,
     guarded_fetch,
     load_credential,
     tool_name,
@@ -62,12 +64,12 @@ def _urlquote(s: str) -> str:
 # Configuration
 # ---------------------------------------------------------------------------
 
-GITHUB_CONFIG_PATH = Path.home() / ".config" / "parkour" / "github_token"
+GITHUB_CONFIG_PATH = _CONFIG_DIR / "github_token"
 _GITHUB_API_VERSION = "2022-11-28"
 
 _NO_TOKEN_MSG = (
-    "Rate limited. Unauthenticated GitHub API allows only 60 requests/hour.\n"  # noqa: S105  # not a secret: user-facing rate-limit message
-    "Set GITHUB_TOKEN env var or create ~/.config/parkour/github_token "
+    "Rate limited. Unauthenticated GitHub API allows only 60 requests/hour.\n"  # not a secret: user-facing rate-limit message
+    f"Set GITHUB_TOKEN env var or create {display_path(GITHUB_CONFIG_PATH)} "
     "with a personal access token.\n"
     "No special scopes needed for public repos. "
     "See: https://github.com/settings/tokens"
