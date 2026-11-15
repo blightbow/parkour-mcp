@@ -70,6 +70,18 @@ docs-drift-fix:
 lint-deep:
     uv run vulture parkour_mcp/ .vulture_whitelist.py
 
+# Reproduce the ty language server's hint-only diagnostics from the shell.
+# "Code is unreachable" and "`x` is unused" are LSP hints with no rule name, so
+# `ty check` never prints them (astral-sh/ty#4033). Two stand-ins get close:
+# redundant-condition-strict reports the always-true/false condition that makes
+# a block unreachable, on the condition's line rather than the dead block's,
+# and ruff's ARG rules report unused arguments. Unreachable code after a
+# return or raise has no stand-in. Advisory only: both rules carry known false
+# positives, so this always exits 0 and gates nothing. Pass paths to narrow it.
+lint-hints *paths="parkour_mcp/":
+    uv run ty check --exit-zero --output-format concise --warn redundant-condition-strict {{paths}}
+    uv run ruff check --exit-zero --output-format concise --select ARG {{paths}}
+
 # Lint .github/workflows/ with actionlint: expression and type errors, unknown
 # step references, untrusted input interpolated into run: scripts, and the
 # scripts themselves via shellcheck. actionlint drops the shellcheck pass

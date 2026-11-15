@@ -28,6 +28,10 @@ just pack
 # Preview next release (version + CHANGELOG entry), no writes
 just release-preview
 
+# Reproduce ty LSP hints from the shell (advisory, always exits 0)
+just lint-hints
+just lint-hints parkour_mcp/github.py
+
 # Invoke one tool through the production path; see docs/developing.md#debugging-live-behavior
 uv run parkour-mcp call ArXiv '{"action": "search", "query": "ti:attention"}' --as-curl
 ```
@@ -127,6 +131,15 @@ cog.outl(f"- **`packages.py`** — deps.dev (Google Open Source Insights) integr
 - `test_live.py` contains integration tests deselected by default; run with `-m live`.
 - Each test module maps to its source module (e.g., `test_arxiv.py` → `arxiv.py`).
 - `scripts/regenerate_readme_examples.py` regenerates README example outputs. Most examples hit live endpoints; Reddit examples use `respx`-mocked fixtures for deterministic, offline output. Run after changing tool output format to keep examples current.
+
+### LSP hints
+
+The ty language server reports "Code is unreachable" and "`x` is unused" as hints that `ty check` never prints, so the suite passing says nothing about them. Before dismissing one as a stale editor diagnostic, run `just lint-hints <file>`:
+
+- **"Code is unreachable"**: `redundant-condition-strict` reports the always-true/false condition that causes it, on the condition's line, usually just above the hinted line. A dead block after `return` or `raise` has no CLI equivalent.
+- **"`x` is unused"**: ruff `ARG` covers unused arguments. ty also counts a read inside unreachable code as no read, so an unused hint on a variable that *is* read points back at an unreachable block.
+
+A reproduced hint is real: fix it, or state why the code is deliberate. Both rules have known false positives, and ty's reachability analysis can itself be wrong (e.g. treating a `try` body as unable to raise before `finally`), so a finding is a question, not a verdict. The recipe gates nothing and stays out of `pytest-ty`. If it does not reproduce a hint, say so instead of guessing at a cause.
 
 ## Release process
 
