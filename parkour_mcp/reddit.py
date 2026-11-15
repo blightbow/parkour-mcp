@@ -161,12 +161,14 @@ def _android_device_headers() -> dict[str, str]:
 def _header_str(value) -> str:
     """Decode a wreq header value to ``str``.
 
-    wreq returns header values as ``bytes``; these are replayed into later
-    request headers, which must be text. Latin-1 is total and is the encoding
-    RFC 9110 ascribes to field values, so no real header fails to decode.
+    wreq returns header values as ``memoryview`` (``bytes`` before 0.13);
+    these are replayed into later request headers, which must be text, and
+    ``str()`` on either yields its repr rather than its text. Latin-1 is total
+    and is the encoding RFC 9110 ascribes to field values, so no real header
+    fails to decode.
     """
-    if isinstance(value, (bytes, bytearray)):
-        return value.decode("latin-1")
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return bytes(value).decode("latin-1")
     return "" if value is None else str(value)
 
 

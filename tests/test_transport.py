@@ -45,10 +45,13 @@ class _FakeStatus:
 
 
 class _FakeHeaders:
-    """wreq's HeaderMap: iterates ``(bytes, bytes)``, has no ``items()``."""
+    """wreq's HeaderMap: iterates ``(memoryview, memoryview)``, has no ``items()``."""
 
     def __init__(self, mapping: dict[str, str]) -> None:
-        self._pairs = [(k.lower().encode(), v.encode()) for k, v in mapping.items()]
+        self._pairs = [
+            (memoryview(k.lower().encode()), memoryview(v.encode()))
+            for k, v in mapping.items()
+        ]
 
     def __iter__(self):
         return iter(self._pairs)
@@ -239,9 +242,17 @@ class TestNormalisation:
     def test_unknown_version_degrades_to_its_name(self):
         assert _version_string(_FakeVersion("HTTP_42")) == "HTTP_42"
 
-    def test_headers_decode_from_bytes(self):
+    def test_headers_decode_from_memoryview(self):
         pairs = dict(_iter_headers(_FakeHeaders({"Content-Type": "text/html"})))
         assert pairs == {"content-type": "text/html"}
+
+    def test_headers_decode_from_bytes(self):
+        """wreq before 0.13 yielded bytes; the floor still admits it."""
+        class _BytesHeaders:
+            def __iter__(self):
+                return iter([(b"content-type", b"text/html")])
+
+        assert dict(_iter_headers(_BytesHeaders())) == {"content-type": "text/html"}
 
     def test_headers_accept_str_pairs(self):
         class _StrHeaders:

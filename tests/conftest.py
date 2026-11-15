@@ -157,15 +157,17 @@ class _FakeWreqStatus:
 
 
 class _FakeWreqHeaders:
-    """wreq returns header values as bytes; the fake does too.
+    """wreq returns header values as memoryview; the fake does too.
 
-    Returning str here would hide a decode bug in the replay-header path,
-    which is the one place reddit.py reads a response header and feeds it
-    back into a later request.
+    Returning str (or bytes, which older wreq returned) here would hide a
+    decode bug in the replay-header path, which is the one place reddit.py
+    reads a response header and feeds it back into a later request.
     """
 
     def __init__(self, mapping):
-        self._pairs = {k.lower(): v.encode() for k, v in (mapping or {}).items()}
+        self._pairs = {
+            k.lower(): memoryview(v.encode()) for k, v in (mapping or {}).items()
+        }
 
     def get(self, key):
         return self._pairs.get(key.lower())
@@ -1063,10 +1065,13 @@ class _WreqStatus:
 
 
 class _WreqHeaders:
-    """wreq's HeaderMap shape: iterates (bytes, bytes), no items()."""
+    """wreq's HeaderMap shape: iterates (memoryview, memoryview), no items()."""
 
     def __init__(self, headers) -> None:
-        self._pairs = [(k.lower().encode(), v.encode()) for k, v in headers.items()]
+        self._pairs = [
+            (memoryview(k.lower().encode()), memoryview(v.encode()))
+            for k, v in headers.items()
+        ]
 
     def __iter__(self):
         return iter(self._pairs)

@@ -434,9 +434,8 @@ async def _follow(
         peer, pinned = _verify_pin(response, validated, host)
         response_headers = {k.lower(): v for k, v in _iter_headers(response.headers)}
 
-        location = response.headers.get("location")
-        if isinstance(location, (bytes, bytearray)):
-            location = location.decode("latin-1")
+        raw_location = response.headers.get("location")
+        location = None if raw_location is None else _header_text(raw_location)
 
         if response.status.is_redirection() and location and follow_redirects:
             _trace.finish(
@@ -476,19 +475,25 @@ async def _follow(
     )
 
 
+def _header_text(value: Any) -> str:
+    """Decode one wreq header name or value to ``str``.
+
+    wreq hands header octets back as ``memoryview`` (``bytes`` before 0.13),
+    and ``str()`` on either yields its repr rather than its text, so every
+    bytes-like form is decoded explicitly.  Latin-1 is the right codec rather
+    than a shortcut: RFC 9110 defines field values as opaque octets whose
+    historical encoding is ISO-8859-1, and it is total, so no real header can
+    fail to decode.
+    """
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return bytes(value).decode("latin-1")
+    return str(value)
+
+
 def _iter_headers(header_map: Any):
     """Yield ``(name, value)`` as ``str`` from wreq's HeaderMap.
 
-    HeaderMap has no ``items()``; iterating it yields ``(bytes, bytes)``
-    pairs.  Latin-1 is the right codec rather than a shortcut: RFC 9110 defines
-    field values as opaque octets whose historical encoding is ISO-8859-1, and
-    it is total, so no real header can fail to decode.
+    HeaderMap has no ``items()``; iterating it yields bytes-like pairs.
     """
     for key, value in header_map:
-        name = key.decode("latin-1") if isinstance(key, (bytes, bytearray)) else str(key)
-        val = (
-            value.decode("latin-1")
-            if isinstance(value, (bytes, bytearray))
-            else str(value)
-        )
-        yield name, val
+        yield _header_text(key), _header_text(value)
