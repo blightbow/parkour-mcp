@@ -1037,7 +1037,7 @@ wheels = [
 
 [[package]]
 name = "parkour-mcp"
-version = "2.5.0rc0"
+version = "2.5.0rc1"
 source = { editable = "." }
 dependencies = [
     { name = "beautifulsoup4" },
