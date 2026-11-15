@@ -170,13 +170,18 @@ extend-select = [
     # describes them as "more opinionated" pycodestyle and pyflakes rules, which
     # fits most of them and not all: F406 flags `import *` inside a function and
     # F722 a malformed forward annotation, both of which CPython rejects with
-    # SyntaxError; upstream concedes F406 was an oversight
-    # (astral-sh/ruff#27213). E402 is load-bearing in tests/conftest.py, where
+    # SyntaxError; upstream conceded F406 was an oversight
+    # (astral-sh/ruff#27213) and restored it in 0.17.0. E402 is load-bearing in tests/conftest.py, where
     # imports must follow init_tool_names().
     "E4",       # imports: one-per-line, placement
     "E7",       # statement-level: comparisons, ambiguous names, lambda assign
     "E9",       # runtime: syntax and IO errors
     "F",        # pyflakes: undefined names, unused imports, format strings
+    # In ruff's default set until 0.17.0 dropped it. Every datetime here is
+    # timezone-aware, and timestamps reach user-facing frontmatter (Scorecard
+    # dates, Reddit post times, trace records), so a naive one would surface
+    # as a wrong time rather than an error.
+    "DTZ",      # flake8-datetimez: naive datetimes
     "BLE",      # blind-except: catching Exception naked
     "TRY",      # tryceratops: error-handling anti-patterns
     "PLC0415",  # import-outside-top-level: lazy imports masking cycles/deps
