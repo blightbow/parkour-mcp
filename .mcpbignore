@@ -39,3 +39,6 @@ parkour_mcp/assets/icons/preview.html
 parkour_mcp/assets/icons/candidates.html
 parkour_mcp/assets/icon-contour.svg
 parkour_mcp/assets/icon_preview.png
+
+# Local dev overlay for `just uat` (merged in at pack time, never shipped)
+manifest.dev.json

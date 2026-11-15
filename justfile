@@ -5,9 +5,22 @@ pack:
     mkdir -p dist
     npx @anthropic-ai/mcpb pack . dist/parkour-mcp.mcpb
 
-# Locally test mcpb (assumes Claude Desktop+MacOS)
+# Locally test mcpb (assumes Claude Desktop+MacOS). If manifest.dev.json
+# exists (gitignored), its keys are deep-merged over manifest.json in a
+# separate dist/parkour-mcp-dev.mcpb, e.g. {"version": "2.5.0-dev.1"}.
 uat: pack
-    open dist/parkour-mcp.mcpb
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ ! -f manifest.dev.json ]]; then
+        open dist/parkour-mcp.mcpb
+        exit 0
+    fi
+    mkdir -p dist/uat
+    jq -s '.[0] * .[1]' manifest.json manifest.dev.json > dist/uat/manifest.json
+    cp dist/parkour-mcp.mcpb dist/parkour-mcp-dev.mcpb
+    zip -qj dist/parkour-mcp-dev.mcpb dist/uat/manifest.json
+    echo "Overlaid manifest.dev.json: version $(jq -r .version dist/uat/manifest.json)"
+    open dist/parkour-mcp-dev.mcpb
 
 # Run unit tests (mocked, excludes live)
 test *args:

@@ -28,3 +28,6 @@ scripts/fonts/
 
 # Local API key files (per-session disposable keys, never committed)
 api.key
+
+# Local dev overlay for `just uat`
+manifest.dev.json
