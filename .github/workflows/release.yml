@@ -34,7 +34,7 @@ jobs:
           fetch-depth: 0
 
       - name: Install uv
-        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
 
       - name: Install Python
         run: uv python install 3.12
@@ -107,7 +107,7 @@ jobs:
         run: npx --yes @anthropic-ai/mcpb pack . dist/parkour-mcp.mcpb
 
       - name: Install git-cliff
-        uses: taiki-e/install-action@4a76afe23f9e08d2d9550fb56e556444e8611d21 # v2.90.4
+        uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2.90.5
         with:
           tool: git-cliff
 
